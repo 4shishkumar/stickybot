@@ -49,7 +49,7 @@ function paint(res) {
         ? "This version of the agent can't change the stick's settings yet. The stick's own menu (triple-press B) still works."
         : (res && res.error) || "Check it's switched on and connected (Overview shows the link)."))));
   } else {
-    root.append(identityCard(), comboCard(), slotsCard(), screenCard(), motionCard(), soundCard());
+    root.append(identityCard(), comboCard(), unlockCard(), slotsCard(), screenCard(), motionCard(), soundCard());
   }
   root.appendChild(card("Firmware", firmwarePanel()));
 }
@@ -81,6 +81,33 @@ function identityCard() {
         if (!v || v === st.name) return;
         send("name", {name: v}, "Renamed", true);
       }}, "Rename")), null));
+}
+
+// Mac password for double-press-B unlock. Write-only: the stick never sends it
+// back (state only says macPassSet), nothing logs it, and the field is cleared
+// as soon as it's sent.
+function unlockCard() {
+  const set = !!st.macPassSet;
+  const pw = h("input", {type: "password", id: "macPass", autocomplete: "new-password", spellcheck: "false",
+                         placeholder: set ? "•••••••• (saved — type to replace)" : "your Mac login password"});
+  const show = h("button", {class: "btn sm", type: "button", title: "Show / hide",
+    onclick: () => { pw.type = pw.type === "password" ? "text" : "password"; show.textContent = pw.type === "password" ? "Show" : "Hide"; }}, "Show");
+  const save = async () => {
+    const v = pw.value;
+    if (!v) return;
+    pw.value = "";
+    pw.type = "password";
+    await send("macpass", {pass: v}, "Mac password saved");
+  };
+  pw.addEventListener("keydown", e => { if (e.key === "Enter") save(); });
+  const clearBtn = h("button", {class: "btn sm danger", type: "button",
+    onclick: () => confirmTwice(clearBtn, () => send("macpass", {pass: ""}, "Mac password removed"))}, "Remove");
+  return card("Unlock the Mac",
+    h("p", {class: "lead"}, "Double-press B on the lock screen and the stick types this password and presses Return. ",
+      "It's stored only on the stick, can't be read back, and is sent over the encrypted Bluetooth link."),
+    field("Mac password", h("div", {class: "row"}, pw, show, h("button", {class: "btn primary", type: "button", onclick: save}, "Save")),
+      set ? h("span", {class: "ok-text"}, "✓ saved on the stick") : h("span", {class: "dim"}, "not set — double-press B does nothing yet")),
+    set ? h("div", {class: "row"}, clearBtn) : null);
 }
 
 function comboCard() {

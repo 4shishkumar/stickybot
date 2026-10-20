@@ -118,6 +118,7 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .btn.primary { background: var(--agent); border-color: var(--agent); color: var(--agent-ink); }
 .btn.primary:hover { filter: brightness(1.06); }
 .btn.good { background: var(--ok); border-color: var(--ok); color: #fff; }
+.ok-text { color: var(--ok); }
 .btn.danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 45%, var(--line)); background: transparent; }
 .btn.ask { background: var(--ask); border-color: var(--ask); color: #1a1205; }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--dim); }
