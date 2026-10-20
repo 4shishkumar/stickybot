@@ -9,6 +9,7 @@
 #include <sys/time.h>
 #include "logic/clock.h"
 #include "sound.h"
+#include "protocol.h"
 #include "events.h"
 
 namespace buddy {
@@ -154,6 +155,18 @@ static void handleSound(JsonObject s) {
 
 static void handleAgent(JsonDocument& d) {
   agentSeen = millis();
+  if (d["proto"].is<const char*>()) {  // a settings command, same as "@..." over USB
+    String line = d["proto"].as<String>();
+    line.trim();
+    protocol::Result r = protocol::runLine(line);
+    String id = d["id"] | "";
+    String esc;
+    for (char c : id) if (c != '"' && c != '\\') esc += c;  // ids are short tokens
+    send("{\"src\":\"agent\",\"evt\":\"proto\",\"id\":\"" + esc + "\",\"reply\":" +
+         (r.json.length() ? r.json : String("null")) + "}");
+    protocol::finish(r);  // restarts after e.g. a name or slot change
+    return;
+  }
   if (d["sound"].is<JsonObject>()) {
     handleSound(d["sound"].as<JsonObject>());
     return;

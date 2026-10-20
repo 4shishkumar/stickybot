@@ -246,7 +246,7 @@ static String queryArg(const String& query, const char* name) {
   return "";
 }
 
-static void finish(const Result& r) {
+void finish(const Result& r) {
   if (r.restart) {
     Serial.flush();
     delay(300);
@@ -254,11 +254,21 @@ static void finish(const Result& r) {
   }
 }
 
-static void runMachine(const String& line) {
+Result runLine(const String& line) {
+  if (!line.length() || line[0] != '@') {
+    Result r;
+    r.status = 400;
+    r.json = "{\"ok\":false,\"error\":\"expected @action\"}";
+    return r;
+  }
   int sp = line.indexOf(' ');
   String action = line.substring(1, sp < 0 ? line.length() : sp);
   String query = sp < 0 ? "" : line.substring(sp + 1);
-  Result r = run(action, [&](const char* name) { return queryArg(query, name); });
+  return run(action, [&](const char* name) { return queryArg(query, name); });
+}
+
+static void runMachine(const String& line) {
+  Result r = runLine(line);
   Log.print('@');
   Log.println(r.json);
   finish(r);

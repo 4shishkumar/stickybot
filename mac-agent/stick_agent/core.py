@@ -55,6 +55,7 @@ class Agent:
         self.prompts = {}                              # id -> {"tool","hint","from","future"}
         self.loop = None
         self.stats = {"requests": 0, "quick": 0, "claude": 0, "started": time.time()}
+        self.listeners = []  # extra callbacks for every message from the stick
         self.voice = None  # the `say` process while speaking
 
     # --- events for the dashboard / menu bar --------------------------------
@@ -92,6 +93,8 @@ class Agent:
             self.set_state("ready" if state == "connected" else state)
 
     def _on_message(self, msg):
+        for listen in list(self.listeners):  # e.g. firmware_api waiting for a "proto" reply
+            listen(msg)
         if msg.get("src") == "agent" and msg.get("evt") == "event_shown":
             self.notifier.acked(msg.get("id"))
             return

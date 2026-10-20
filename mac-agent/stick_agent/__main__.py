@@ -7,6 +7,7 @@
   stick-agent status
   stick-agent logs       follow the log
   stick-agent open       open the dashboard
+  stick-agent flash      flash the bundled firmware to a stick on USB  [--port P] [--backup]
 """
 import asyncio
 import json
@@ -176,6 +177,11 @@ def main():
         os.execvp("tail", ["tail", "-n", "50", "-f", str(config.LOG)])
     elif cmd == "open":
         webbrowser.open(f"http://localhost:{config.PORT}")
+    elif cmd == "flash":  # stick-agent flash [--port P] [--backup]
+        from . import flasher
+        args = sys.argv[2:]
+        port = args[args.index("--port") + 1] if "--port" in args and args.index("--port") + 1 < len(args) else None
+        sys.exit(flasher.cli(port, "--backup" in args))
     else:
         print(__doc__)
 

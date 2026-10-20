@@ -110,3 +110,20 @@ Edit the `FONTS` / `CLIPS` tables at the top of each script. Rebuild and flash a
 | Speech misheard as another language | the default speech model is English-only (`stt_model` in `~/.stick-agent/config.json`) |
 | `stick-agent: command not found` | the `ln -sf` step above, or use `~/.stick-agent/venv/bin/stick-agent` |
 | No sound from the stick | menu → Sounds ON and Volume; the menu-bar icon → Stick volume |
+
+## Flashing keeps your settings — don't use a merged image
+
+The stick keeps its settings (Mac pairings, combo, Mac password, Wi-Fi, sounds…)
+in the flash's NVS area (0x9000–0xDFFF). Normal flashing — `pio run -t upload`,
+`make -C m5-stick-s3 flash`, the dashboard's **Update via USB**, `stick-agent flash`
+— writes only the bootloader (0x0), partition table (0x8000), boot_app0 (0xE000)
+and the app (0x10000), so settings survive.
+
+A single merged/"factory" image written at 0x0 (e.g. pioarduino's
+`firmware.factory.bin`) covers the NVS area with blank padding and **erases the
+settings and Bluetooth pairing** — the stick then has to be re-paired with the Mac.
+The agent's flasher refuses images that overlap NVS. Restoring a full backup
+(`tools/restore.sh`) is the one deliberate exception.
+
+Also: never run a serial logger while flashing — it grabs the stick's bootloader
+port too.

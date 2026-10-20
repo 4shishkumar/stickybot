@@ -13,11 +13,12 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import clips, commands, config, link
+from . import clips, commands, config, firmware_api, link
 from . import events as evmod
 
 log = logging.getLogger("server")
 PAGE = Path(__file__).parent / "dashboard.html"
+STATIC = Path(__file__).parent / "static"  # the dashboard's CSS / JS / images
 OK_HOSTS = {f"localhost:{config.PORT}", f"127.0.0.1:{config.PORT}"}
 
 
@@ -200,6 +201,8 @@ def make_app(agent):
         return web.json_response({"ok": True})
 
     app = web.Application(middlewares=[guard])
+    app.router.add_static("/static/", STATIC, show_index=False)
+    app.add_routes(firmware_api.routes(agent))
     app.add_routes([
         web.get("/", page), web.get("/api/status", status), web.get("/api/events", events),
         web.get("/api/history", history), web.get("/api/logs", logs), web.post("/api/ask", ask),

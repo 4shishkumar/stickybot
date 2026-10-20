@@ -3,7 +3,7 @@ name = "stick-agent"
 version = "0.1.0"
 description = "Voice assistant for your Mac, driven by an M5StickS3"
 requires-python = ">=3.11"
-dependencies = ["bleak", "aiohttp", "rumps", "parakeet-mlx", "numpy", "soundfile", "soxr"]
+dependencies = ["bleak", "aiohttp", "rumps", "parakeet-mlx", "numpy", "soundfile", "soxr", "esptool", "pyserial"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-aiohttp>=1.0", "ruff>=0.5", "pre-commit>=3"]
@@ -19,7 +19,7 @@ build-backend = "setuptools.build_meta"
 packages = ["stick_agent"]
 
 [tool.setuptools.package-data]
-stick_agent = ["dashboard.html", "defaults/*"]
+stick_agent = ["dashboard.html", "defaults/*", "static/*", "static/**/*", "firmware/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

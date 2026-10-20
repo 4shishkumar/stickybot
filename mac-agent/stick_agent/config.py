@@ -34,6 +34,7 @@ DEFAULT_CONFIG = {
     "ticker": True,           # the facts / news ticker on the home screen (sources below)
     # experimental: home screen reading when nothing needs you
     "idle_content": ["facts", "hn", "onthisday", "wikipedia"],
+    "onboarding": {},         # wizard steps the user ticked by hand (see firmware_api.py)
     "stick_approvals": True,  # Claude Code permission prompts go to the stick + dashboard first
     # Events on the stick (see events.py): kind -> "celebrate" | "nice" | "headsup" | "off";
     # kinds not listed use events.DEFAULT_RULES

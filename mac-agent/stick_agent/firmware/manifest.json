@@ -1,0 +1,39 @@
+{
+  "version": "1.6.0",
+  "board": "m5-sticks3",
+  "built": "2026-10-20T22:46:15+05:30",
+  "sha256": "05cbf01f062a68e8a2d2e552f8c19c21cabe5c7aec498f9889b50a78a404ba16",
+  "size": 1992256,
+  "parts": [
+    {
+      "offset": "0x0",
+      "file": "bootloader.bin",
+      "size": 19968,
+      "sha256": "883bb1e4765f12902e56b4bb901d0504df2ea2396bba8d79a7b29ae87d4b3658"
+    },
+    {
+      "offset": "0x8000",
+      "file": "partitions.bin",
+      "size": 3072,
+      "sha256": "1d9cca96de0fe07ad7fc0648b9878ddecd9ce565e38b589ad20fea698ed4c80c"
+    },
+    {
+      "offset": "0xe000",
+      "file": "boot_app0.bin",
+      "size": 8192,
+      "sha256": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0"
+    },
+    {
+      "offset": "0x10000",
+      "file": "app.bin",
+      "size": 1961024,
+      "sha256": "cdae1ade88035f0f6e176a34dd430899cea390bfb6f0361c3cbda7a953926be6"
+    }
+  ],
+  "flash": {
+    "chip": "esp32s3",
+    "mode": "dio",
+    "freq": "80m",
+    "size": "8MB"
+  }
+}
