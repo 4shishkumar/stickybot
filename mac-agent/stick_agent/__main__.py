@@ -50,7 +50,8 @@ def setup_logging():
         sh = logging.StreamHandler()
         sh.setFormatter(fmt)
         root.addHandler(sh)
-    for noisy in ("bleak", "asyncio", "aiohttp.access", "httpx", "httpx2", "huggingface_hub", "huggingface_hub.utils._http"):
+    for noisy in ("bleak", "asyncio", "aiohttp.access", "httpx", "httpx2", "huggingface_hub",
+                  "huggingface_hub.utils._http"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 

@@ -34,6 +34,7 @@
 #include "buddy.h"
 #include "motion.h"
 #include "mic.h"
+#include "logic/clock.h"
 #include "sound.h"
 #include "events.h"
 #include <HijelHID_BLEKeyboard.h>  // KEY_MOD_* constants
@@ -74,10 +75,7 @@ static int dockSide() {
 }
 constexpr uint32_t NO_ANSWER_MS = 20000;    // "Thinking..." with no word from the agent: give up
 
-static bool nightTime() {
-  int h = buddy::hour();
-  return h >= 22 || (h >= 0 && h < 6);
-}
+static bool nightTime() { return clockfmt::isNight(buddy::hour()); }
 static uint32_t   lastPing = 0;  // approval prompt sound
 constexpr uint32_t PROMPT_GUARD_MS = 600;  // presses this soon after a prompt appears don't answer it
 static bool       comboDown = false, dirty = true, ignoreAUntilRelease = false, ignoreBUntilRelease = false;

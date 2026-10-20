@@ -8,7 +8,6 @@ and sent as IMA-ADPCM packets on the stick's "audio in" characteristic:
   [2]                         end -> the stick plays it
 """
 import struct
-from pathlib import Path
 
 import numpy as np
 

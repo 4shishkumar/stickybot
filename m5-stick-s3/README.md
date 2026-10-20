@@ -257,6 +257,31 @@ Fine for a shortcut button. Don't use this as-is to type passwords.
 
 ---
 
+## Tests
+
+The pure logic lives in `src/logic/` (no Arduino, no hardware) and is unit-tested
+on the Mac with PlatformIO's `native` platform and Unity:
+
+```sh
+make test      # = pio test -e native   (45 tests, ~3 s)
+make build     # the stick firmware still builds with the same logic
+```
+
+| Suite (`test/…`) | Covers |
+|---|---|
+| `test_adpcm` | IMA-ADPCM codec: frame header layout, odd sample counts, round-trip quality, frames decoding on their own, clamping |
+| `test_clip` | sound clips from the Mac: packet queue parsing, frames placed by sequence number (a lost frame = silence) |
+| `test_combo` | combo parsing (aliases, case, specials, errors) and display; every key round-trips |
+| `test_battery` | voltage → %, median, trend slope, "full in" / "left" estimate, the last-hour RTC ring (wrap, dedupe, reset after long sleep) |
+| `test_clock` | 12-hour clock, AM/PM, dates, UTC offsets across midnight, night window |
+| `test_text` | word wrap and "…" cutting (UTF-8 safe) |
+| `test_gestures` | lift, face-down, shake, flick, orientation and sideways detection from synthetic IMU samples |
+| `test_queue` | the event queue (FIFO, drops the oldest when full) |
+
+Hardware-facing code (screens, Bluetooth, audio I/O) isn't covered by these;
+`combo.cpp` checks at compile time that the shared key table matches the
+keyboard library's codes.
+
 ## Project layout
 
 ```

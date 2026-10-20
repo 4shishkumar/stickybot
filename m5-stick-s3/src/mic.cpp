@@ -4,6 +4,7 @@
 #include <USBAudioCard.h>
 #include "netlog.h"
 #include "buddy.h"
+#include "logic/adpcm.h"
 
 namespace mic {
 
@@ -42,43 +43,16 @@ static size_t   head = 0, tail = 0;  // tail = next frame to send
 static Frame    cur;
 static size_t   curSamples = 0, frameSamples = MAX_SAMPLES;
 static uint16_t seq = 0;
-static int      pred = 0, idx = 0;
+static adpcm::State enc;  // codec state at the end of the last encoded sample
 static bool     wasArmed = false;
 static volatile uint32_t statFrames = 0, statDropped = 0, statBusy = 0;
 
-// --- IMA-ADPCM -----------------------------------------------------------------
-
-static const int16_t STEP[89] = {
-  7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97,
-  107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796,
-  876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871,
-  5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623,
-  27086, 29794, 32767};
-static const int8_t IDX_ADJ[16] = {-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8};
-
-static uint8_t encode(int16_t s) {
-  int step = STEP[idx], diff = s - pred, delta = step >> 3;
-  uint8_t code = 0;
-  if (diff < 0) { code = 8; diff = -diff; }
-  if (diff >= step) { code |= 4; diff -= step; delta += step; }
-  step >>= 1;
-  if (diff >= step) { code |= 2; diff -= step; delta += step; }
-  step >>= 1;
-  if (diff >= step) { code |= 1; delta += step; }
-  pred += (code & 8) ? -delta : delta;
-  pred = constrain(pred, -32768, 32767);
-  idx = constrain(idx + IDX_ADJ[code], 0, 88);
-  return code;
-}
+// IMA-ADPCM: logic/adpcm.cpp (shared with the clip decoder; unit-tested natively).
 
 // --- Agent frames ----------------------------------------------------------------
 
 static void startFrame() {
-  cur.data[0] = seq & 0xFF;
-  cur.data[1] = seq >> 8;
-  cur.data[2] = (uint16_t)pred & 0xFF;
-  cur.data[3] = (uint16_t)pred >> 8;
-  cur.data[4] = idx;
+  adpcm::writeHeader(cur.data, seq, enc);
   seq++;
   curSamples = 0;
 }
@@ -96,7 +70,7 @@ static void resetEncoder() {
   head = tail = 0;
   seq = 0;
   statFrames = statDropped = statBusy = 0;
-  pred = idx = 0;
+  enc = adpcm::State();
   // Biggest frame that fits one Bluetooth notification on this link
   size_t room = buddy::audioPayloadMax();
   frameSamples = room > HEADER ? min(MAX_SAMPLES, ((room - HEADER) * 2) & ~(size_t)1) : MAX_SAMPLES;
@@ -105,7 +79,7 @@ static void resetEncoder() {
 
 static void addSamples(const int16_t* s, size_t n) {
   for (size_t i = 0; i < n; i++) {
-    uint8_t code = encode(s[i]);
+    uint8_t code = adpcm::encodeSample(s[i], enc);
     uint8_t& b = cur.data[HEADER + curSamples / 2];
     if (curSamples & 1) b |= code << 4;
     else b = code;

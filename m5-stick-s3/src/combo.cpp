@@ -1,92 +1,99 @@
 #include "combo.h"
 #include <HijelHID_BLEKeyboard.h>
 
-#define K(x) {#x, KEY_##x}
+// The key table lives in logic/combo_logic.cpp (shared with the native tests);
+// make sure its codes match the keyboard library's.
+static_assert(KEY_A == 0x04, "KEY_A");
+static_assert(KEY_B == 0x05, "KEY_B");
+static_assert(KEY_C == 0x06, "KEY_C");
+static_assert(KEY_D == 0x07, "KEY_D");
+static_assert(KEY_E == 0x08, "KEY_E");
+static_assert(KEY_F == 0x09, "KEY_F");
+static_assert(KEY_G == 0x0A, "KEY_G");
+static_assert(KEY_H == 0x0B, "KEY_H");
+static_assert(KEY_I == 0x0C, "KEY_I");
+static_assert(KEY_J == 0x0D, "KEY_J");
+static_assert(KEY_K == 0x0E, "KEY_K");
+static_assert(KEY_L == 0x0F, "KEY_L");
+static_assert(KEY_M == 0x10, "KEY_M");
+static_assert(KEY_N == 0x11, "KEY_N");
+static_assert(KEY_O == 0x12, "KEY_O");
+static_assert(KEY_P == 0x13, "KEY_P");
+static_assert(KEY_Q == 0x14, "KEY_Q");
+static_assert(KEY_R == 0x15, "KEY_R");
+static_assert(KEY_S == 0x16, "KEY_S");
+static_assert(KEY_T == 0x17, "KEY_T");
+static_assert(KEY_U == 0x18, "KEY_U");
+static_assert(KEY_V == 0x19, "KEY_V");
+static_assert(KEY_W == 0x1A, "KEY_W");
+static_assert(KEY_X == 0x1B, "KEY_X");
+static_assert(KEY_Y == 0x1C, "KEY_Y");
+static_assert(KEY_Z == 0x1D, "KEY_Z");
+static_assert(KEY_1 == 0x1E, "KEY_1");
+static_assert(KEY_2 == 0x1F, "KEY_2");
+static_assert(KEY_3 == 0x20, "KEY_3");
+static_assert(KEY_4 == 0x21, "KEY_4");
+static_assert(KEY_5 == 0x22, "KEY_5");
+static_assert(KEY_6 == 0x23, "KEY_6");
+static_assert(KEY_7 == 0x24, "KEY_7");
+static_assert(KEY_8 == 0x25, "KEY_8");
+static_assert(KEY_9 == 0x26, "KEY_9");
+static_assert(KEY_0 == 0x27, "KEY_0");
+static_assert(KEY_SPACE == 0x2C, "KEY_SPACE");
+static_assert(KEY_RETURN == 0x28, "KEY_RETURN");
+static_assert(KEY_ESCAPE == 0x29, "KEY_ESCAPE");
+static_assert(KEY_TAB == 0x2B, "KEY_TAB");
+static_assert(KEY_BACKSPACE == 0x2A, "KEY_BACKSPACE");
+static_assert(KEY_DELETE == 0x4C, "KEY_DELETE");
+static_assert(KEY_UP == 0x52, "KEY_UP");
+static_assert(KEY_DOWN == 0x51, "KEY_DOWN");
+static_assert(KEY_LEFT == 0x50, "KEY_LEFT");
+static_assert(KEY_RIGHT == 0x4F, "KEY_RIGHT");
+static_assert(KEY_HOME == 0x4A, "KEY_HOME");
+static_assert(KEY_END == 0x4D, "KEY_END");
+static_assert(KEY_PAGE_UP == 0x4B, "KEY_PAGE_UP");
+static_assert(KEY_PAGE_DOWN == 0x4E, "KEY_PAGE_DOWN");
+static_assert(KEY_MINUS == 0x2D, "KEY_MINUS");
+static_assert(KEY_EQUAL == 0x2E, "KEY_EQUAL");
+static_assert(KEY_LEFTBRACE == 0x2F, "KEY_LEFTBRACE");
+static_assert(KEY_RIGHTBRACE == 0x30, "KEY_RIGHTBRACE");
+static_assert(KEY_BACKSLASH == 0x31, "KEY_BACKSLASH");
+static_assert(KEY_SEMICOLON == 0x33, "KEY_SEMICOLON");
+static_assert(KEY_APOSTROPHE == 0x34, "KEY_APOSTROPHE");
+static_assert(KEY_GRAVE == 0x35, "KEY_GRAVE");
+static_assert(KEY_COMMA == 0x36, "KEY_COMMA");
+static_assert(KEY_DOT == 0x37, "KEY_DOT");
+static_assert(KEY_SLASH == 0x38, "KEY_SLASH");
+static_assert(KEY_F1 == 0x3A, "KEY_F1");
+static_assert(KEY_F2 == 0x3B, "KEY_F2");
+static_assert(KEY_F3 == 0x3C, "KEY_F3");
+static_assert(KEY_F4 == 0x3D, "KEY_F4");
+static_assert(KEY_F5 == 0x3E, "KEY_F5");
+static_assert(KEY_F6 == 0x3F, "KEY_F6");
+static_assert(KEY_F7 == 0x40, "KEY_F7");
+static_assert(KEY_F8 == 0x41, "KEY_F8");
+static_assert(KEY_F9 == 0x42, "KEY_F9");
+static_assert(KEY_F10 == 0x43, "KEY_F10");
+static_assert(KEY_F11 == 0x44, "KEY_F11");
+static_assert(KEY_F12 == 0x45, "KEY_F12");
+static_assert(KEY_F13 == 0x68, "KEY_F13");
+static_assert(KEY_F14 == 0x69, "KEY_F14");
+static_assert(KEY_F15 == 0x6A, "KEY_F15");
+static_assert(KEY_F16 == 0x6B, "KEY_F16");
+static_assert(KEY_F17 == 0x6C, "KEY_F17");
+static_assert(KEY_F18 == 0x6D, "KEY_F18");
+static_assert(KEY_F19 == 0x6E, "KEY_F19");
+static_assert(KEY_F20 == 0x6F, "KEY_F20");
+static_assert(KEY_MOD_LCTRL == combo::MOD_CTRL, "ctrl");
+static_assert(KEY_MOD_LSHIFT == combo::MOD_SHIFT, "shift");
+static_assert(KEY_MOD_LALT == combo::MOD_ALT, "alt");
+static_assert(KEY_MOD_LGUI == combo::MOD_GUI, "gui");
+static_assert(KEY_RETURN == combo::HID_RETURN, "ret");
+static_assert(KEY_ESCAPE == combo::HID_ESCAPE, "esc");
+static_assert(KEY_DELETE == combo::HID_DELETE, "del");
+static_assert(KEY_PAGE_UP == combo::HID_PAGE_UP, "pgup");
+static_assert(KEY_PAGE_DOWN == combo::HID_PAGE_DOWN, "pgdn");
 
-const KeyName KEYS[] = {
-  {"(none)", 0},
-  K(A), K(B), K(C), K(D), K(E), K(F), K(G), K(H), K(I), K(J), K(K), K(L), K(M),
-  K(N), K(O), K(P), K(Q), K(R), K(S), K(T), K(U), K(V), K(W), K(X), K(Y), K(Z),
-  K(1), K(2), K(3), K(4), K(5), K(6), K(7), K(8), K(9), K(0),
-  {"Space", KEY_SPACE}, {"Return", KEY_RETURN}, {"Esc", KEY_ESCAPE}, {"Tab", KEY_TAB},
-  {"Backspace", KEY_BACKSPACE}, {"Delete", KEY_DELETE},
-  {"Up", KEY_UP}, {"Down", KEY_DOWN}, {"Left", KEY_LEFT}, {"Right", KEY_RIGHT},
-  {"Home", KEY_HOME}, {"End", KEY_END}, {"PageUp", KEY_PAGE_UP}, {"PageDown", KEY_PAGE_DOWN},
-  {"-", KEY_MINUS}, {"=", KEY_EQUAL}, {"[", KEY_LEFTBRACE}, {"]", KEY_RIGHTBRACE},
-  {"\\", KEY_BACKSLASH}, {";", KEY_SEMICOLON}, {"'", KEY_APOSTROPHE}, {"`", KEY_GRAVE},
-  {",", KEY_COMMA}, {".", KEY_DOT}, {"/", KEY_SLASH},
-  K(F1), K(F2), K(F3), K(F4), K(F5), K(F6), K(F7), K(F8), K(F9), K(F10),
-  K(F11), K(F12), K(F13), K(F14), K(F15), K(F16), K(F17), K(F18), K(F19), K(F20),
-};
-const size_t KEY_COUNT = sizeof(KEYS) / sizeof(KEYS[0]);
+String comboToString(const Combo& c) { return String(combo::toString(c).c_str()); }
 
-#undef K
-
-const ModName MODS[4] = {
-  {"Ctrl", KEY_MOD_LCTRL}, {"Option", KEY_MOD_LALT}, {"Shift", KEY_MOD_LSHIFT}, {"Cmd", KEY_MOD_LGUI},
-};
-
-int keyIndex(uint8_t code) {
-  for (size_t i = 0; i < KEY_COUNT; i++)
-    if (KEYS[i].code == code) return i;
-  return -1;
-}
-
-String comboToString(const Combo& c) {
-  String s;
-  for (const auto& m : MODS) {
-    if (!(c.mods & m.bit)) continue;
-    if (s.length()) s += '+';
-    s += m.name;
-  }
-  if (c.key) {
-    int i = keyIndex(c.key);
-    if (s.length()) s += '+';
-    s += i >= 0 ? KEYS[i].name : "?";
-  }
-  return s.length() ? s : "(none)";
-}
-
-static uint8_t modFromToken(const String& t) {
-  if (t == "cmd" || t == "command" || t == "gui" || t == "meta") return KEY_MOD_LGUI;
-  if (t == "opt" || t == "option" || t == "alt")                  return KEY_MOD_LALT;
-  if (t == "ctrl" || t == "control")                              return KEY_MOD_LCTRL;
-  if (t == "shift")                                               return KEY_MOD_LSHIFT;
-  return 0;
-}
-
-static int keyFromToken(const String& t) {
-  if (t == "enter")  return KEY_RETURN;
-  if (t == "escape") return KEY_ESCAPE;
-  if (t == "del")    return KEY_DELETE;
-  if (t == "pgup")   return KEY_PAGE_UP;
-  if (t == "pgdn")   return KEY_PAGE_DOWN;
-  for (size_t i = 1; i < KEY_COUNT; i++)
-    if (t.equalsIgnoreCase(KEYS[i].name)) return KEYS[i].code;
-  return -1;
-}
-
-bool parseCombo(const String& text, Combo& out) {
-  Combo c;
-  int start = 0;
-  while (start <= (int)text.length()) {
-    int plus = text.indexOf('+', start);
-    if (plus < 0) plus = text.length();
-    String t = text.substring(start, plus);
-    t.trim();
-    t.toLowerCase();
-    if (t.isEmpty()) return false;
-
-    if (uint8_t m = modFromToken(t)) {
-      c.mods |= m;
-    } else {
-      int k = keyFromToken(t);
-      if (k < 0 || c.key) return false;  // unknown key, or two main keys
-      c.key = k;
-    }
-    start = plus + 1;
-  }
-  if (!c.valid()) return false;
-  out = c;
-  return true;
-}
+bool parseCombo(const String& text, Combo& out) { return combo::parse(std::string(text.c_str()), out); }

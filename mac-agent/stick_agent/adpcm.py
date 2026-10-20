@@ -65,8 +65,8 @@ class Recording:
 
 def encode(pcm, frame_samples=320):
     """int16 samples -> list of frames in the stick's format (each decodes on its own)."""
-    frames, pred, idx, seq = [], 0, 0, 0
-    for start in range(0, len(pcm), frame_samples):
+    frames, pred, idx = [], 0, 0
+    for seq, start in enumerate(range(0, len(pcm), frame_samples)):
         chunk = pcm[start:start + frame_samples]
         out = bytearray(struct.pack("<HhB", seq & 0xFFFF, pred, idx))
         byte = 0
@@ -78,13 +78,18 @@ def encode(pcm, frame_samples=320):
                 code, diff = 8, -diff
             d = step >> 3
             if diff >= step:
-                code |= 4; diff -= step; d += step
+                code |= 4
+                diff -= step
+                d += step
             step >>= 1
             if diff >= step:
-                code |= 2; diff -= step; d += step
+                code |= 2
+                diff -= step
+                d += step
             step >>= 1
             if diff >= step:
-                code |= 1; d += step
+                code |= 1
+                d += step
             pred = max(-32768, min(32767, pred - d if code & 8 else pred + d))
             idx = max(0, min(88, idx + ADJ[code]))
             if i & 1:
@@ -94,5 +99,4 @@ def encode(pcm, frame_samples=320):
         if len(chunk) & 1:
             out.append(byte)
         frames.append(bytes(out))
-        seq += 1
     return frames

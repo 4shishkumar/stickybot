@@ -1,12 +1,12 @@
 #include "events.h"
+#include "logic/fixed_queue.h"
 
 namespace events {
 
 constexpr size_t   MAX_QUEUED = 5;
 constexpr uint32_t CELEBRATE_MS = 6000, NICE_MS = 4000, HEADSUP_MS = 60000;
 
-static Event    queue[MAX_QUEUED];
-static size_t   count = 0;
+static FixedQueue<Event, MAX_QUEUED> queue;
 static Event    cur;
 static bool     active_ = false;
 static uint32_t since = 0;
@@ -19,23 +19,14 @@ bool parseLevel(const String& s, Level& out) {
   return true;
 }
 
-void push(const Event& e) {
-  if (count == MAX_QUEUED) {  // full: drop the oldest
-    for (size_t i = 1; i < count; i++) queue[i - 1] = queue[i];
-    count--;
-  }
-  queue[count++] = e;
-}
+void push(const Event& e) { queue.push(e); }  // full: drops the oldest
 
-bool pending() { return count > 0; }
+bool pending() { return !queue.empty(); }
 bool active() { return active_; }
 const Event& current() { return cur; }
 
 void start() {
-  if (!count) return;
-  cur = queue[0];
-  for (size_t i = 1; i < count; i++) queue[i - 1] = queue[i];
-  count--;
+  if (!queue.pop(cur)) return;
   active_ = true;
   since = millis();
 }

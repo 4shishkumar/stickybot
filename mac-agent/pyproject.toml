@@ -3,7 +3,10 @@ name = "stick-agent"
 version = "0.1.0"
 description = "Voice assistant for your Mac, driven by an M5StickS3"
 requires-python = ">=3.11"
-dependencies = ["bleak", "aiohttp", "rumps", "parakeet-mlx", "numpy"]
+dependencies = ["bleak", "aiohttp", "rumps", "parakeet-mlx", "numpy", "soundfile", "soxr"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-aiohttp>=1.0", "ruff>=0.5", "pre-commit>=3"]
 
 [project.scripts]
 stick-agent = "stick_agent.__main__:main"
@@ -17,3 +20,27 @@ packages = ["stick_agent"]
 
 [tool.setuptools.package-data]
 stick_agent = ["dashboard.html", "defaults/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-m 'not slow' -q"
+markers = ["slow: needs the real speech model or hardware (run with -m slow)"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+# pycodestyle errors/warnings, pyflakes, isort, bugbear, pyupgrade, simplify
+select = ["E", "W", "F", "I", "B", "UP", "SIM"]
+ignore = [
+  "E731",   # small lambdas are fine
+  "SIM105", # try/except/pass reads clearer here than contextlib.suppress
+  "SIM108", # ternaries aren't always clearer
+  "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]

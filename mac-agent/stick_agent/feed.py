@@ -63,7 +63,8 @@ class Feed:
                     extract = (tfa.get("extract") or "").strip()
                     if title and extract:
                         first = extract.split(". ")[0].rstrip(".") + "."
-                        items.append({"k": "wiki", "a": "Wikipedia", "b": first})  # the first sentence names the article
+                        # the first sentence names the article
+                        items.append({"k": "wiki", "a": "Wikipedia", "b": first})
                 except Exception as e:  # noqa: BLE001
                     log.info("wikipedia: %s", e)
             if "onthisday" in sources:

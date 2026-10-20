@@ -5,6 +5,7 @@
 #include "settings.h"
 #include "netlog.h"
 #include "sounds_clips.h"
+#include "logic/clip.h"
 #include "buddy.h"
 
 namespace sound {
@@ -89,19 +90,13 @@ static int eventIndex(const String& n) {
 
 // --- Clips from the Mac ---------------------------------------------------------
 
-static const int16_t STEP[89] = {
-  7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97,
-  107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796,
-  876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871,
-  5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623,
-  27086, 29794, 32767};
-static const int8_t IDX_ADJ[16] = {-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8};
 constexpr uint32_t MAX_CLIP_SAMPLES = 16000 * 30;  // 30 s at 16 kHz (960 KB of PSRAM)
 
 static portMUX_TYPE clipMux = portMUX_INITIALIZER_UNLOCKED;
 static std::string clipInbox;            // [len u8][frame] ... filled by the Bluetooth task
 static int16_t*    clipBuf = nullptr;    // decoded PCM (PSRAM)
-static uint32_t    clipSamples = 0, clipFilled = 0, clipFrames = 0, clipFrameSize = 0;
+static clip::Assembler clipAsm;          // places frames by sequence number (logic/clip.cpp)
+static uint32_t    clipSamples = 0;
 static uint16_t    clipRate = 16000;
 static bool        clipPlaying = false, clipReady = false;
 static uint32_t    clipEndsAt = 0;  // no earlier than this (isPlaying() can be false right after starting)
@@ -113,7 +108,7 @@ static void clipBegin(uint32_t samples, uint16_t rate) {
   clipSamples = min(samples, MAX_CLIP_SAMPLES);
   clipBuf = clipSamples ? (int16_t*)ps_malloc(clipSamples * 2) : nullptr;
   if (clipBuf) memset(clipBuf, 0, clipSamples * 2);
-  clipFilled = clipFrames = clipFrameSize = 0;
+  clipAsm.reset(clipBuf, clipSamples);
   clipRate = rate ? rate : 16000;
 }
 
@@ -127,29 +122,7 @@ void clipPacket(const uint8_t* data, size_t len) {
   portEXIT_CRITICAL(&clipMux);
 }
 
-// Each frame goes to its own place (by sequence number), so a lost frame is
-// just 20 ms of silence instead of shifting everything after it.
-static void decodeFrame(const uint8_t* f, size_t len) {
-  if (!clipBuf || len < 6) return;
-  uint32_t n = (len - 5) * 2;
-  if (!clipFrameSize) clipFrameSize = n;  // the first frame is a full one
-  uint32_t at = (uint32_t)(f[0] | (f[1] << 8)) * clipFrameSize;
-  clipFrames++;
-  int pred = (int16_t)(f[2] | (f[3] << 8)), idx = min((int)f[4], 88);
-  for (size_t b = 5; b < len; b++) {
-    for (int half = 0; half < 2; half++) {
-      uint8_t code = half ? f[b] >> 4 : f[b] & 15;
-      int step = STEP[idx], d = step >> 3;
-      if (code & 4) d += step;
-      if (code & 2) d += step >> 1;
-      if (code & 1) d += step >> 2;
-      pred = constrain((code & 8) ? pred - d : pred + d, -32768, 32767);
-      idx = constrain(idx + IDX_ADJ[code], 0, 88);
-      if (at < clipSamples) clipBuf[at++] = pred;
-    }
-  }
-  clipFilled = max(clipFilled, min(at, clipSamples));
-}
+static void decodeFrame(const uint8_t* f, size_t len) { clipAsm.add(f, len); }
 
 static void startBuiltin(const BuiltinClip* c) {
   clipBegin(c->samples, 16000);
@@ -161,28 +134,29 @@ static void startBuiltin(const BuiltinClip* c) {
   if (clipBuf) clipReady = true;
 }
 
-// Handles queued packets in order: start / ADPCM frame / end.
+// Handles queued packets in order: start / ADPCM frame / end (logic/clip.cpp).
+struct ClipQueueSink : clip::Sink {
+  void begin(uint32_t samples, uint16_t rate) override {
+    buddy::fastLink();
+    clipBegin(samples, rate);
+  }
+  void frame(const uint8_t* f, size_t len) override { decodeFrame(f, len); }
+  void end() override {
+    if (!clipBuf) return;
+    clipReady = true;
+    Log.printf("clip: %lu of %lu frames, %.1f s\n", (unsigned long)clipAsm.frames,
+               (unsigned long)clipAsm.expectedFrames(), clipSamples / (float)clipRate);
+  }
+};
+
 static void decodeClipFrames() {
   std::string chunk;
   portENTER_CRITICAL(&clipMux);
   chunk.swap(clipInbox);
   portEXIT_CRITICAL(&clipMux);
-  size_t i = 0;
-  while (i < chunk.size()) {
-    size_t len = (uint8_t)chunk[i++];
-    if (i + len > chunk.size()) break;
-    const uint8_t* p = (const uint8_t*)chunk.data() + i;
-    i += len;
-    if (p[0] == 0 && len >= 7) buddy::fastLink();
-    if (p[0] == 0 && len >= 7) clipBegin(p[1] | (p[2] << 8) | (p[3] << 16) | ((uint32_t)p[4] << 24), p[5] | (p[6] << 8));
-    else if (p[0] == 1) decodeFrame(p + 1, len - 1);
-    else if (p[0] == 2 && clipBuf) {
-      clipReady = true;
-      uint32_t expected = clipFrameSize ? (clipSamples + clipFrameSize - 1) / clipFrameSize : 0;
-      Log.printf("clip: %lu of %lu frames, %.1f s\n", (unsigned long)clipFrames, (unsigned long)expected,
-                 clipSamples / (float)clipRate);
-    }
-  }
+  if (chunk.empty()) return;
+  ClipQueueSink sink;
+  clip::parseQueue((const uint8_t*)chunk.data(), chunk.size(), sink);
 }
 
 static const Tune* cur = nullptr;
@@ -309,10 +283,10 @@ void loop() {
   if (clipReady && !cur) {
     if (!speakerUp()) return;
     clipReady = false;
-    if (clipFilled) {
-      M5.Speaker.playRaw(clipBuf, clipFilled, clipRate, false, 1, -1, true);
+    if (clipAsm.filled) {
+      M5.Speaker.playRaw(clipBuf, clipAsm.filled, clipRate, false, 1, -1, true);
       clipPlaying = true;
-      clipEndsAt = millis() + (uint64_t)clipFilled * 1000 / clipRate + 80;
+      clipEndsAt = millis() + (uint64_t)clipAsm.filled * 1000 / clipRate + 80;
     }
     return;
   }

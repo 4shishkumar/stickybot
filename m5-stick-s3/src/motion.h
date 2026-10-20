@@ -6,10 +6,11 @@
 //   orientation : which way up the stick is held -> auto-rotate the screen
 #pragma once
 #include <Arduino.h>
+#include "logic/gestures.h"
 
 namespace motion {
 
-enum class Event { NONE, LIFT, FACE_DOWN, SHAKE, FLICK_LEFT, FLICK_RIGHT };
+using Event = gestures::Event;  // NONE, LIFT, FACE_DOWN, SHAKE, FLICK_LEFT, FLICK_RIGHT
 
 void  begin();
 Event poll();             // call every loop; returns at most one event

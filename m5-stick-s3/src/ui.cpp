@@ -2,6 +2,7 @@
 #include <M5Unified.h>
 #include "battery.h"
 #include "fonts_vlw.h"
+#include "logic/text.h"
 
 namespace ui {
 
@@ -133,40 +134,21 @@ static const lgfx::IFont* fit(const String& s, int maxW, std::initializer_list<c
   return last;
 }
 
+// Wrapping and "..." cutting: logic/text.cpp (unit-tested), measured with the canvas font.
+static int canvasWidth(const std::string& s, void*) { return canvas.textWidth(s.c_str()); }
+
 // One line that fits maxW with font f, cut with "..." if needed.
 static String ellipsize(const String& s, const lgfx::IFont* f, int maxW) {
   canvas.setFont(f);
-  if (canvas.textWidth(s) <= maxW) return s;
-  String t = s;
-  while (t.length() > 1 && canvas.textWidth(t + "...") > maxW) t.remove(t.length() - 1);
-  t.trim();
-  return t + "...";
+  return String(text::ellipsize(std::string(s.c_str()), maxW, canvasWidth, nullptr).c_str());
 }
 
-// Greedy word wrap with font f; long words are cut.
+// Greedy word wrap with font f; if it doesn't all fit, the last line ends in "...".
 static int wrap(const String& s, const lgfx::IFont* f, String out[], int max, int maxW) {
   canvas.setFont(f);
-  int n = 0, start = 0;
-  String line;
-  while (start < (int)s.length() && n < max) {
-    int sp = s.indexOf(' ', start);
-    String word = s.substring(start, sp < 0 ? s.length() : sp);
-    String trial = line.length() ? line + " " + word : word;
-    if (line.length() && canvas.textWidth(trial) > maxW) {
-      out[n++] = line;
-      line = word;
-    } else {
-      line = trial;
-    }
-    if (sp < 0) break;
-    start = sp + 1;
-  }
-  if (line.length() && n < max) out[n++] = line;
-  if (n == max && start < (int)s.length()) {  // more text than fits: ellipsis
-    String& l = out[n - 1];
-    while (l.length() > 1 && canvas.textWidth(l + "...") > maxW) l.remove(l.length() - 1);
-    l += "...";
-  }
+  auto lines = text::wrap(std::string(s.c_str()), max, maxW, canvasWidth, nullptr);
+  int n = 0;
+  for (auto& l : lines) out[n++] = String(l.c_str());
   return n;
 }
 

@@ -87,7 +87,7 @@ class GitHub:
             out, err = await asyncio.wait_for(p.communicate(), 40)
         except TimeoutError:
             p.kill()
-            raise RuntimeError("gh timed out")
+            raise RuntimeError("gh timed out") from None
         if p.returncode != 0:
             raise RuntimeError(err.decode(errors="replace").strip()[-200:] or f"gh exit {p.returncode}")
         d = json.loads(out)

@@ -74,7 +74,8 @@ class Agent:
         return {"state": self.state, "detail": self.detail, "link": self.link_state, "stick": self.cfg.get("stick"),
                 "stt_ready": self.stt_ready, "busy": self.brain.busy, "mtu": self.link.mtu, "stats": self.stats,
                 "prompts": [{"id": k, **{x: v[x] for x in ("tool", "hint", "from")}} for k, v in self.prompts.items()],
-                "model": self.cfg.get("model"), "weather": self.weather.now, "github": self.github.status(), "stick_approvals": self.cfg.get("stick_approvals", True)}
+                "model": self.cfg.get("model"), "weather": self.weather.now, "github": self.github.status(),
+                "stick_approvals": self.cfg.get("stick_approvals", True)}
 
     def _history(self, entry):
         with config.HISTORY.open("a") as f:

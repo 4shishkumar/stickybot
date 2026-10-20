@@ -1,0 +1,28 @@
+# Install once with:  make dev-setup   (or: ~/.stick-agent/venv/bin/pre-commit install)
+# Runs on the files you commit. Generated files (fonts, sound clips) are left alone.
+exclude: '^(m5-stick-s3/src/(fonts_vlw|sounds_clips)\.(cpp|h)|.*\.ttf)$'
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: detect-private-key
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+        files: ^mac-agent/
+  - repo: local
+    hooks:
+      - id: no-secrets-ini
+        name: never commit secrets.ini (OTA password)
+        entry: secrets.ini files must not be committed — use secrets.example.ini
+        language: fail
+        files: (^|/)secrets\.ini$

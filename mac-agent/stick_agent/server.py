@@ -64,7 +64,7 @@ def make_app(agent):
             lines = config.HISTORY.read_text().splitlines()[-n:]
         except OSError:
             lines = []
-        return web.json_response([json.loads(l) for l in reversed(lines) if l.strip()])
+        return web.json_response([json.loads(line) for line in reversed(lines) if line.strip()])
 
     async def logs(request):
         n = int(request.query.get("n", 300))

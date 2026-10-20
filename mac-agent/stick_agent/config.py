@@ -32,7 +32,8 @@ DEFAULT_CONFIG = {
     "weather": True,          # weather on the stick's home screen (Open-Meteo, free)
     "weather_location": "auto",  # "auto" = from this Mac's internet connection, or a city name
     "ticker": True,           # the facts / news ticker on the home screen (sources below)
-    "idle_content": ["facts", "hn", "onthisday", "wikipedia"],  # experimental: home screen reading when nothing needs you
+    # experimental: home screen reading when nothing needs you
+    "idle_content": ["facts", "hn", "onthisday", "wikipedia"],
     "stick_approvals": True,  # Claude Code permission prompts go to the stick + dashboard first
     # Events on the stick (see events.py): kind -> "celebrate" | "nice" | "headsup" | "off";
     # kinds not listed use events.DEFAULT_RULES
@@ -75,7 +76,8 @@ def token():
 def claude_path(cfg):
     if cfg.get("claude_path"):
         return cfg["claude_path"]
-    for p in (shutil.which("claude"), Path.home() / ".local/bin/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude"):
+    for p in (shutil.which("claude"), Path.home() / ".local/bin/claude", "/opt/homebrew/bin/claude",
+              "/usr/local/bin/claude"):
         if p and Path(p).exists():
             return str(p)
     return None

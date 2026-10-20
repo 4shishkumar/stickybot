@@ -7,6 +7,7 @@
 #include "battery.h"
 #include "hid.h"
 #include <sys/time.h>
+#include "logic/clock.h"
 #include "sound.h"
 #include "events.h"
 
@@ -294,49 +295,32 @@ void decide(bool approve) {
 
 // --- Mac agent ---------------------------------------------------------------
 
-static bool localNow(tm& t) {
-  time_t now = time(nullptr);
-  if (now < 1700000000) return false;
-  now += tzOffset;
-  gmtime_r(&now, &t);
-  return true;
-}
+// Local time from the agent's clock; formatting is in logic/clock.cpp (unit-tested).
+static bool localNow(clockfmt::Local& t) { return clockfmt::local((int64_t)time(nullptr), tzOffset, t); }
 
 String clock() {
-  tm t;
-  if (!localNow(t)) return "";
-  int h = t.tm_hour % 12;
-  char buf[6];
-  snprintf(buf, sizeof buf, "%d:%02d", h ? h : 12, t.tm_min);
-  return buf;
+  clockfmt::Local t;
+  return localNow(t) ? String(clockfmt::time12(t).c_str()) : String();
 }
 
 int hour() {
-  tm t;
-  return localNow(t) ? t.tm_hour : -1;
+  clockfmt::Local t;
+  return localNow(t) ? t.hour : -1;
 }
 
 String longDate() {
-  tm t;
-  if (!localNow(t)) return "";
-  static const char* D[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
-  static const char* M[] = {"January", "February", "March", "April", "May", "June", "July", "August",
-                            "September", "October", "November", "December"};
-  return String(D[t.tm_wday]) + " " + t.tm_mday + " " + M[t.tm_mon];
+  clockfmt::Local t;
+  return localNow(t) ? String(clockfmt::longDate(t).c_str()) : String();
 }
 
 String ampm() {
-  tm t;
-  if (!localNow(t)) return "";
-  return t.tm_hour < 12 ? "AM" : "PM";
+  clockfmt::Local t;
+  return localNow(t) ? String(clockfmt::ampm(t).c_str()) : String();
 }
 
 String date() {
-  tm t;
-  if (!localNow(t)) return "";
-  static const char* D[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-  static const char* M[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-  return String(D[t.tm_wday]) + " " + t.tm_mday + " " + M[t.tm_mon];
+  clockfmt::Local t;
+  return localNow(t) ? String(clockfmt::shortDate(t).c_str()) : String();
 }
 
 HomeCard homeCard() { return agentLinked() ? home_ : HomeCard{}; }

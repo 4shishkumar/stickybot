@@ -1,0 +1,17 @@
+{
+  "mine": {"nodes": [
+    {"number": 5507, "title": "Add stick agent", "state": "OPEN", "merged": false, "createdAt": "2026-10-10T08:00:00Z",
+     "repository": {"nameWithOwner": "wvrdz/loom"}, "reviewDecision": "REVIEW_REQUIRED",
+     "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "FAILURE"}}}]},
+     "reviews": {"nodes": []}},
+    {"number": 88, "title": "Docs tweak", "state": "OPEN", "merged": false, "createdAt": "2026-10-01T08:00:00Z",
+     "repository": {"nameWithOwner": "acme/other"}, "reviewDecision": null,
+     "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]},
+     "reviews": {"nodes": []}},
+    null
+  ]},
+  "asks": {"nodes": [
+    {"number": 5400, "title": "Old review", "repository": {"nameWithOwner": "wvrdz/loom"}}
+  ]},
+  "primary": {"releases": {"nodes": [{"tagName": "v0.1.497", "name": "v0.1.497"}]}}
+}
