@@ -1,0 +1,22 @@
+{
+  "_help": "Quick commands: run instantly, no AI. Phrases are matched against what you say (case and punctuation ignored). {n} = a number, {app} / {q} = any words. Actions: open_url (+ optional browser), open_app, shell. Edit in the dashboard.",
+  "commands": [
+    {
+      "name": "GitHub PR",
+      "phrases": ["pr {n}", "open pr {n}", "pull request {n}", "open pull request {n}", "github pr {n}"],
+      "open_url": "https://github.com/<org>/<repo>/pull/{n}",
+      "browser": "Brave Browser"
+    },
+    {
+      "name": "Devin review",
+      "phrases": ["devin review {n}", "devin pr {n}", "devin {n}", "review pr {n} in devin"],
+      "open_url": "https://app.devin.ai/review/<org>/<repo>/pull/{n}",
+      "browser": "Brave Browser"
+    },
+    {
+      "name": "Open app",
+      "phrases": ["open {app}", "launch {app}", "start {app}", "switch to {app}"],
+      "open_app": "{app}"
+    }
+  ]
+}

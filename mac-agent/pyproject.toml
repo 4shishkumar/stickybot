@@ -1,0 +1,19 @@
+[project]
+name = "stick-agent"
+version = "0.1.0"
+description = "Voice assistant for your Mac, driven by an M5StickS3"
+requires-python = ">=3.11"
+dependencies = ["bleak", "aiohttp", "rumps", "parakeet-mlx", "numpy"]
+
+[project.scripts]
+stick-agent = "stick_agent.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["stick_agent"]
+
+[tool.setuptools.package-data]
+stick_agent = ["dashboard.html", "defaults/*"]

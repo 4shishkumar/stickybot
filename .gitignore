@@ -1,0 +1,21 @@
+# PlatformIO build cache and downloaded libraries (recreated on first build)
+.pio/
+
+# Factory flash backups — specific to one device, made with tools/backup.sh
+backup/
+
+# Generated at build time from web/settings.html
+**/src/web_page.h
+
+.DS_Store
+
+# Local secrets (OTA password)
+**/secrets.ini
+**/tools/sounds/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+.pytest_cache/

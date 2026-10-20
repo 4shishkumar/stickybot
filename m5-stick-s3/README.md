@@ -1,0 +1,291 @@
+# M5StickS3 — Bluetooth macro button (M1)
+
+Turns an M5StickS3 into a Bluetooth keyboard with one programmable key combo,
+a status screen, and settings you can change **without reflashing** — from a
+menu on the stick, a settings page in your browser, or serial commands.
+
+Default combo: **⌥ Option + ⌘ Command** (e.g. to trigger Wispr Flow).
+
+| Button A (front) | Mac sees |
+|---|---|
+| Single press | combo once |
+| Double press | combo twice |
+| Hold         | combo held until you let go (screen shows **Listening...**); over USB the stick's mic streams to the Mac as a USB microphone meanwhile (pick **TinyUSB UAC1** as the mic in Wispr Flow) |
+
+| Button B (side) | |
+|---|---|
+| Click | Enter |
+| Double press | unlock the Mac (types the saved Mac password + Return) |
+| Hold | talk to the Mac agent (`tools/mac-agent`): speak, release — works over Bluetooth, no cable |
+| Triple press | open the settings menu (wakes the screen first if it's off; closes web settings) |
+
+The stick's third button (power/reset, on the other side) is handled by the
+power chip: hold it for download mode, see "Flashing" below.
+
+---
+
+## 1. One-time setup: install PlatformIO
+
+Same as the XIAO project — skip if you already did it there.
+
+```sh
+brew install python@3.14
+python3.14 -m venv ~/.platformio/penv
+~/.platformio/penv/bin/pip install platformio
+```
+
+Optional, so `pio` works without the full path — add to `~/.zshrc`:
+
+```sh
+export PATH="$HOME/.platformio/penv/bin:$PATH"
+```
+
+The commands below assume that; otherwise use `~/.platformio/penv/bin/pio`.
+The first build downloads the toolchain and libraries (a few minutes); `git`
+must be installed (it is on macOS with the Xcode command-line tools).
+
+---
+
+## 2. Back up the factory firmware (once, before the first flash)
+
+A new StickS3 ships with M5Stack's demo firmware. Save a full copy of its
+flash so you can go back to exactly that state later:
+
+```sh
+tools/backup.sh
+```
+
+It reads all 8 MB (bootloader, partition table, firmware, settings) into
+`backup/sticks3-factory-<date>.bin`, verifies the copy against the device, and
+writes the chip info + SHA-256 next to it. Keep the `backup/` folder somewhere
+safe; it's specific to this stick.
+
+If the port isn't found, hold the side power/reset button until the green LED
+flashes (download mode) and run it again.
+
+### Restore it later
+
+```sh
+tools/restore.sh backup/sticks3-factory-<date>.bin
+```
+
+Writes the backup back and verifies it, then press the power/reset button once.
+The stick is then exactly as it was when you backed it up, including any
+settings the factory firmware had.
+
+**No backup?** Use M5Stack's **M5Burner** app (free, no account): put the
+stick in download mode, pick the StickS3 firmware (factory demo or UIFlow2),
+click Burn.
+
+---
+
+## 3. Build and flash
+
+1. Connect the StickS3 to the Mac with a USB-C **data** cable.
+2. Check it shows up: `ls /dev/cu.usbmodem*`
+3. From this folder (`m5-stick-s3/`):
+   ```sh
+   pio run -t upload
+   ```
+   Done when you see `Hash of data verified` and `[SUCCESS]`.
+
+**If upload fails or the port doesn't appear**, put the stick in download mode:
+hold the **side power/reset button** until the green LED inside flashes, then
+run the upload again. Press the power/reset button once afterwards to start
+the new firmware.
+
+Re-flashing keeps your saved combo, Wi-Fi and Mac pairing. Only
+`pio run -t erase` wipes them.
+
+---
+
+## 4. Pair with the Mac (first time only)
+
+1. **System Settings → Bluetooth**.
+2. Click **Connect** next to **StickS3 Macro**.
+3. If the Keyboard Setup Assistant pops up, close it.
+
+The top bar on the stick turns green: **Connected**. From then on it reconnects
+by itself whenever it's on and near the Mac (1–3 s).
+
+How that works: when you click Connect, the Mac and the stick exchange
+encryption keys and both save them ("bonding") — the Mac in its Bluetooth
+list, the stick in flash. On every later start the stick advertises, the Mac
+recognises the bonded device and reconnects with the saved keys, no prompt.
+If either side forgets the bond (Forget on the Mac, or "Forget Mac pairing"
+on the stick), both must be paired again.
+
+For a closed, docked MacBook: turn on **Allow Bluetooth devices to wake this
+computer** (Bluetooth → Advanced, or Keyboard settings on newer macOS).
+
+---
+
+## 5. The screen
+
+Portrait layout:
+
+```
+┌───────────────┐
+│ ● Connected   │   green = connected, orange = waiting
+│   ▭  +80%     │   battery, + = charging
+│ ───────────── │
+│ Button A sends│
+│    Option     │   combo, one part per line
+│    + Cmd      │
+│               │
+│  B: settings  │
+└───────────────┘
+```
+
+Upside down? Menu → **Flip screen** (saved).
+
+- While you hold button A, the screen turns purple: **Listening...**
+- The screen turns off after 20 s idle. Button A still works with the screen
+  off (it sends the combo and wakes the screen). Triple-press B to wake it
+  without sending anything.
+- The battery level is also reported to the Mac over Bluetooth, so it should
+  appear in the Bluetooth menu like other keyboards.
+
+---
+
+## 6. Changing the combo — three ways, no reflashing
+
+The combo is saved in the stick's flash (NVS) and used immediately.
+
+### a) On the stick: triple-press B → menu
+
+| Item | Button B does |
+|---|---|
+| Ctrl / Option / Shift / Cmd | toggle that modifier on/off |
+| Key | next key (hold B to scroll fast); `(none)` = modifier-only |
+| Test combo | sends the combo you're editing |
+| Web settings | turns on the browser settings page (below) |
+| Flip screen | rotate the screen 180° (saved) |
+| Forget pairing | press twice to confirm; stick restarts |
+| Save & exit / Cancel | |
+
+Button A moves to the next item. The top bar shows the combo you're building.
+The menu cancels itself after 60 s without input.
+
+### b) In the browser: Web settings
+
+Turn it on from the menu (**Web settings**). Wi-Fi stays off the rest of the
+time to save battery, and switches itself off after 10 min with no page use.
+
+- **First time (no home Wi-Fi saved):** the stick creates its own hotspot. The
+  screen shows its name (**StickS3-Setup**) and a password. Join that network
+  on your Mac, then open **http://192.168.4.1**. Your Mac is off the internet
+  while joined; switch back afterwards.
+- **Easier after that:** on the page, save your home Wi-Fi under *Home Wi-Fi*.
+  Next time you open Web settings the stick joins your network instead, and
+  the page is at **http://sticks3.local** (the IP is also on the screen).
+  If joining fails within 15 s it falls back to the hotspot.
+
+On the page: pick modifiers + key, or type a combo like `cmd+shift+4`,
+then **Save**. **Send test** fires it on the Mac. Press button B on the stick
+to close web settings.
+
+### c) Over USB: serial commands
+
+```sh
+pio device monitor
+```
+
+| Command | Does |
+|---|---|
+| `show` | current combo, connection, battery |
+| `set cmd+opt` | set the combo (`set ctrl+space`, `set cmd+shift+4`, `set f5`, …) |
+| `web` / `web off` | turn the settings page on/off |
+| `forget` | forget the Mac pairing and restart |
+| `help` | list commands |
+
+Combo names (case doesn't matter): modifiers `cmd`, `opt`/`option`/`alt`,
+`ctrl`, `shift`; keys `a`–`z`, `0`–`9`, `f1`–`f20`, `space`, `return`/`enter`,
+`esc`, `tab`, `backspace`, `delete`, `up`/`down`/`left`/`right`, `home`, `end`,
+`pageup`, `pagedown`, and `- = [ ] \ ; ' ` , . /`.
+
+Note: the Mac's **Fn/Globe** key can't be sent — it isn't a standard keyboard
+key. Use a regular combo for Wispr Flow (e.g. ⌥⌘, the default).
+
+---
+
+## Serial log
+
+`pio device monitor` also shows what's happening:
+
+```
+StickS3 Macro started — combo Option+Cmd. Type 'help' for commands.
+Mac connected
+-> Option+Cmd down
+-> Option+Cmd up
+Web: hotspot StickS3-Setup / 48213977 -> http://192.168.4.1
+Web: combo set to Ctrl+Space
+```
+
+Quit with **Ctrl+C**. Opening the monitor may restart the stick.
+
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Port doesn't appear / upload fails | Data cable? Then download mode: hold the side power/reset button until the green LED flashes. |
+| Screen black after flashing | Press the power/reset button once. |
+| Screen upside down | Menu → **Flip screen**. |
+| "Not connected" when pressing A | Pair it (step 4). If it was paired before, see "Re-pair from scratch". |
+| `sticks3.local` doesn't open | Use the IP shown on the stick's screen. |
+| Page unreachable on the hotspot | Make sure the Mac joined **StickS3-Setup**, then open http://192.168.4.1. |
+
+### Re-pair from scratch
+
+1. Mac: **System Settings → Bluetooth** → **StickS3 Macro** → **(i)** → **Forget This Device**.
+2. Stick: menu → **Forget pairing** (press B twice), or serial `forget`.
+3. Pair again (step 4).
+
+---
+
+## Security notes
+
+- Pairing is "Just Works" (no passkey): while the stick isn't connected to your
+  Mac, any nearby computer could pair with it.
+- The web page has no login. It only runs while you've turned it on, but anyone
+  on the same Wi-Fi (or the hotspot) could change settings during that time.
+- The home Wi-Fi password is stored unencrypted in the stick's flash.
+
+Fine for a shortcut button. Don't use this as-is to type passwords.
+
+---
+
+## Project layout
+
+```
+m5-stick-s3/
+├── platformio.ini     board config (esp32-s3-devkitc-1 + 8 MB flash/PSRAM) and libraries
+├── tools/
+│   ├── backup.sh      full-flash backup of the stick (run before first flash)
+│   └── restore.sh     write a backup back
+├── backup/            your backups (created by backup.sh)
+└── src/
+    ├── main.cpp       buttons, modes (status / menu / web), serial commands
+    ├── combo.*        combo type, key names, "cmd+opt" parsing
+    ├── settings.*     saved settings (NVS flash)
+    ├── hid.*          Bluetooth keyboard
+    ├── ui.*           screen drawing, screen sleep
+    ├── menu.*         on-device settings menu
+    ├── web.*          Wi-Fi + settings page server
+    └── web_page.h     the settings page (HTML/JS)
+```
+
+Built with [pioarduino](https://github.com/pioarduino/platform-espressif32)
+(ESP32 Arduino core 3.x), [M5Unified](https://github.com/m5stack/M5Unified),
+[M5PM1](https://github.com/m5stack/M5PM1),
+[NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino) and
+[HijelHID_BLEKeyboard](https://github.com/HijelHub/HijelHID_BLEKeyboard).
+
+## Roadmap
+
+- **M1 (this):** combo button, status screen, battery, screen sleep, settings menu + web page.
+- **M2:** multiple Macs (switch between paired Macs, disconnect without forgetting), profiles on button B, media keys.
+- **M3:** Mac helper app ("StickLink"): notifications on the stick (on-air, meetings, Claude Code prompts).
+- Later: motion gestures, wired USB keyboard mode, Wi-Fi firmware updates.
