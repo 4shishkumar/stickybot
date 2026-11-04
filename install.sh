@@ -42,6 +42,30 @@ run() { "$@" >>"$LOG" 2>&1 || die "failed: $* (details in $LOG)"; }
 
 mkdir -p "$AGENT_HOME"
 : >>"$LOG"
+# --help: explain and stop before doing anything
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help)
+      cat <<'USAGE'
+install.sh — install (or update) the stick-agent companion app on this Mac
+
+Usage: ./install.sh [options]          (or: curl -fsSL <url>/install.sh | sh -s -- [options])
+
+  --yes                 no questions: install the default components
+  --with a,b            also install these components (model, claude, github, firmware)
+  --without a,b         skip these components
+  --dry-run             show what would happen, change nothing
+  --uninstall [all|a,b] remove the app (or just some components); --purge also deletes ~/.stick-agent
+  --src PATH            use this checkout instead of cloning the repo
+  -h, --help            this help
+
+It installs uv (if missing) into ~/.local/bin, Python + stick-agent into ~/.stick-agent,
+then runs `stick-agent setup` to pick the components. Re-running it updates.
+USAGE
+      exit 0 ;;
+  esac
+done
+
 say "stick-agent installer — log: $LOG"
 
 # --- our own options; the rest goes to `stick-agent setup` -------------------------
