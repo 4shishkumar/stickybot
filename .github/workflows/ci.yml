@@ -1,9 +1,11 @@
 # CI for when the repo has a remote. macOS runners: the agent needs macOS frameworks
 # (Core Bluetooth via bleak, MLX), and building the firmware is the same as on a dev Mac.
 name: CI
+# Private repo: macOS runners use free minutes ~10x faster, so CI runs on pull
+# requests and on demand (Actions tab -> CI -> Run workflow), not on every push.
 on:
-  push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   agent:
