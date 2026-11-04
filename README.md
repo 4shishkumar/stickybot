@@ -17,5 +17,10 @@ Mac slots), so the same settings page works with any of them.
 
 Start with the board's README: install PlatformIO, flash, pair.
 
+**Quick start — the Mac companion app** (voice agent, approvals, alerts, dashboard):
+`./install.sh` from the repo root, then follow the dashboard's setup wizard. Setting
+up someone else's stick: [docs/TEAMMATE-SETUP.md](docs/TEAMMATE-SETUP.md). Building
+everything from scratch: [docs/BUILDING.md](docs/BUILDING.md).
+
 Not in git: `.pio/` (build cache, recreated automatically) and `backup/`
 (per-device factory images).

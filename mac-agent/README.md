@@ -60,24 +60,50 @@ Levels per event, quiet hours and the GitHub settings are in the dashboard → *
 
 ## Install
 
-Requirements: a Mac with Apple Silicon, Python 3.11+ (`brew install python@3.14`),
-[Claude Code](https://claude.com/claude-code) installed and logged in, the stick
-paired with the Mac (System Settings → Bluetooth), and `gh` logged in for GitHub
-alerts (optional).
+One command, from a clone of the repo (it's private, so for now you need access to
+`ashish-kumar-noon/stick-key`):
 
 ```sh
-/opt/homebrew/bin/python3.14 -m venv ~/.stick-agent/venv
-~/.stick-agent/venv/bin/pip install -e .          # from this folder
-ln -sf ~/.stick-agent/venv/bin/stick-agent ~/.local/bin/stick-agent
-stick-agent start                                  # also starts at every login
+./install.sh
 ```
 
-The first start downloads the speech model (~2.5 GB, once) and opens the
-dashboard: **Settings → Find sticks nearby → Use this one**, then set your repo in
-**Quick commands**. macOS asks once for Bluetooth access — allow it.
+or, without cloning first (uses your `gh` login):
 
-If `stick-agent start` says the LaunchAgents folder isn't writable, fix it once:
-`sudo chown $(whoami) ~/Library/LaunchAgents`.
+```sh
+gh api repos/ashish-kumar-noon/stick-key/contents/install.sh -H "Accept: application/vnd.github.raw" | sh
+```
+
+Once the setup site is up this becomes `curl -fsSL https://<site>/install.sh | sh`.
+
+What it does: checks for an Apple Silicon Mac, installs [uv](https://docs.astral.sh/uv/)
+(a standalone Python manager — no Homebrew or system Python needed) if it's
+missing, makes `~/.stick-agent/venv` with Python 3.14, installs stick-agent, and
+then runs **`stick-agent setup`**, which asks what else to set up:
+
+| Component | Default | What it does |
+|---|---|---|
+| `core` | always | the agent, the `stick-agent` command (`~/.local/bin`), its login item, the dashboard |
+| `model` | on | downloads the speech model (~2.5 GB, once) |
+| `claude` | on | checks Claude Code is installed and logged in; adds our 3 hooks to `~/.claude/settings.json` (backup first, other hooks kept) |
+| `github` | off | checks `gh`, logs in if needed, sets your main repo, turns on GitHub alerts |
+| `firmware` | off | flashes the bundled firmware to a stick plugged in by USB (keeps its settings) |
+| `wireless_mic` | — | coming later: the stick's mic for Wispr without a cable (BlackHole) |
+
+Options (for `install.sh` and `stick-agent setup`): `--yes` (defaults, no
+questions), `--with github,firmware`, `--without model`, `--dry-run`,
+`--uninstall [all | a,b]` (`--purge` also deletes `~/.stick-agent`).
+Anytime later: `stick-agent setup --status`, `stick-agent setup --with github`,
+`stick-agent uninstall`. The dashboard's **Settings → Components** shows the same
+list with Install / Remove buttons.
+
+Then, in the dashboard (it opens on the first start): **Settings → Find sticks
+nearby → Use this one**, and set your repo in **Quick commands**. macOS asks once
+for Bluetooth access — allow it. If the login item can't be written, fix it once with
+`sudo chown $(whoami) ~/Library/LaunchAgents` and run `stick-agent setup` again.
+
+Requirements: a Mac with Apple Silicon, [Claude Code](https://claude.com/claude-code)
+with your own login (the installer helps), the stick paired with the Mac
+(System Settings → Bluetooth), and `gh` for GitHub alerts (optional).
 
 ### Claude Code hooks (in `~/.claude/settings.json`)
 | Hook | Script | What for |

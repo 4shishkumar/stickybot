@@ -70,25 +70,29 @@ pio run -e sticks3 -t upload           # build + flash over USB
 ## 3. Install and start the Mac agent
 
 ```sh
-cd mac-agent
-/opt/homebrew/bin/python3.14 -m venv ~/.stick-agent/venv
-~/.stick-agent/venv/bin/pip install -e ".[dev]"
-ln -sf ~/.stick-agent/venv/bin/stick-agent ~/.local/bin/stick-agent
-stick-agent start
+./install.sh            # from the repo root
 ```
 
-- **First start** downloads the speech model (~2.5 GB, once) and opens the dashboard at
-  http://localhost:8660: Settings → **Find sticks nearby → Use this one**; set your repo in
-  **Quick commands**.
-- **Bluetooth permission:** macOS asks once whether Python may use Bluetooth — allow it.
-- **"LaunchAgents isn't writable"** (some installers leave `~/Library/LaunchAgents` owned by
-  root): `sudo chown $(whoami) ~/Library/LaunchAgents`, then `stick-agent start` again.
-  Without that it still runs, but won't start by itself at the next login.
-- **Claude Code hooks** (approvals on the stick, "Claude finished" alerts) go in
-  `~/.claude/settings.json` — see [mac-agent/README.md](../mac-agent/README.md#claude-code-hooks-in-claudesettingsjson).
+This installs uv if needed, creates `~/.stick-agent/venv` (Python 3.14), installs
+`mac-agent/` into it **editable** (so code changes apply after `stick-agent restart`),
+and runs `stick-agent setup` to pick the components (speech model, Claude Code
+hooks, GitHub alerts, flashing a stick). See [mac-agent/README.md](../mac-agent/README.md#install)
+for the components and options. Re-run it any time; it only changes what's missing.
 
-Check it: `stick-agent status` → `running — ready | stick: stick-key (connected)`.
-Then hold B on the stick and say "what time is it".
+Testing the installer without touching your own setup: `make install-e2e` runs it
+for real into a throwaway HOME (namespaced login item and port, its own Claude
+settings file), checks `stick-agent setup --status`, re-runs it and uninstalls.
+These variables move everything it touches: `STICK_AGENT_HOME`, `STICK_AGENT_PORT`,
+`STICK_AGENT_LABEL`, `STICK_AGENT_BIN`, `STICK_AGENT_CLAUDE_SETTINGS`, and
+`STICK_AGENT_NO_LOGIN_ITEM=1` (or `--no-login-item`).
+
+The manual way, if you need it:
+
+```sh
+/opt/homebrew/bin/python3.14 -m venv ~/.stick-agent/venv
+~/.stick-agent/venv/bin/pip install -e mac-agent
+~/.stick-agent/venv/bin/stick-agent setup
+```
 
 ## 4. Regenerating fonts and sounds (only when changing them)
 
