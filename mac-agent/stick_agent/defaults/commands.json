@@ -4,13 +4,13 @@
     {
       "name": "GitHub PR",
       "phrases": ["pr {n}", "open pr {n}", "pull request {n}", "open pull request {n}", "github pr {n}"],
-      "open_url": "https://github.com/<org>/<repo>/pull/{n}",
+      "open_url": "https://github.com/wvrdz/loom/pull/{n}",
       "browser": "Brave Browser"
     },
     {
       "name": "Devin review",
       "phrases": ["devin review {n}", "devin pr {n}", "devin {n}", "review pr {n} in devin"],
-      "open_url": "https://app.devin.ai/review/<org>/<repo>/pull/{n}",
+      "open_url": "https://app.devin.ai/review/wvrdz/loom/pull/{n}",
       "browser": "Brave Browser"
     },
     {
