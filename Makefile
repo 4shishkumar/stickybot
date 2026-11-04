@@ -7,7 +7,7 @@ PY  ?= $(HOME)/.stick-agent/venv/bin/python
 PIO ?= $(HOME)/.platformio/penv/bin/pio
 RUFF = $(PY) -m ruff
 
-.PHONY: help test check lint format agent-test agent-test-all firmware-test firmware-build dev-setup
+.PHONY: help test check lint format agent-test agent-test-all firmware-test firmware-build dev-setup shellcheck install-e2e
 
 help:
 	@echo "make test            agent tests + firmware native tests"
@@ -25,6 +25,7 @@ check: lint test
 
 lint:
 	cd mac-agent && $(RUFF) check .
+	@if command -v shellcheck >/dev/null; then shellcheck -s sh install.sh; else echo "(shellcheck not installed — skipping install.sh)"; fi
 
 # Formatting is configured but the existing code keeps its hand-aligned style;
 # use this on files you're writing, e.g.  make format FILES=mac-agent/stick_agent/new.py
@@ -36,6 +37,12 @@ agent-test:
 
 agent-test-all:
 	cd mac-agent && $(PY) -m pytest -m "slow or not slow"
+
+shellcheck:  ## lint install.sh (brew install shellcheck)
+	shellcheck -s sh install.sh
+
+install-e2e:  ## run install.sh for real into a throwaway HOME (slow, needs the network)
+	cd mac-agent && $(PY) -m pytest -m slow tests/test_install_e2e.py
 
 firmware-test:
 	$(MAKE) -C m5-stick-s3 test PIO=$(PIO)
