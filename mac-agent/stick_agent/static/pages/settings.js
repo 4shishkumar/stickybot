@@ -1,5 +1,6 @@
 // Settings: the agent's own options (saved in ~/.stick-agent/config.json).
 import {h, clear, card, field, toggle, get, put, post, report, toast, refreshStatus, store} from "../lib.js";
+import {componentsPanel} from "../components.js";
 
 export const title = "Settings";
 export const subtitle = "How the agent behaves. Changes apply right away once you save.";
@@ -62,6 +63,7 @@ export async function render(el) {
     card("Advanced",
       field("Run without asking", h("input", {id: "safeTools", class: "mono", value: (c.safe_tools || []).join(", ")}), "Claude Code tools that never need approval."),
       field("Claude path", h("input", {id: "claudePath", class: "mono", placeholder: "found automatically", value: c.claude_path || ""}))),
+    card("Components", componentsPanel()),
   );
 }
 

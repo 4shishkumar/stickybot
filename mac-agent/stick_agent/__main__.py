@@ -8,6 +8,8 @@
   stick-agent logs       follow the log
   stick-agent open       open the dashboard
   stick-agent flash      flash the bundled firmware to a stick on USB  [--port P] [--backup]
+  stick-agent setup      install / check / remove parts (see `stick-agent setup --help`)
+  stick-agent uninstall  remove everything it installed  [--purge: also delete ~/.stick-agent]
 """
 import asyncio
 import json
@@ -24,7 +26,7 @@ from pathlib import Path
 
 from . import config
 
-LABEL = "com.stickkey.agent"
+LABEL = os.environ.get("STICK_AGENT_LABEL", "com.stickkey.agent")  # overridable for test installs
 LOGIN_PLIST = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"  # loaded again at every login
 LOCAL_PLIST = config.HOME / f"{LABEL}.plist"                            # fallback: this login only
 
@@ -177,6 +179,12 @@ def main():
         os.execvp("tail", ["tail", "-n", "50", "-f", str(config.LOG)])
     elif cmd == "open":
         webbrowser.open(f"http://localhost:{config.PORT}")
+    elif cmd == "setup":
+        from . import installer
+        sys.exit(installer.main(sys.argv[2:]))
+    elif cmd == "uninstall":  # = setup --uninstall all
+        from . import installer
+        sys.exit(installer.main(["--uninstall", "all", *sys.argv[2:]]))
     elif cmd == "flash":  # stick-agent flash [--port P] [--backup]
         from . import flasher
         args = sys.argv[2:]
