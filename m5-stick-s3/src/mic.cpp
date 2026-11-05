@@ -1,7 +1,7 @@
 #include "mic.h"
 #include <M5Unified.h>
 #include <USB.h>
-#include <USBAudioCard.h>
+#include <StickUSBAudio.h>  // arduino-esp32's USBAudioCard, vendored in lib/ to name the mic "stick-mic-usb"
 #include "netlog.h"
 #include "buddy.h"
 #include "logic/adpcm.h"
@@ -24,7 +24,7 @@ constexpr uint32_t END_TIMEOUT_MS = 1500;
 
 // A global so it registers its USB interface before the USB stack starts
 // (the core starts USB before setup(), like the serial port).
-static USBAudioCard uac(RATE, UAC_BPS_16, UAC_SPK_NONE, UAC_MIC_MONO);
+static StickUSBAudio uac(RATE, UAC_BPS_16, UAC_SPK_NONE, UAC_MIC_MONO, "stick-mic-usb");
 
 struct Frame { uint8_t len; uint8_t data[HEADER + MAX_SAMPLES / 2]; };
 

@@ -15,6 +15,7 @@ builds in work by others under these licences.
 | [M5Unified](https://github.com/m5stack/M5Unified), [M5GFX](https://github.com/m5stack/M5GFX), [M5PM1](https://github.com/m5stack/M5PM1) | MIT |
 | [NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino) | Apache-2.0 |
 | [HijelHID_BLEKeyboard](https://github.com/HijelHub/HijelHID_BLEKeyboard) 0.5.0 | Apache-2.0 — vendored in `m5-stick-s3/lib/` and modified (Apple fn key bit, settable PnP ID; changes marked `[stick-key change]`) |
+| USBAudioCard from the [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) 3.3.12 | Apache-2.0 — vendored in `m5-stick-s3/lib/StickUSBAudio/` as `StickUSBAudio` and modified (renamed; settable microphone name "stick-mic-usb" instead of "TinyUSB UAC1"; changes marked `[stick-key change]`) |
 | [ArduinoJson](https://github.com/bblanchon/ArduinoJson) | MIT |
 | [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) (via pioarduino) | LGPL-2.1 (core) / Apache-2.0 (ESP-IDF, TinyUSB parts MIT) |
 

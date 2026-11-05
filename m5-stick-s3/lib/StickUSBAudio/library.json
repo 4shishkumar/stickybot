@@ -1,0 +1,8 @@
+{
+  "name": "StickUSBAudio",
+  "version": "3.3.12+stick-key.1",
+  "description": "USB audio (UAC) device from arduino-esp32's USBAudioCard, with a settable microphone name. Apache-2.0, see the file headers.",
+  "license": "Apache-2.0",
+  "frameworks": "arduino",
+  "platforms": "espressif32"
+}
