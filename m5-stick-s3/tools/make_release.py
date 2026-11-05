@@ -7,7 +7,8 @@ The parts are written separately at their own offsets — exactly like
 pairings, combo, name, Wi-Fi, Mac password, sounds...) is never touched.
 (A single merged image would cover NVS with padding and wipe it.)
 
-    make release            # = pio run -e sticks3 + this script: the bundle in mac-agent
+    make release            # = pio run -e sticks3 + this script: a local build for the agent
+                            #   in ~/.stick-agent/firmware/local/ (or $STICK_AGENT_HOME/...)
     make_release.py --out dist --release v1.8.0 --agent-version 1.8.0
                             # the release workflow: the GitHub release's assets
 
@@ -19,6 +20,7 @@ import argparse
 import datetime
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -28,7 +30,7 @@ HERE = Path(__file__).resolve().parent.parent
 BUILD = HERE / ".pio" / "build" / "sticks3"
 PIO_PACKAGES = Path.home() / ".platformio" / "packages"
 BOOT_APP0 = PIO_PACKAGES / "framework-arduinoespressif32/tools/partitions/boot_app0.bin"
-LOCAL = HERE.parent / "mac-agent" / "stick_agent" / "firmware"  # the bundle inside the agent
+LOCAL = Path(os.environ.get("STICK_AGENT_HOME", Path.home() / ".stick-agent")) / "firmware" / "local"
 PARTS = [  # offset, source (in the build folder, or boot_app0), name in the bundle
     ("0x0", "bootloader.bin", "bootloader.bin"),
     ("0x8000", "partitions.bin", "partitions.bin"),

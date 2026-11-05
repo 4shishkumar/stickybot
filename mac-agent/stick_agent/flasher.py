@@ -1,7 +1,14 @@
-"""Flashes the bundled stick firmware over USB with esptool (no PlatformIO).
+"""Flashes the stick firmware over USB with esptool (no PlatformIO).
 
-The bundle is stick_agent/firmware/ (manifest.json + the flash parts), made by
-`make -C m5-stick-s3 release`. The parts are written at their own offsets, like
+The firmware ("bundle": manifest.json + the flash parts) comes from, newest version first:
+  ~/.stick-agent/firmware/<version>/   a release's assets, downloaded and sha256-checked
+                                       by releases.py (the update check / `stick-agent setup`)
+  ~/.stick-agent/firmware/local/       a local build: `make -C m5-stick-s3 release` (developers;
+                                       it wins a tie with a release of the same version)
+  stick_agent/firmware/                one shipped inside the package (no longer committed)
+bundled() picks one; the USB flasher here and other updaters use it.
+
+The parts are written at their own offsets, like
 `pio run -t upload`, so the stick's settings storage (NVS at 0x9000-0xDFFF:
 Mac pairings, combo, name, Wi-Fi, Mac password, sounds) is never erased.
 
@@ -18,11 +25,14 @@ import sys
 import time
 from pathlib import Path
 
-from . import config
+from . import config, releases
 
 log = logging.getLogger("flasher")
 
-BUNDLE = Path(__file__).parent / "firmware"
+BUNDLE = Path(__file__).parent / "firmware"  # inside the package (e.g. a packaged build; not committed)
+LOCAL = "local"                              # ~/.stick-agent/firmware/local: `make -C m5-stick-s3 release`
+NO_FIRMWARE = ("no firmware yet — no release downloaded (dashboard: Settings → Updates → Check now) "
+               "and no local build (make -C m5-stick-s3 release)")
 ESPRESSIF_VID = 0x303A
 NVS = (0x9000, 0xE000)  # the stick's settings: never write here (default_8MB.csv)
 SECTOR = 0x1000
@@ -33,21 +43,55 @@ class FlashError(Exception):
     pass
 
 
-def bundled():
-    """The bundled firmware's manifest, with "parts" as [(offset, path)], or None."""
+def load_bundle(folder, source):
+    """A bundle folder's manifest with "files" as [(offset, path)] (+ "source", "dir"), or None if
+    it's missing or incomplete (a part absent or of the wrong size)."""
+    folder = Path(folder)
     try:
-        m = json.loads((BUNDLE / "manifest.json").read_text())
+        m = json.loads((folder / "manifest.json").read_text())
     except (OSError, ValueError):
         return None
     parts = []
     for p in m.get("parts") or []:
-        path = BUNDLE / p["file"]
-        if not path.exists():
+        path = folder / str(p.get("file") or "")
+        if not path.is_file() or (isinstance(p.get("size"), int) and path.stat().st_size != p["size"]):
             return None
         parts.append((p["offset"], str(path)))
-    if not parts:
+    if not parts or not m.get("version"):
         return None
-    return {**m, "files": parts}
+    return {**m, "files": parts, "source": source, "dir": str(folder)}
+
+
+def bundles():
+    """Every usable firmware bundle on this Mac, best first: the highest firmware version;
+    for the same version a local build, then a release download, then the package's."""
+    root = releases.firmware_root()
+    found = []
+    if root.is_dir():
+        for d in root.iterdir():
+            if d.name == LOCAL:
+                found.append((load_bundle(d, "local"), 2))
+            elif releases.parse_version(d.name):
+                found.append((load_bundle(d, "release"), 1))
+    found.append((load_bundle(BUNDLE, "bundled"), 0))
+    found = [(b, rank) for b, rank in found if b]
+    found.sort(key=lambda br: (releases.version_key(br[0]["version"]), br[1]), reverse=True)
+    return [b for b, _ in found]
+
+
+def bundled():
+    """The firmware to put on a stick, or None: its manifest (version, board, built, sha256,
+    size, parts, flash; release / agent_version for a release build) plus "files" as
+    [(offset, path)], "source" ("release" | "local" | "bundled") and "dir"."""
+    best = bundles()
+    return best[0] if best else None
+
+
+def describe(fw):
+    """'release v1.8.0' / 'local build' / 'bundled' for a bundle."""
+    if fw.get("source") == "release":
+        return f"release {fw.get('release') or fw['version']}"
+    return "local build" if fw.get("source") == "local" else "bundled"
 
 
 def check_parts(parts):
@@ -162,7 +206,7 @@ async def flash(port, backup=False, emit=None, parts=None):
     fw = bundled()
     parts = parts or (fw and fw["files"])
     if not parts:
-        raise FlashError("no bundled firmware — run `make -C m5-stick-s3 release`")
+        raise FlashError(NO_FIRMWARE)
     check_parts(parts)
     info = check_port(port)
     loop = asyncio.get_running_loop()
@@ -208,7 +252,7 @@ def cli(port=None, backup=False):
     """`stick-agent flash [--port P] [--backup]`."""
     fw = bundled()
     if not fw:
-        print("no bundled firmware — run: make -C m5-stick-s3 release")
+        print(NO_FIRMWARE)
         return 1
     if not port:
         ports = espressif_ports()
@@ -219,7 +263,7 @@ def cli(port=None, backup=False):
             print("several sticks on USB, pick one with --port:", ", ".join(p["port"] for p in ports))
             return 1
         port = ports[0]["port"]
-    print(f"flashing firmware {fw['version']} to {port}{' (with backup)' if backup else ''}")
+    print(f"flashing firmware {fw['version']} ({describe(fw)}) to {port}{' (with backup)' if backup else ''}")
 
     def show(e):
         if "line" in e:

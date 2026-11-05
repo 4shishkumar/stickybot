@@ -4,7 +4,7 @@
 #   make flash    build + flash over USB (first stick on USB)
 #   make fonts    regenerate src/fonts_vlw.* (needs Pillow)
 #   make sounds   regenerate src/sounds_clips.* (needs numpy, soundfile, soxr)
-#   make release  build + copy the merged image into mac-agent (dashboard flashing)
+#   make release  build + the flash parts + manifest in ~/.stick-agent/firmware/local (the agent flashes it)
 PIO    ?= $(HOME)/.platformio/penv/bin/pio
 PYTHON ?= $(HOME)/.stick-agent/venv/bin/python
 PORT   ?= $(firstword $(wildcard /dev/cu.usbmodem14C*) $(wildcard /dev/cu.usbmodem*))

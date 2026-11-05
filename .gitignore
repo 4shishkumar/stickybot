@@ -9,6 +9,12 @@ backup/
 
 .DS_Store
 
+# Firmware builds are release assets, not committed: the agent downloads them into
+# ~/.stick-agent/firmware/<version>/; `make -C m5-stick-s3 release` writes a local
+# build to ~/.stick-agent/firmware/local/. (Older bundles lived in the package.)
+mac-agent/stick_agent/firmware/
+/dist/
+
 # Local secrets (OTA password)
 **/secrets.ini
 **/tools/sounds/

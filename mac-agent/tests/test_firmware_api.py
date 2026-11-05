@@ -76,7 +76,8 @@ async def test_firmware_shape(client):
     assert r.status == 200
     d = await r.json()
     assert set(d) == {"bundled", "usb", "connected"}
-    assert d["bundled"] == {"version": "1.6.0", "board": "m5-sticks3", "built": "today", "sha256": "x", "size": 101}
+    assert d["bundled"] == {"version": "1.6.0", "board": "m5-sticks3", "built": "today", "sha256": "x", "size": 101,
+                            "source": "bundled", "release": None}
     assert d["usb"] == [{"port": STICK_PORT["port"], "serial": "ABC123", "version": "1.6.0", "board": "m5-sticks3"}]
     assert d["connected"] == {"name": "my-stick", "version": "1.6.0"}
 
@@ -291,7 +292,7 @@ async def test_run_esptool_parses_progress(monkeypatch):
 
 async def test_flash_without_bundle(monkeypatch, ports):
     monkeypatch.setattr(flasher, "bundled", lambda: None)
-    with pytest.raises(flasher.FlashError, match="no bundled firmware"):
+    with pytest.raises(flasher.FlashError, match="no firmware yet"):
         await flasher.flash(STICK_PORT["port"])
 
 

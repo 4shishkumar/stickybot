@@ -507,12 +507,27 @@ class GitHub(Component):
 
 # --- firmware: flash a stick on USB ---------------------------------------------------------
 
+def fetch_firmware(ui):
+    """Downloads the latest release's firmware (update channel from the config) into
+    ~/.stick-agent/firmware/<version>/, sha256-checked. Never fails: without a release (or
+    the network) whatever firmware is already here is used."""
+    from . import releases
+    channel = config.load().get("update_channel") or "stable"
+    try:
+        rel, _folder, manifest = releases.ensure_latest_firmware(channel, say=ui.say)
+        ui.say(f"firmware {manifest['version']} from release {rel['tag']} (sha256 checked)")
+    except releases.NoRelease as e:
+        ui.say(str(e))
+    except releases.ReleaseError as e:
+        ui.say(f"couldn't download the latest release ({e}) — using the firmware already here, if any")
+
+
 class Firmware(Component):
     id = "firmware"
     title = "Flash a stick"
-    description = "put the bundled firmware on a stick plugged in by USB (keeps its settings)"
+    description = "download the latest release's firmware and put it on a stick plugged in by USB (keeps its settings)"
     default = False
-    needs = {"usb": True}
+    needs = {"usb": True, "network": True}
     from_dashboard = False  # the dashboard has its own flow: Stick → Firmware
     removable = False
 
@@ -520,15 +535,18 @@ class Firmware(Component):
         from . import flasher
         fw = flasher.bundled()
         if not fw:
-            return "n/a", "no bundled firmware in this build"
+            return "n/a", "no firmware here yet (downloads the latest release)"
         ports = flasher.espressif_ports()
-        return "n/a", f"firmware {fw['version']} · {len(ports)} stick(s) on USB"
+        return "n/a", f"firmware {fw['version']} ({flasher.describe(fw)}) · {len(ports)} stick(s) on USB"
 
     def plan(self):
-        return "flash the bundled firmware to the stick on USB (asks about a backup first)"
+        return "download the latest release's firmware, flash it to the stick on USB (asks about a backup first)"
 
     def install(self, ui):
         from . import flasher
+        fetch_firmware(ui)
+        if not flasher.bundled():
+            raise NotAvailable(flasher.NO_FIRMWARE)
         ports = flasher.espressif_ports()
         if not ports:
             raise NotAvailable("no stick on USB — plug it in (or hold its side button for download mode)")

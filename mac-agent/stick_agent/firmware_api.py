@@ -203,7 +203,8 @@ def routes(agent):
 
     async def firmware(_):
         fw = flasher.bundled()
-        bundled = {k: fw.get(k) for k in ("version", "board", "built", "sha256", "size")} if fw else None
+        bundled = ({k: fw.get(k) for k in ("version", "board", "built", "sha256", "size", "source", "release")}
+                   if fw else None)
         return web.json_response({"bundled": bundled, "usb": await stick.usb_sticks(),
                                   "connected": await stick.connected()})
 

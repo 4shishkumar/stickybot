@@ -13,7 +13,7 @@ os.environ["STICK_AGENT_PORT"] = "18660"
 
 import pytest  # noqa: E402
 
-from stick_agent import clips, config, events, github, stick_mic_device, wispr_mic  # noqa: E402
+from stick_agent import clips, config, events, github, releases, stick_mic_device, wispr_mic  # noqa: E402
 
 
 class FakeStream:
@@ -115,6 +115,16 @@ def no_core_audio(monkeypatch):
     fake = FakeCoreAudio()
     monkeypatch.setattr(stick_mic_device, "CoreAudioDevices", lambda: fake)
     return fake
+
+
+@pytest.fixture(autouse=True)
+def no_real_github(monkeypatch):
+    """Tests never reach GitHub (gh or HTTPS): tests/test_releases.py fakes both."""
+    def refuse(*a, **kw):
+        raise AssertionError(f"a test reached for GitHub: {a[:1]}")
+    monkeypatch.setattr(releases, "run", refuse)
+    monkeypatch.setattr(releases, "urlopen", refuse)
+    monkeypatch.setattr(releases, "gh_path", lambda: None)
 
 
 @pytest.fixture

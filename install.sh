@@ -15,6 +15,12 @@
 # Claude Code hooks, GitHub alerts, flashing a stick). Safe to run again: it
 # updates the code and only changes what's missing.
 #
+# Code: a fresh install clones the repo into ~/.stick-agent/src and checks out the
+# latest stable release tag (main until the first release). Re-running moves a
+# release install to the newest stable release after it, and a branch checkout
+# (installs from before releases) does `git pull --ff-only`. The dashboard can do
+# the same update in one click (Settings → Updates).
+#
 # Options (passed on to `stick-agent setup`):
 #   --yes                 no questions: install the defaults
 #   --with a,b            also install these   (core model claude github firmware)
@@ -123,21 +129,48 @@ here="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
 if [ -z "$SRC" ] && [ -n "$here" ] && [ -f "$here/mac-agent/pyproject.toml" ]; then
   SRC="$here"   # run from a clone: use it as is (editable install)
 fi
+# The newest stable release tag (vX.Y.Z, no "-beta") in $SRC; with "contains", only one that
+# includes the current commit (so a beta install isn't moved back to an older stable release).
+latest_release() {
+  if [ "${1:-}" = contains ]; then
+    git -C "$SRC" tag --list 'v*' --contains HEAD --sort=-v:refname | grep -v -- - | head -n 1
+  else
+    git -C "$SRC" tag --list 'v*' --sort=-v:refname | grep -v -- - | head -n 1
+  fi
+}
 if [ -z "$SRC" ]; then
   SRC="$AGENT_HOME/src"
+  fresh=0
   if [ -d "$SRC/.git" ]; then
-    if [ "$DRY_RUN" = 1 ]; then say "would update $SRC (git pull)"; else
+    if [ "$DRY_RUN" = 1 ]; then say "would update $SRC (git fetch, then the latest release or git pull)"; else
       say "updating $SRC…"
-      run git -C "$SRC" pull --ff-only
+      run git -C "$SRC" fetch --tags --force --quiet origin
+      if git -C "$SRC" symbolic-ref -q HEAD >/dev/null; then
+        run git -C "$SRC" pull --ff-only   # on a branch (installs from before releases): follow it
+      else
+        tag="$(latest_release contains)"   # on a release tag: the newest stable release after it
+        [ -z "$tag" ] || run git -C "$SRC" -c advice.detachedHead=false checkout --quiet "$tag"
+      fi
     fi
   elif [ "$DRY_RUN" = 1 ]; then
-    say "would clone $REPO into $SRC"
+    say "would clone $REPO into $SRC (the latest release, or main before the first one)"
   elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     say "cloning $REPO with gh…"
     run gh repo clone "$REPO" "$SRC"
+    fresh=1
   else
-    say "cloning $REPO with git (needs access to the private repo)…"
-    run git clone "git@github.com:$REPO.git" "$SRC"
+    say "cloning $REPO over HTTPS (a private repo needs gh logged in instead)…"
+    run git clone "https://github.com/$REPO.git" "$SRC"
+    fresh=1
+  fi
+  if [ "$fresh" = 1 ]; then
+    tag="$(latest_release)"
+    if [ -n "$tag" ]; then
+      run git -C "$SRC" -c advice.detachedHead=false checkout --quiet "$tag"
+      say "release $tag"
+    else
+      say "no release yet — using main"
+    fi
   fi
 fi
 [ "$DRY_RUN" = 1 ] || [ -f "$SRC/mac-agent/pyproject.toml" ] || die "no mac-agent/ in $SRC"
