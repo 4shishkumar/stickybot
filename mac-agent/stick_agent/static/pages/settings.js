@@ -1,6 +1,7 @@
 // Settings: the agent's own options (saved in ~/.stick-agent/config.json).
 import {h, clear, card, field, toggle, get, put, post, report, toast, refreshStatus, store} from "../lib.js";
 import {componentsPanel} from "../components.js";
+import {mcpPanel} from "../mcp.js";
 
 export const title = "Settings";
 export const subtitle = "How the agent behaves. Changes apply right away once you save.";
@@ -82,6 +83,7 @@ export async function render(el) {
     card("Approvals",
       field("Stick approvals", toggle("stickApprovals", "Claude Code's permission prompts go to the stick and here first", c.stick_approvals !== false),
         "Off: Claude Code asks in the terminal straight away. On: it waits up to 30 s for A / B.")),
+    card("Stick tools for Claude Code (MCP)", mcpPanel(c)),
     card("Advanced",
       field("Run without asking", h("input", {id: "safeTools", class: "mono", value: (c.safe_tools || []).join(", ")}), "Claude Code tools that never need approval."),
       field("Claude path", h("input", {id: "claudePath", class: "mono", placeholder: "found automatically", value: c.claude_path || ""})),
@@ -239,6 +241,7 @@ async function save() {
     ticker: v("tickerOn").checked,
     idle_content: [...document.querySelectorAll(".idle")].filter(c => c.checked).map(c => c.value),
     stick_approvals: v("stickApprovals").checked,
+    mcp_server: v("mcpServer").checked,
     wireless_mic: v("wirelessMic").checked,
     wispr_switch_ms: +v("wisprSwitch").value,
     wispr_tail_ms: +v("wisprTail").value,

@@ -109,6 +109,23 @@ function node(ev) {
         h("span", null, h("b", null, ev.title || ""), ev.sub ? h("span", {class: "dim"}, " · " + ev.sub) : null),
         ev.sent === false ? h("span", {class: "tag"}, "stick offline") : null);
     }
+    case "mcp":  // a stick tool called by a Claude session (mcp_server.py)
+      return h("div", {class: "line" + (ev.ok === false ? " err" : "")}, h("b", null, `${ev.origin || "Claude"} · ${ev.tool}`),
+        ev.args ? h("span", {class: "dim"}, ` (${ev.args})`) : null, ` → ${ev.result || ""}`);
+    case "ask": {  // a question from a Claude session: answer here or on the stick
+      const opts = ev.options || [];
+      return h("div", {class: "approval", "data-ask": ev.id, style: "align-self:stretch"},
+        h("div", null, h("div", {class: "row"}, h("span", {class: "tag ask"}, "Question"), h("b", null, ev.question),
+          h("span", {class: "who"}, "from " + (ev.origin || "Claude Code")))),
+        h("div", {class: "btns"},
+          ...opts.map((o, i) => h("button", {class: "btn " + (i ? "" : "good"), onclick: () => answerAsk(ev.id, i)}, `${"AB"[i]}: ${o}`)),
+          h("button", {class: "btn ghost", onclick: () => answerAsk(ev.id, null)}, "Dismiss")));
+    }
+    case "ask_done": {
+      const card = chat && chat.querySelector(`[data-ask="${CSS.escape(ev.id || "")}"]`);
+      if (card) card.querySelector(".btns").replaceChildren(h("span", {class: "tag " + (ev.answer === "timeout" || ev.answer === "dismissed" || ev.answer === "cancelled" ? "" : "ok")}, `Answer: ${ev.answer}`));
+      return null;
+    }
     case "spoken":
       return h("div", {class: "line"}, "Read aloud");
     case "info":
@@ -120,13 +137,17 @@ function node(ev) {
   }
 }
 
+async function answerAsk(id, choice) {
+  report(await post("/api/mcp/answer", {id, choice}));
+}
+
 function append(ev) {
   if (!chat) return;
   const el = node(ev);
   if (!el) return;
   const empty = chat.querySelector(".empty");
   if (empty) empty.remove();
-  if (ev.t && ["heard", "event", "prompt"].includes(ev.kind)) { const d = dayMark(ev.t); if (d) chat.appendChild(d); }
+  if (ev.t && ["heard", "event", "prompt", "ask"].includes(ev.kind)) { const d = dayMark(ev.t); if (d) chat.appendChild(d); }
   if (ev.t && (oldestShown === null || ev.t < oldestShown)) oldestShown = ev.t;
   chat.appendChild(el);
 }
