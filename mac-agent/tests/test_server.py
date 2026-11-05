@@ -41,6 +41,14 @@ async def test_changes_need_the_token(client):
 async def test_page_has_the_token_built_in(client):
     r = await client.get("/", headers=HOST)
     assert r.status == 200 and config.token() in await r.text()
+    assert r.headers["Cache-Control"] == "no-cache"
+
+
+async def test_dashboard_files_are_revalidated(client):
+    r = await client.get("/static/firmware.js", headers=HOST)
+    assert r.status == 200 and r.headers["Cache-Control"] == "no-cache"
+    r = await client.get("/api/status", headers=HOST)
+    assert "Cache-Control" not in r.headers
 
 
 async def test_commands_put_validates(client):

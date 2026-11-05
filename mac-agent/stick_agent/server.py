@@ -35,7 +35,11 @@ def make_app(agent):
                 return web.json_response({"error": "bad token"}, status=403)
         elif request.method != "GET" and request.headers.get("X-Stick-Token") != tok:
             return web.json_response({"error": "bad token"}, status=403)
-        return await handler(request)
+        resp = await handler(request)
+        if request.path == "/" or request.path.startswith("/static/"):
+            # revalidate every load (cheap 304s): a cached old page module after an update hides new UI
+            resp.headers.setdefault("Cache-Control", "no-cache")
+        return resp
 
     async def page(_):
         return web.Response(text=PAGE.read_text().replace("{{TOKEN}}", tok), content_type="text/html")
