@@ -8,7 +8,7 @@ export const subtitle = "The stick's own settings. They're saved on the stick, s
 
 // Fallback for older firmware; newer sticks send their own list (with Fn) in `keys`.
 const MODS = [["Ctrl", 1], ["Option", 4], ["Shift", 2], ["Cmd", 8]];
-let root = null, st = null, keys = null, via = null, snd = null;
+let root = null, st = null, keys = null, via = null, snd = null, petInfo = null;
 
 export function actions() {
   return [h("button", {class: "btn", type: "button", onclick: load}, "Refresh"),
@@ -21,7 +21,9 @@ export function leave() { root = null; }
 async function load() {
   if (!root) return;
   clear(root).appendChild(h("div", {class: "empty"}, "Asking the stick…"));
-  const [r, k, s] = await Promise.all([proto("state"), keys ? Promise.resolve(null) : proto("keys"), get("/api/sounds")]);
+  const [r, k, s, pt] = await Promise.all([proto("state"), keys ? Promise.resolve(null) : proto("keys"), get("/api/sounds"),
+    get("/api/pet").catch(() => null)]);
+  petInfo = pt && pt.pet ? pt.pet : null;
   if (k && k.ok && k.reply) keys = k.reply;
   st = r.ok && r.reply ? r.reply : null;
   via = r.via;
@@ -52,7 +54,8 @@ function paint(res) {
         ? "This version of the agent can't change the stick's settings yet. The stick's own menu (triple-press B) still works."
         : (res && res.error) || "Check it's switched on and connected (Overview shows the link)."))));
   } else {
-    root.append(identityCard(), comboCard(), unlockCard(), slotsCard(), screenCard(), motionCard(), soundCard());
+    root.append(identityCard(), ...(st.faces ? [faceCard()] : []), comboCard(), unlockCard(), slotsCard(), screenCard(),
+      motionCard(), soundCard());
   }
   root.appendChild(card("Firmware", firmwarePanel()));
 }
@@ -89,6 +92,34 @@ function identityCard() {
 // Mac password for double-press-B unlock. Write-only: the stick never sends it
 // back (state only says macPassSet), nothing logs it, and the field is cleared
 // as soon as it's sent.
+// The Home screen's face (firmware 2.1.0+ sends `faces` in its state; older firmware: no card).
+// Preview plays a short demo of a face on the stick (A or B on the stick ends it).
+function faceCard() {
+  const p = petInfo;
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  const worn = p ? [p.acc & 1 ? "hat" : null, p.acc & 2 ? "sunglasses" : null, p.acc & 4 ? "crown" : null].filter(Boolean) : [];
+  const facts = p ? h("div", {class: "pet-facts small dim"},
+    h("span", null, `StickyBot level ${p.level} (${p.into}/${p.need} XP)`),
+    h("span", null, `streak: ${plural(p.streak, "day")}`),
+    h("span", null, `city: ${plural(p.merged, "building")}${p.releases ? ", " + plural(p.releases, "tower") : ""}`),
+    h("span", null, worn.length ? "wears: " + worn.join(", ") : "no accessories yet")) : null;
+  const tiles = st.faces.map(f => h("div", {class: "face" + (f.id === st.face ? " on" : "")},
+    h("div", {class: "shots"},
+      h("img", {class: "tall", src: `/static/faces/${f.id}.png`, alt: "", onerror: e => e.target.remove()}),
+      h("img", {class: "wide", src: `/static/faces/${f.id}-wide.png`, alt: "", onerror: e => e.target.remove()})),
+    h("b", null, f.title),
+    h("span", {class: "small dim"}, f.about),
+    h("div", {class: "row", style: "margin-top:4px"},
+      f.id === st.face ? h("span", {class: "ok-text small"}, "✓ on the stick")
+        : h("button", {class: "btn sm primary", type: "button", onclick: () => send("face", {id: f.id}, `Face: ${f.title}`)}, "Use"),
+      h("button", {class: "btn sm", type: "button", title: "Plays a short demo on the stick (A or B ends it)",
+        onclick: async () => report(await proto("face", {demo: f.id}), `Preview of ${f.title} on the stick`)}, "Preview"))));
+  return card("Face",
+    h("p", {class: "lead"}, "How the stick's Home screen looks. Approvals, questions and alerts still take over the screen, ",
+      "and every face keeps the time and anything urgent in view."),
+    facts, h("div", {class: "faces"}, tiles));
+}
+
 function unlockCard() {
   const set = !!st.macPassSet;
   const pw = h("input", {type: "password", id: "macPass", autocomplete: "new-password", spellcheck: "false",

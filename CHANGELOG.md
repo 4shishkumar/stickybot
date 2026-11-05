@@ -12,6 +12,30 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- **Faces for the stick's Home screen (firmware 2.1.0).** Pick one in the stick's menu
+  (**Face**), on its Web settings page, or on the dashboard's Stick page (pictures, **Use**,
+  and **Preview**, which plays a short demo on the stick). Every face keeps the time,
+  battery / Bluetooth and anything urgent in view; approvals, questions and alerts still
+  take over the screen. Portrait and landscape.
+  - **Classic**: Home as before (the default).
+  - **StickyWorld**: StickyBot in a pixel world. The sky follows the time and the weather;
+    a city grows with your merged PRs (a tower per release). StickyBot holds up a sign when
+    something waits for you, looks worried when CI fails, busy while Claude works, sleepy at
+    night; it eats a snack when a PR merges and celebrates releases and level-ups. Shake,
+    flick, turn it over or pick it up to play. It levels up, keeps a day streak and earns a
+    hat, sunglasses and a crown.
+  - **Aquarium**: a fish per running Claude Code session (it leaps out when the session
+    finishes), PRs as bubbles, a crab for review requests, murky water while CI is red; tilt
+    the stick and the water follows.
+- **StickyBot's progress** lives in the Mac app (`~/.stick-agent/pet.json`): XP from merged
+  PRs, green builds, finished Claude tasks and releases. The app sends the stick a small
+  `world` message (PROTOCOL.md, *Faces*) and adds the `kind` to events; `GET /api/pet`.
+- Serial `screens faces` plays every face's demo; `face <id>`, `face demo <id>`;
+  protocol `@face id=…` / `@face demo=…`.
+- `m5-stick-s3/tools/face_shots`: draws the faces on the Mac with the firmware's own drawing
+  code and saves PNGs (the dashboard's pictures come from it).
+
 ## [2.0.0] - 2026-11-06
 
 **stick-key is now StickyBot.** After updating, macOS asks once more for Bluetooth (and

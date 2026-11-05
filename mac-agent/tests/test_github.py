@@ -34,6 +34,16 @@ def pr(data, number):
     return next(n for n in data["mine"]["nodes"] if n and n["number"] == number)
 
 
+async def test_merge_feeds_the_pet_and_the_faces(gh, agent):
+    await gh.poll()
+    merged = agent.pet.s["merged"]
+    pr(gh.data, 5507).update(merged=True, state="MERGED")
+    await gh.poll()
+    assert agent.pet.s["merged"] == merged + 1
+    worlds = [m["world"] for m in agent.link.sent if "world" in m]
+    assert worlds and worlds[-1]["merged"] == merged + 1
+
+
 async def test_first_look_only_seeds(gh, agent):
     await gh.poll()
     assert fired(agent) == []

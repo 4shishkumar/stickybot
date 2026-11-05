@@ -7,7 +7,23 @@ import os
 import time
 import uuid
 
-from . import brain, brains, clips, commands, config, events, feed, github, home, link, stt, updates, weather, wispr_mic
+from . import (
+    brain,
+    brains,
+    clips,
+    commands,
+    config,
+    events,
+    feed,
+    github,
+    home,
+    link,
+    pet,
+    stt,
+    updates,
+    weather,
+    wispr_mic,
+)
 from . import stick_mic_device as mic_device
 from .adpcm import Recording
 from .speech import Sentences, Speaker
@@ -105,6 +121,9 @@ class Agent:
         self.feed = feed.Feed()
         self.notifier = events.Events(self)  # (self.events is the dashboard feed)
         self.github = github.GitHub(self)
+        # the faces' pet progress (pet.py); a new one starts with the PRs the watcher saw merged
+        self.pet = pet.Pet(initial_merged=sum(1 for p in ((self.github.state or {}).get("prs") or {}).values()
+                                              if p.get("merged")))
         self.updates = updates.Updates(self)  # newer releases / firmware (dashboard, menu bar, stick)
         self.home = home.Home()
         self.link_state = "starting"
@@ -396,13 +415,29 @@ class Agent:
         card["b"] = stick_text(card.get("b", ""))[:140]
         return card
 
+    def world(self):
+        """The faces' data (pet.py): PR counts, CI, Claude sessions, what waits, the pet."""
+        try:
+            return pet.world(self)
+        except Exception as e:  # noqa: BLE001 — never break the hello for it
+            log.warning("world: %s", e)
+            return {}
+
+    async def push_world(self, only_changed=False):
+        """The world now (a PR merged, Claude finished...), not with the next hello."""
+        w = self.world()
+        if only_changed and w == getattr(self, "_world_sent", None):
+            return False
+        self._world_sent = w
+        return await self.link.send({"src": "agent", "world": w})
+
     async def push_home(self):
         """The home card now, not with the next hello (up to 8 s later)."""
         return await self.link.send({"src": "agent", "home": self.home_card()})
 
     def _hello_extra(self):
         # wready: we answer the stick's "prepare" with "ready" (it holds the key until then)
-        extra = {"home": self.home_card(), "wmic": self.wispr.ready, "wready": True}
+        extra = {"home": self.home_card(), "wmic": self.wispr.ready, "wready": True, "world": self.world()}
         if self.weather.now:
             extra["wx"] = {**self.weather.now, "at": stick_text(self.weather.now.get("at", ""))}
         return extra
@@ -732,7 +767,10 @@ class Agent:
     # --- events -----------------------------------------------------------------
 
     async def claude_finished(self, elapsed_s, cwd, prompt):
-        """From the Claude Code Stop hook: "Claude finished in <project>" for long tasks."""
+        """From the Claude Code Stop hook: "Claude finished in <project>" for long tasks.
+        Every finished task feeds the pet (its fish leaps out in the Aquarium)."""
+        self.pet.claude_done()
+        await self.push_world()
         if elapsed_s < int(self.cfg.get("claude_done_min_s") or 0):
             return None
         project = os.path.basename(cwd.rstrip("/")) or "a session"

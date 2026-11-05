@@ -130,6 +130,7 @@ class GitHub:
                     await ev("pr_created", f"PR #{pr['number']} opened", f"{where} - {title}")
                 continue
             if pr["merged"] and not was["merged"]:
+                self.agent.pet.merged()
                 await ev("pr_merged", f"PR #{pr['number']} merged!", f"{where} - {title}")
             if pr["decision"] != was["decision"]:
                 if pr["decision"] == "APPROVED":
@@ -137,6 +138,8 @@ class GitHub:
                 elif pr["decision"] == "CHANGES_REQUESTED":
                     await ev("changes_requested", "Changes requested", f"{where} - {title}")
             if pr["ci"] != was["ci"]:
+                if pr["ci"] == "SUCCESS":  # a green build (the pet's sunglasses come at 10)
+                    self.agent.pet.green()
                 if pr["ci"] in ("FAILURE", "ERROR"):
                     await ev("ci_failed", "CI failed", f"{where} - {title}")
                 elif pr["ci"] == "SUCCESS" and was["ci"] in ("FAILURE", "ERROR"):
@@ -149,6 +152,7 @@ class GitHub:
                 await ev("review_requested", "Review requested",
                          f"{_short(a['repo'], primary)} #{a['number']} - {a['title'][:60]}")
         if new["release"] and old.get("release") and new["release"] != old["release"]:
+            self.agent.pet.release()
             await ev("release", f"Release {new['release']}"[:40], _short(primary, primary))
 
     async def poll(self):
@@ -175,6 +179,8 @@ class GitHub:
         new["seen_at"] = time.time()
         self.state = new
         STATE.write_text(json.dumps(new))
+        if old is not None:
+            await self.agent.push_world(only_changed=True)  # CI, reviews and merges for the faces
         self.last_ok, self.last_error = time.time(), ""
 
     async def run(self):

@@ -262,6 +262,15 @@ select { padding-right: 26px; }
 .slots { display: flex; gap: 8px; flex-wrap: wrap; }
 .slot { border: 1px solid var(--line); border-radius: var(--radius-s); padding: 8px 12px; display: flex; flex-direction: column; gap: 2px; min-width: 120px; }
 .slot.on { border-color: var(--agent); background: var(--agent-soft); }
+/* Stick page: the Home face picker (firmware 2.1.0+) */
+.faces { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.face { border: 1px solid var(--line); border-radius: var(--radius-s); padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+.face.on { border-color: var(--agent); background: var(--agent-soft); }
+.face .shots { display: flex; gap: 6px; align-items: flex-end; }
+.face img { border-radius: 6px; background: #111316; }
+.face img.tall { width: 68px; height: 120px; }
+.face img.wide { width: 108px; height: 61px; }
+.pet-facts { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
 .progress { height: 8px; border-radius: 99px; background: var(--raised); overflow: hidden; border: 1px solid var(--line); }
 .progress > i { display: block; height: 100%; width: 0; background: var(--agent); border-radius: 99px; transition: width .3s; }
 .progress.err > i { background: var(--err); }

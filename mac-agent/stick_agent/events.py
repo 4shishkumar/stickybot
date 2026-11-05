@@ -85,7 +85,8 @@ class Events:
         self._n += 1
         quiet = quiet_now(cfg)
         ev = {"id": f"e{self._n}", "level": level, "title": stick_text(title)[:40], "sub": stick_text(sub)[:90],
-              "icon": icon or KINDS.get(kind, (None, "bell"))[1], "sound": "off" if quiet else sound}
+              "icon": icon or KINDS.get(kind, (None, "bell"))[1], "sound": "off" if quiet else sound,
+              "kind": kind}  # the stick's faces react to it (firmware 2.1.0+; older ones ignore it)
         sent = await self.agent.link.send({"src": "agent", "event": ev})
         entry = {"t": time.time(), "kind": kind, **ev, "sent": sent, "quiet": quiet}
         try:

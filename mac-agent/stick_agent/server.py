@@ -238,6 +238,10 @@ def make_app(agent):
                                          str(body.get("prompt", "")))
         return web.json_response({"ok": True, "shown": bool(ev)})
 
+    async def pet_status(_):
+        """The faces' pet (level, streak, city...) and the world the stick gets."""
+        return web.json_response({"pet": agent.pet.summary(), "world": agent.world()})
+
     # --- the stick tools (MCP) for Claude sessions --------------------------------------
 
     async def mcp_status(_):
@@ -317,6 +321,7 @@ def make_app(agent):
         web.post("/api/sounds/play", play_sound),
         web.post("/api/events/test", event_test), web.get("/api/events/history", event_history),
         web.get("/api/events/kinds", event_kinds), web.post("/api/claude-event", claude_event),
+        web.get("/api/pet", pet_status),
         web.get("/api/clips", clip_list), web.post("/api/clips/play", clip_play),
         web.get("/api/voices", voices), web.post("/api/voice/test", test_voice),
         web.post("/api/wireless-mic/show", show_mic),

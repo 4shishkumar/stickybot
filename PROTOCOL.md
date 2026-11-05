@@ -89,6 +89,7 @@ and can be ignored.
 | `wmic` | `on=0\|1` | StickS3: the wireless Wispr mic switch (see section 5) |
 | `autorotate` | `on=0\|1` | StickS3: turn the screen with the motion sensor (state: `autoRotate`) |
 | `landscape` | `on=0\|1` | StickS3 1.9.0+: with auto-rotate, landscape screens when held sideways (state: `landscape`) |
+| `face` | `id=<face>` or `demo=<face\|all>` | StickS3 2.1.0+: the Home face (saved; state: `face`, and `faces`: `[{"id","title","about"}]`), or play a face's demo on the stick (A or B ends it) |
 
 Responses that end in a restart include `"restarting":true`.
 
@@ -286,6 +287,37 @@ session's `progress()` / `pin_home()` changes it (at most every 0.5 s); boards s
 - `sound`: any event, tune or clip name the board knows (see Sounds); empty = the level's default; nothing plays if sounds are off.
 - Up to 5 are queued and shown one at a time. They wait while an approval prompt, pairing, the menu, dictation (A held) or talking (B held) is on.
 - Serial test: `event celebrate|nice|headsup <title>|<sub>|<icon>`; the `screens` demo shows all three.
+- `kind` (agent with faces, optional): the event's kind (`pr_merged`, `ci_failed`, `ci_fixed`, `claude_done`,
+  `release`, `review_requested`, ...). Firmware 2.1.0+ lets the Home face react to it as well (once the event
+  screen is gone); older firmware ignores it.
+
+**Faces** (StickS3 2.1.0+; the Home screen's looks, picked with `@face id=…`):
+
+| Direction | Message |
+|---|---|
+| Mac → board | `{"src":"agent","world":{…}}` when something in it changes, and `"world":{…}` in every hello |
+
+```json
+"world": {
+  "mergedToday": 2, "merged": 41, "ci": "green", "asks": 0, "reviews": 1,
+  "claude": [{"p": "web", "s": 1500, "id": 4711}],
+  "pet": {"xp": 420, "streak": 6, "acc": 3, "seed": 20261106, "greens": 14, "towers": [9, 21]}
+}
+```
+
+- `merged` / `mergedToday`: PRs merged in all (one building each in StickyWorld) / today.
+- `ci`: `green` | `red` | `none`, over your open PRs (red if any failed).
+- `asks`: approvals and questions waiting; `reviews`: review requests waiting for you.
+- `claude`: Claude Code sessions working right now (a prompt sent, its Stop not yet; at most 6):
+  project (≤12 characters), seconds running, a stable 16-bit id. A session gone from the list = finished.
+- `pet`: StickyBot's progress, kept by the agent (`~/.stick-agent/pet.json`; it sees every event and survives
+  reflashing the stick). `xp` (the stick works out the level: level n → n+1 needs 10 + 10·n XP), `streak` (days in a
+  row with a merged PR or a finished Claude task), `acc` (bits: 1 hat = 5-day best streak, 2 sunglasses = 10 green
+  builds, 4 crown = 100 PRs), `seed` (the city's look), `greens` (green builds), `towers` (≤8: a release tower stands
+  after that many buildings). XP: merged PR +10, CI green +3, Claude task +2, release +25.
+- Usually 150–300 bytes; split into ≤180-byte writes like every message. The board keeps the last one (without the
+  sessions) in NVS, so the faces draw before the agent connects. It compares each new one with the last to react
+  (a PR merged → StickyBot eats a snack, a session gone → its fish leaps out); the first one after a restart isn't news.
 
 ### Firmware update over Bluetooth (StickS3 1.8.0+)
 
