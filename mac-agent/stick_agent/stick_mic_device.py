@@ -7,23 +7,39 @@ after the key-up: with "stick-mic-bluetooth" ranked first, Wispr hears the stick
 while A is held and the user's usual mic the rest of the time. Nothing is
 pinned and nothing forwards the real mic.
 
-The device is a public (non-private) CoreAudio *aggregate* wrapping the
-BlackHole 2ch driver (its only sub-device): whatever wispr_mic.py plays into
-BlackHole's output is that aggregate's input. Any process may create and
-destroy aggregates without admin rights; macOS lists them like a physical mic
-("stick-mic-bluetooth (Aggregate)" in Wispr's list).
+The device is a public (non-private) CoreAudio *aggregate*; what carries the
+stick's audio into its input is one of two "carriers":
 
-An aggregate outlives the process that created it, so every start, disconnect
-and shutdown path destroys the ones with our UID (cleanup_stale()).
+- "tap" (macOS 14.2+, no driver): a Core Audio *process tap* of the agent's own
+  audio output, in the aggregate's tap list, with the default output device as
+  its (clock) sub-device. wispr_mic.py plays the stick into the default output;
+  the tap mutes all of this process's sound and hands it to the aggregate's
+  input instead. Needs the "System Audio Recording" permission: until it's
+  granted a tap is silent AND doesn't mute, so the stick would play out of the
+  speakers. So the tap is only used after probe() proved it works (an inaudible
+  -80 dBFS tone through a test-named device), and wispr_mic.py only lets audio
+  out while our tap exists (`tap_live`).
+- "blackhole": the BlackHole 2ch driver as the only sub-device; wispr_mic.py
+  plays into BlackHole's output, which is the aggregate's input.
 
-`CoreAudioDevices` is the real backend (ctypes on CoreAudio + CoreFoundation;
-no Swift / Xcode needed); tests pass a fake with the same methods.
+Any process may create and destroy aggregates and taps without admin rights;
+macOS lists the aggregate like a physical mic ("stick-mic-bluetooth (Aggregate)").
+
+Aggregates and public taps both outlive the process that created them, so every
+start, disconnect and shutdown path destroys the aggregates with our UID and the
+taps with our tap name (cleanup_stale()).
+
+`CoreAudioDevices` is the real backend (ctypes on CoreAudio + CoreFoundation + the
+Objective-C runtime for CATapDescription; no Swift / Xcode / pyobjc needed); tests
+pass a fake with the same methods.
 """
 import asyncio
 import concurrent.futures
 import ctypes
 import logging
+import math
 import os
+import platform
 import struct
 import threading
 import time
@@ -53,6 +69,47 @@ def name_for(stick_name):
     return f"{s}-mic-bluetooth" if s else NAME
 UID = "com.stickkey.wireless-mic"
 CARRIER = "BlackHole 2ch"  # the driver underneath; Wispr never needs to be set to it
+TAP, BLACKHOLE = "tap", "blackhole"  # the carriers (module docstring)
+CARRIER_TITLES = {TAP: "Apple audio tap", BLACKHOLE: "BlackHole 2ch"}
+CARRIER_PREFS = ("auto", TAP, BLACKHOLE)  # config wireless_mic_carrier
+TAP_SUFFIX = ".tap"            # a tap's name = the aggregate's UID + this (how stale ones are found)
+CHECK_SUFFIX = ".check"        # the probe's device: UID + this, name + "-check" (never the real one)
+TAP_MIN_MACOS = (14, 2)
+PERMISSION_HINT = ("allow System Audio Recording for the helper app (it shows as “Python”): System Settings → "
+                   "Privacy & Security → Screen & System Audio Recording → System Audio Recording Only")
+
+
+def macos_version():
+    v = platform.mac_ver()[0]
+    out = [int(p) if p.isdigit() else 0 for p in (v or "").split(".")]
+    return tuple(out + [0, 0])[:2] if v else None
+
+
+def macos_supports_tap():
+    """macOS 14.2+ (Core Audio process taps)."""
+    v = macos_version()
+    return bool(v) and v >= TAP_MIN_MACOS
+
+
+def pick_carrier(pref, tap_supported, tap_state, blackhole):
+    """-> (carrier or None, why not). pref: config wireless_mic_carrier ("auto" | "tap" | "blackhole");
+    tap_state: the probe's result ("ok" | "failed" | "error" | "checking" | None = not run yet);
+    blackhole: BlackHole 2ch is installed."""
+    pref = pref if pref in CARRIER_PREFS else "auto"
+    no_bh = "BlackHole 2ch isn't installed — run: brew install --cask blackhole-2ch"
+    if pref == BLACKHOLE:
+        return (BLACKHOLE, "") if blackhole else (None, no_bh)
+    if tap_supported and tap_state == "ok":
+        return TAP, ""
+    if pref == TAP or (tap_supported and not blackhole):
+        if not tap_supported:
+            return None, f"the Apple audio tap needs macOS {'.'.join(map(str, TAP_MIN_MACOS))} or newer"
+        if tap_state in (None, "checking"):
+            return None, "checking the Apple audio tap…"
+        if tap_state == "failed":
+            return None, f"the Apple audio tap isn't allowed yet — {PERMISSION_HINT}, then press Check again"
+        return None, "the Apple audio tap doesn't work on this Mac — use BlackHole 2ch instead"
+    return (BLACKHOLE, "") if blackhole else (None, no_bh)
 
 
 class Unavailable(Exception):
@@ -75,6 +132,68 @@ CF_SINT32 = 3              # kCFNumberSInt32Type
 # kAudioAggregateDevice*Key / kAudioSubDeviceUIDKey (AudioHardware.h)
 K_NAME, K_UID, K_PRIVATE, K_STACKED, K_MAIN, K_SUBS, K_SUB_UID = (
     "name", "uid", "private", "stacked", "master", "subdevices", "uid")
+# kAudioAggregateDeviceTapListKey / TapAutoStartKey, kAudioSubTapUIDKey / DriftCompensationKey
+K_TAPS, K_TAP_AUTOSTART, K_TAP_UID, K_DRIFT = "taps", "tapautostart", "uid", "drift"
+CA_TAP_MUTED = 1  # CATapMuteBehavior: CATapUnmuted 0, CATapMuted 1, CATapMutedWhenTapped 2 (CATapDescription.h)
+
+
+class _AudioBuffer(ctypes.Structure):
+    _fields_ = [("channels", ctypes.c_uint32), ("size", ctypes.c_uint32), ("data", ctypes.c_void_p)]
+
+
+class _BufferList(ctypes.Structure):
+    _fields_ = [("n", ctypes.c_uint32), ("bufs", _AudioBuffer * 16)]  # mNumberBuffers is the real length
+
+
+# AudioDeviceIOProc (AudioHardware.h)
+_IOPROC = ctypes.CFUNCTYPE(ctypes.c_int32, ctypes.c_uint32, ctypes.c_void_p, ctypes.POINTER(_BufferList),
+                           ctypes.c_void_p, ctypes.POINTER(_BufferList), ctypes.c_void_p, ctypes.c_void_p)
+
+
+class _ObjC:
+    """The few Objective-C messages a CATapDescription needs, through the runtime's C API.
+    Every message is checked with respondsToSelector: first: an unknown selector would raise an
+    Objective-C exception, which ctypes can't catch and which aborts the whole process."""
+
+    def __init__(self):
+        try:
+            self.lib = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
+            ctypes.CDLL("/System/Library/Frameworks/Foundation.framework/Foundation")  # NSNumber, NSArray
+        except OSError as e:
+            raise Unavailable(f"the Objective-C runtime isn't available: {e}") from e
+        vp = ctypes.c_void_p
+        self.lib.objc_getClass.restype = vp
+        self.lib.objc_getClass.argtypes = [ctypes.c_char_p]
+        self.lib.sel_registerName.restype = vp
+        self.lib.sel_registerName.argtypes = [ctypes.c_char_p]
+        self._msg = ctypes.cast(self.lib.objc_msgSend, vp).value
+        self._protos = {}
+
+    def cls(self, name):
+        c = self.lib.objc_getClass(name.encode())
+        if not c:
+            raise Unavailable(f"{name} isn't available on this Mac")
+        return c
+
+    def _fn(self, restype, argtypes):
+        key = (restype, tuple(argtypes))
+        if key not in self._protos:
+            self._protos[key] = ctypes.CFUNCTYPE(restype, ctypes.c_void_p, ctypes.c_void_p, *argtypes)(self._msg)
+        return self._protos[key]
+
+    def responds(self, obj, sel):
+        return bool(self._fn(ctypes.c_bool, [ctypes.c_void_p])(obj, self.lib.sel_registerName(b"respondsToSelector:"),
+                                                               self.lib.sel_registerName(sel.encode())))
+
+    def send(self, restype, obj, sel, *args):
+        """objc_msgSend(obj, sel, *values) with args as (ctype, value) pairs. Raises Unavailable instead
+        of sending a message the object doesn't understand."""
+        if not obj:
+            raise Unavailable(f"no object for {sel}")
+        if not self.responds(obj, sel):
+            raise Unavailable(f"this macOS doesn't understand {sel}")
+        return self._fn(restype, [t for t, _v in args])(obj, self.lib.sel_registerName(sel.encode()),
+                                                        *[v for _t, v in args])
 
 
 class CoreAudioDevices:
@@ -195,13 +314,22 @@ class CoreAudioDevices:
             self.cf.CFRelease(x)
         return d
 
-    def create_aggregate(self, name, uid, sub_uid):
-        """-> (OSStatus, new device id). A public aggregate with one sub-device, `sub_uid`."""
-        sub = self._dict([(K_SUB_UID, self._str(sub_uid))])
-        subs = self.cf.CFArrayCreate(None, (ctypes.c_void_p * 1)(sub), 1, self._array_values)
-        self.cf.CFRelease(sub)
-        desc = self._dict([(K_NAME, self._str(name)), (K_UID, self._str(uid)), (K_PRIVATE, self._num(0)),
-                           (K_STACKED, self._num(0)), (K_MAIN, self._str(sub_uid)), (K_SUBS, subs)])
+    def _array(self, items):
+        arr = self.cf.CFArrayCreate(None, (ctypes.c_void_p * len(items))(*items), len(items), self._array_values)
+        for x in items:
+            self.cf.CFRelease(x)
+        return arr
+
+    def create_aggregate(self, name, uid, sub_uid, tap_uid=None):
+        """-> (OSStatus, new device id). A public aggregate with one sub-device, `sub_uid`, and with
+        `tap_uid` the process tap whose audio is its input (drift-compensated, started with the device)."""
+        subs = self._array([self._dict([(K_SUB_UID, self._str(sub_uid))])])
+        pairs = [(K_NAME, self._str(name)), (K_UID, self._str(uid)), (K_PRIVATE, self._num(0)),
+                 (K_STACKED, self._num(0)), (K_MAIN, self._str(sub_uid)), (K_SUBS, subs)]
+        if tap_uid:
+            taps = self._array([self._dict([(K_TAP_UID, self._str(tap_uid)), (K_DRIFT, self._num(1))])])
+            pairs += [(K_TAPS, taps), (K_TAP_AUTOSTART, self._num(1))]
+        desc = self._dict(pairs)
         dev = ctypes.c_uint32(0)
         try:
             err = self.ca.AudioHardwareCreateAggregateDevice(desc, ctypes.byref(dev))
@@ -212,24 +340,187 @@ class CoreAudioDevices:
     def destroy_aggregate(self, dev):
         return self.ca.AudioHardwareDestroyAggregateDevice(dev)
 
+    # --- process taps (macOS 14.2+) -----------------------------------------------------
+
+    def _tap_api(self):
+        if not hasattr(self, "_objc"):
+            if not hasattr(self.ca, "AudioHardwareCreateProcessTap"):
+                raise Unavailable("this macOS has no process taps (14.2+)")
+            self.ca.AudioHardwareCreateProcessTap.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+            self.ca.AudioHardwareCreateProcessTap.restype = ctypes.c_int32
+            self.ca.AudioHardwareDestroyProcessTap.argtypes = [ctypes.c_uint32]
+            self.ca.AudioHardwareDestroyProcessTap.restype = ctypes.c_int32
+            self._objc = _ObjC()
+        return self._objc
+
+    def process_object(self, pid):
+        """The CoreAudio process object of `pid` (kAudioHardwarePropertyTranslatePIDToProcessObject), or 0."""
+        a = _Addr(_fcc("id2p"), GLOBAL, 0)
+        q = ctypes.c_int32(pid)
+        v = ctypes.c_uint32(0)
+        n = ctypes.c_uint32(4)
+        if self.ca.AudioObjectGetPropertyData(SYSTEM, ctypes.byref(a), 4, ctypes.byref(q), ctypes.byref(n),
+                                              ctypes.byref(v)):
+            return 0
+        return v.value
+
+    def default_output_uid(self):
+        """The UID of the default output device (kAudioHardwarePropertyDefaultOutputDevice), or ""."""
+        dev = self._u32(SYSTEM, "dOut")
+        return self._string(dev, "uid ") if dev else ""
+
+    def create_tap(self, name, process):
+        """-> (OSStatus, tap id, tap UUID string). A public, muting, stereo-mixdown tap of one process.
+        (A private tap gives a public aggregate no input channels.)"""
+        oc = self._tap_api()
+        # alloc/init (not the autoreleasing class methods): this runs on a worker thread without a pool
+        new = lambda cls: oc.send(ctypes.c_void_p, oc.cls(cls), "alloc")  # noqa: E731
+        num = oc.send(ctypes.c_void_p, new("NSNumber"), "initWithUnsignedInt:", (ctypes.c_uint32, process))
+        try:
+            arr = oc.send(ctypes.c_void_p, new("NSArray"), "initWithObjects:count:",
+                          (ctypes.POINTER(ctypes.c_void_p), (ctypes.c_void_p * 1)(num)), (ctypes.c_ulong, 1))
+        finally:
+            oc.send(None, num, "release")
+        try:
+            desc = oc.send(ctypes.c_void_p, new("CATapDescription"), "initStereoMixdownOfProcesses:",
+                           (ctypes.c_void_p, arr))
+        finally:
+            oc.send(None, arr, "release")
+        if not desc:
+            raise Unavailable("CATapDescription didn't initialise")
+        try:
+            oc.send(None, desc, "setMuteBehavior:", (ctypes.c_long, CA_TAP_MUTED))
+            oc.send(None, desc, "setPrivate:", (ctypes.c_bool, False))
+            cfname = self._str(name)
+            try:
+                oc.send(None, desc, "setName:", (ctypes.c_void_p, cfname))  # CFString is toll-free an NSString
+            finally:
+                self.cf.CFRelease(cfname)
+            uuid = oc.send(ctypes.c_void_p, oc.send(ctypes.c_void_p, desc, "UUID"), "UUIDString")
+            out = ctypes.create_string_buffer(64)
+            self.cf.CFStringGetCString(uuid, out, 64, UTF8)
+            tap = ctypes.c_uint32(0)
+            err = self.ca.AudioHardwareCreateProcessTap(desc, ctypes.byref(tap))
+            return err, tap.value, out.value.decode()
+        finally:
+            oc.send(None, desc, "release")
+
+    def destroy_tap(self, tap):
+        self._tap_api()
+        return self.ca.AudioHardwareDestroyProcessTap(tap)
+
+    def taps(self):
+        """[(id, uuid, name)] for every process tap on this Mac (any process's public ones)."""
+        ids = self._get(SYSTEM, "tps#")
+        return [(t, self._string(t, "tuid"), self._string(t, "lnam")) for t in self._u32s(ids)]
+
+    def measure_input(self, dev, secs, amp, freq=440.0, enough_ms=60):
+        """Runs `dev` for up to `secs`: plays a sine of `amp` into its output (from this process) and
+        measures what its input receives. Stops early once `enough_ms` of the tone have arrived.
+        -> {"callbacks", "rms", "first_ms", "ms"}: rms of the input after the first signal (0 = silence)."""
+        rate_b = self._get(dev, "nsrt")
+        rate = struct.unpack("d", rate_b[:8])[0] if rate_b and len(rate_b) >= 8 else 48000.0
+        st = {"callbacks": 0, "sq": 0.0, "n": 0, "first": None, "phase": 0.0, "heard": 0}
+        done = threading.Event()
+        step = 2 * math.pi * freq / rate
+        t0 = time.monotonic()
+        threshold = amp * 0.2
+
+        def cb(_dev, _now, inp, _it, out, _ot, _cd):
+            try:
+                st["callbacks"] += 1
+                frames = 0
+                if out:
+                    ol = out.contents
+                    for i in range(min(ol.n, 16)):
+                        b = ol.bufs[i]
+                        ch = max(1, b.channels)
+                        frames = b.size // 4 // ch
+                        if not b.data or not frames:
+                            continue
+                        arr = (ctypes.c_float * (frames * ch)).from_address(b.data)
+                        ph = st["phase"]
+                        for f in range(frames):
+                            s = amp * math.sin(ph + f * step)
+                            for k in range(ch):
+                                arr[f * ch + k] = s
+                    st["phase"] = (st["phase"] + frames * step) % (2 * math.pi)
+                if inp:
+                    il = inp.contents
+                    for i in range(min(il.n, 16)):
+                        b = il.bufs[i]
+                        count = b.size // 4
+                        if not b.data or not count:
+                            continue
+                        arr = (ctypes.c_float * count).from_address(b.data)
+                        sq = sum(x * x for x in arr)
+                        if st["first"] is None and max(abs(x) for x in arr) > threshold:
+                            st["first"] = time.monotonic() - t0
+                        if st["first"] is not None:
+                            st["sq"] += sq
+                            st["n"] += count
+                            st["heard"] += count / max(1, b.channels)
+                    if st["heard"] >= rate * enough_ms / 1000:
+                        done.set()
+            except Exception:  # noqa: BLE001 — never raise into the HAL's IO thread
+                pass
+            return 0
+
+        proc = _IOPROC(cb)
+        pid = ctypes.c_void_p(0)
+        ca = self.ca
+        ca.AudioDeviceCreateIOProcID.argtypes = [ctypes.c_uint32, _IOPROC, ctypes.c_void_p,
+                                                 ctypes.POINTER(ctypes.c_void_p)]
+        ca.AudioDeviceStart.argtypes = ca.AudioDeviceStop.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+        ca.AudioDeviceDestroyIOProcID.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+        for f in (ca.AudioDeviceCreateIOProcID, ca.AudioDeviceStart, ca.AudioDeviceStop, ca.AudioDeviceDestroyIOProcID):
+            f.restype = ctypes.c_int32
+        err = ca.AudioDeviceCreateIOProcID(dev, proc, None, ctypes.byref(pid))
+        if err:
+            raise Unavailable(f"can't run the check device (CoreAudio error {err})")
+        try:
+            err = ca.AudioDeviceStart(dev, pid)
+            if err:
+                raise Unavailable(f"can't start the check device (CoreAudio error {err})")
+            done.wait(secs)
+            ca.AudioDeviceStop(dev, pid)
+        finally:
+            ca.AudioDeviceDestroyIOProcID(dev, pid)
+        return {"callbacks": st["callbacks"], "rms": math.sqrt(st["sq"] / st["n"]) if st["n"] else 0.0,
+                "first_ms": None if st["first"] is None else round(st["first"] * 1000, 1),
+                "ms": round((time.monotonic() - t0) * 1000, 1)}
+
+
+PROBE_S = 1.5        # the tap check: at most this long for the tone to come through
+PROBE_AMP = 1e-4     # -80 dBFS: inaudible even if the tap doesn't mute it
+
 
 class StickMicDevice:
     """Creates / removes the aggregate. Thread-safe (one lock); every call is a few
     CoreAudio calls, timed and logged. `backend`: a CoreAudioDevices-like object, or a
-    factory for one (made on first use, so creating this never touches CoreAudio)."""
+    factory for one (made on first use, so creating this never touches CoreAudio).
+    `mode`: the carrier, TAP or BLACKHOLE (the agent sets it, see pick_carrier())."""
 
-    def __init__(self, backend=None, name=NAME, uid=UID, carrier=CARRIER, own_pid=None):
+    def __init__(self, backend=None, name=NAME, uid=UID, carrier=CARRIER, own_pid=None, mode=BLACKHOLE):
         is_factory = backend is None or isinstance(backend, type) or not hasattr(backend, "devices")
         self._factory = (backend or CoreAudioDevices) if is_factory else None
         self._backend = None if is_factory else backend
         self.name, self.uid, self.carrier = name, uid, carrier
+        self.mode = mode
         self.own_pid = os.getpid() if own_pid is None else own_pid
         self.dev = None           # its CoreAudio id while it exists
-        self.carrier_dev = None   # BlackHole's id
-        self.baseline = set()     # processes already reading BlackHole itself when we made the device
+        self.carrier_dev = None   # its sub-device's id (BlackHole, or the output device in tap mode)
+        self.tap = None           # our process tap's id while it exists (tap mode)
+        self.dev_mode = None      # the carrier the device was made with
+        self.baseline = set()     # processes already reading the sub-device itself when we made the device
         self.error = ""
         self.create_ms = self.destroy_ms = None  # the last ones
+        self.check = {"state": None, "detail": "", "at": None}  # the last probe() (tap mode)
         self._lock = threading.Lock()
+
+    @property
+    def tap_name(self):
+        return self.uid + TAP_SUFFIX
 
     def _ca(self):
         if self._backend is None:
@@ -245,6 +536,12 @@ class StickMicDevice:
     def present(self):
         return self.dev is not None
 
+    @property
+    def tap_live(self):
+        """Our tap exists (so this process's sound is muted and goes to the device): the only time
+        wispr_mic.py lets the stick's audio out in tap mode."""
+        return self.mode == TAP and self.tap is not None and self.dev is not None
+
     def ensure_present(self):
         """The device exists: -> "created" (just now), "present" (it already was) or "" (it can't be)."""
         with self._lock:
@@ -252,11 +549,16 @@ class StickMicDevice:
                 ca = self._ca()
                 devices = ca.devices()
                 ours = [(d, name) for d, name, uid in devices if uid == self.uid]
-                if ours and all(name == self.name for _d, name in ours):
+                # (a BlackHole one left by an earlier run is fine to reuse; a tapped one needs our own tap)
+                same = (self.dev_mode in (None, BLACKHOLE) if self.mode == BLACKHOLE
+                        else self.dev_mode == TAP and self.tap is not None)
+                if ours and same and all(name == self.name for _d, name in ours):
                     self.dev = ours[0][0]
                     return "present"
-                if ours:  # renamed in the settings: make it again under the new name
-                    self._remove_all("removed the old-named", [d for d, _n in ours], ca)
+                if ours:  # renamed in the settings, another carrier, or left by an earlier run: make it again
+                    self._remove_all("removed the old", [d for d, _n in ours], ca)
+                if self.mode == TAP:
+                    return self._create_tapped(ca, devices)
                 carrier = next(((d, uid) for d, name, uid in devices if name == self.carrier), None) or next(
                     ((d, uid) for d, name, uid in devices if self.carrier.lower() in name.lower()), None)
                 if not carrier:
@@ -271,26 +573,88 @@ class StickMicDevice:
                     self.dev = None
                     self._set_error(f"can't create the {self.name} device (CoreAudio error {err})")
                     return ""
-                self.create_ms = round((time.monotonic() - t) * 1000, 1)
-                self.dev = dev
-                self._set_error("")
-                log.info("stick mic: %s created in %.1f ms (id %d, on %s)", self.name, self.create_ms, dev,
-                         self.carrier)
-                return "created"
+                return self._made(dev, t, self.carrier)
             except Exception as e:  # noqa: BLE001 — ctypes land: never take the agent down
                 self.dev = None
                 self._set_error(f"can't create the {self.name} device: {e}")
                 return ""
 
+    def _made(self, dev, t, what):
+        self.create_ms = round((time.monotonic() - t) * 1000, 1)
+        self.dev = dev
+        self.dev_mode = self.mode
+        self._set_error("")
+        log.info("stick mic: %s created in %.1f ms (id %d, on %s)", self.name, self.create_ms, dev, what)
+        return "created"
+
+    def _new_tap(self, ca, name):
+        """-> (tap id, uuid, output uid) or raises Unavailable."""
+        process = ca.process_object(self.own_pid)
+        if not process:
+            raise Unavailable("macOS has no audio process object for the agent")
+        out_uid = ca.default_output_uid()
+        if not out_uid:
+            raise Unavailable("there's no default output device")
+        err, tap, uuid = ca.create_tap(name, process)
+        if err or not tap:
+            raise Unavailable(f"can't create the audio tap (CoreAudio error {err})")
+        return tap, uuid, out_uid
+
+    def _create_tapped(self, ca, devices):
+        t = time.monotonic()
+        try:
+            tap, uuid, out_uid = self._new_tap(ca, self.tap_name)
+        except Unavailable as e:
+            self.dev = None
+            self._set_error(f"can't create the {self.name} device: {e}")
+            return ""
+        out = next((d for d, _n, uid in devices if uid == out_uid), None)
+        self.carrier_dev = out
+        self.baseline = self._readers(ca, out) if out is not None else set()
+        err, dev = ca.create_aggregate(self.name, self.uid, out_uid, tap_uid=uuid)
+        if err or not dev:
+            ca.destroy_tap(tap)
+            self.dev = None
+            self._set_error(f"can't create the {self.name} device (CoreAudio error {err})")
+            return ""
+        self.tap = tap
+        return self._made(dev, t, f"the Apple audio tap {tap}, clocked by {out_uid}")
+
     def remove(self):
-        """Destroys every device with our UID (ours and any left over). -> how many."""
+        """Destroys every device with our UID (ours and any left over), and our tap. -> how many devices."""
         with self._lock:
             return self._remove_all("removed")
 
     def cleanup_stale(self):
-        """remove() for start / disconnect / exit: a crashed agent leaves its device behind."""
+        """remove() for start / disconnect / exit: a crashed agent leaves its device and tap behind
+        (and an interrupted check its test device)."""
         with self._lock:
-            return self._remove_all("removed")
+            n = self._remove_all("removed")
+            self._remove_check_leftovers()
+            self._remove_taps(lambda name: name in (self.tap_name, self.uid + CHECK_SUFFIX + TAP_SUFFIX))
+            return n
+
+    def _remove_taps(self, match):
+        try:
+            ca = self._ca()
+            if not hasattr(ca, "taps"):
+                return
+            for t, _uuid, name in ca.taps():
+                if match(name):
+                    err = ca.destroy_tap(t)
+                    log.info("stick mic: removed a left-over audio tap %d (%s)%s", t, name,
+                             f": CoreAudio error {err}" if err else "")
+        except Exception as e:  # noqa: BLE001 — older macOS: no taps to list
+            log.debug("stick mic: can't list audio taps: %s", e)
+
+    def _remove_check_leftovers(self):
+        try:
+            ca = self._ca()
+            for d, _n, uid in ca.devices():
+                if uid == self.uid + CHECK_SUFFIX:
+                    ca.destroy_aggregate(d)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _remove_all(self, what, ours=None, ca=None):
         try:
@@ -313,6 +677,14 @@ class StickMicDevice:
             log.info("stick mic: %s %s%s in %.1f ms (id %d)", what, self.name,
                      "" if d == self.dev else " (left over)", ms, d)
         self.dev = None
+        if self.tap is not None:  # after the device: it lists the tap
+            try:
+                err = ca.destroy_tap(self.tap)
+                if err:
+                    log.warning("stick mic: can't remove the audio tap %d (CoreAudio error %d)", self.tap, err)
+            except Exception as e:  # noqa: BLE001
+                log.warning("stick mic: can't remove the audio tap: %s", e)
+            self.tap = None
         return n
 
     def _readers(self, ca, dev):
@@ -321,8 +693,8 @@ class StickMicDevice:
 
     def recording(self):
         """Someone (Wispr) is reading the device right now: True / False, or None when we can't
-        tell. macOS reports an aggregate's readers on its sub-device (BlackHole), so a process that
-        was already reading BlackHole before the device appeared makes it ambiguous."""
+        tell. macOS may report an aggregate's readers on its sub-device, so a process that was
+        already reading that one before the device appeared makes it ambiguous."""
         if self.dev is None:
             return False
         if self.baseline is None or self.baseline:
@@ -339,6 +711,57 @@ class StickMicDevice:
         except Exception:  # noqa: BLE001
             return None
         return bool(readers)
+
+    # --- is the tap allowed? ------------------------------------------------------------
+
+    def probe(self, secs=PROBE_S, amp=PROBE_AMP):
+        """Proves the tap path works before any stick audio goes through it: a test-named tap +
+        aggregate ("…-check", never the real name / UID), a -80 dBFS tone from this process into
+        it, and its input must hear the tone. Without the System Audio Recording permission (or
+        while macOS still asks) a tap hears silence — and doesn't mute either. The first call is
+        what makes macOS ask. -> self.check: {"state": "ok" | "failed" | "error", "detail", ...}."""
+        with self._lock:
+            t0 = time.monotonic()
+            res = {"state": "error", "detail": "", "at": time.time(), "create_ms": None, "first_ms": None,
+                   "level": None, "ms": None}
+            ca = tap = dev = None
+            try:
+                ca = self._ca()
+                if not hasattr(ca, "create_tap"):
+                    raise Unavailable("this backend has no process taps")
+                tap, uuid, out_uid = self._new_tap(ca, self.uid + CHECK_SUFFIX + TAP_SUFFIX)
+                err, dev = ca.create_aggregate(self.name + "-check", self.uid + CHECK_SUFFIX, out_uid, tap_uid=uuid)
+                if err or not dev:
+                    dev = None
+                    raise Unavailable(f"can't create the check device (CoreAudio error {err})")
+                res["create_ms"] = round((time.monotonic() - t0) * 1000, 1)
+                m = ca.measure_input(dev, secs, amp)
+                res["first_ms"], res["level"] = m.get("first_ms"), m.get("rms")
+                expected = amp / math.sqrt(2)
+                if m.get("first_ms") is not None and (m.get("rms") or 0) >= expected * 0.25:
+                    res["state"], res["detail"] = "ok", "the Apple audio tap works"
+                elif not m.get("callbacks"):
+                    res["detail"] = "the check device didn't run"
+                else:
+                    res["state"] = "failed"
+                    res["detail"] = f"the tap heard nothing — {PERMISSION_HINT}"
+            except Unavailable as e:
+                res["detail"] = str(e)
+            except Exception as e:  # noqa: BLE001 — ctypes land
+                res["detail"] = f"the tap check failed: {e}"
+            finally:
+                for what, fn, x in (("device", "destroy_aggregate", dev), ("tap", "destroy_tap", tap)):
+                    if x is not None and ca is not None:
+                        try:
+                            getattr(ca, fn)(x)
+                        except Exception as e:  # noqa: BLE001
+                            log.warning("stick mic: can't remove the check %s: %s", what, e)
+            res["ms"] = round((time.monotonic() - t0) * 1000, 1)
+            self.check = res
+            log.info("stick mic: tap check %s in %.0f ms (created in %s ms, tone after %s ms, level %s): %s",
+                     res["state"], res["ms"], res["create_ms"], res["first_ms"],
+                     None if res["level"] is None else f"{res['level']:.1e}", res["detail"])
+            return res
 
 
 # --- the hold flow ------------------------------------------------------------------------
@@ -357,8 +780,9 @@ class Holds:
     `send(msg)` is a coroutine (the Bluetooth link), `allowed()` -> "" or why not (stick on
     USB, not connected, off), `settings()` -> (lead ms, tail ms)."""
 
-    def __init__(self, device, send, allowed=None, settings=None, emit=None, clock=time.monotonic):
+    def __init__(self, device, send, allowed=None, settings=None, emit=None, clock=time.monotonic, removed=None):
         self.device = device
+        self._removed = removed or (lambda: None)  # called after the device was removed
         self._send = send
         self._allowed = allowed or (lambda: "")
         self._settings = settings or (lambda: (LEAD_MS, TAIL_MS))
@@ -372,6 +796,7 @@ class Holds:
         self._life = None        # the task that watches the device and removes it
         self.last = None         # timings of the last hold, for the dashboard
         self._cur = None
+        self.checking = False    # the tap check is running
 
     async def _run(self, fn):
         return await asyncio.get_running_loop().run_in_executor(self._pool, fn)
@@ -473,6 +898,7 @@ class Holds:
                 log.warning("stick mic: Wispr still reads it %.1f s after the tail: removing it anyway",
                             WAIT_READER_S)
             await self._run(self.device.remove)
+            self._removed()
             if cur and cur["_stop_at"] is not None:
                 cur["kept_ms"] = round((self.clock() - cur["_stop_at"]) * 1000)
                 log.info("stick mic: removed %d ms after the stream ended", cur["kept_ms"])
@@ -488,8 +914,24 @@ class Holds:
         self.keep_until = self.showing_until = 0.0
         if self._life and not self._life.done():
             self._life.cancel()
-        if await self._run(self.device.remove):
+        n = await self._run(self.device.remove)
+        self._removed()
+        if n:
             log.info("stick mic: removed now (%s)", why)
+            self._report()
+
+    async def check(self):
+        """The tap check (StickMicDevice.probe), in turn with the device calls; never during a hold
+        or while the device is there (the check mutes this process for its ~0.2-1.5 s).
+        -> the result, or None when it can't run now."""
+        if self.holding or self.device.present or self.clock() < self.keep_until:
+            return None
+        self.checking = True
+        self._report()
+        try:
+            return await self._run(self.device.probe)
+        finally:
+            self.checking = False
             self._report()
 
     def shutdown(self):
@@ -505,6 +947,7 @@ class Holds:
         return {"name": self.device.name, "present": self.device.present, "error": self.device.error,
                 "create_ms": self.device.create_ms, "destroy_ms": self.device.destroy_ms,
                 "showing_s": round(self.showing_until - now) if self.showing_until > now else 0,
-                "holding": self.holding, "last": self.last}
+                "holding": self.holding, "last": self.last, "carrier": self.device.mode,
+                "tap_live": self.device.tap_live, "check": {**self.device.check, "running": self.checking}}
 
 

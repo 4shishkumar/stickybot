@@ -2,13 +2,15 @@
 
 install.sh only puts the app in place and starts it; then it opens this page, which does
 the rest with buttons: the speech model, Claude Code (+ login), its hooks, the stick tools
-(MCP), GitHub alerts (gh login with a one-time code), BlackHole for the wireless Wispr mic
-(the Mac's own password dialog), and the stick (the existing setup wizard).
+(MCP), GitHub alerts (gh login with a one-time code), the wireless Wispr mic (macOS 14.2+:
+the Apple audio tap, one permission prompt; older macOS or by choice: BlackHole through the
+Mac's own password dialog), and the stick (the existing setup wizard).
 
   GET  /api/install                      {"steps": [...], "next", "pending", "skipped"}
   GET  /api/install/{step}               one step: {"id","title","kind","why","needs","state","detail","data","job"}
   POST /api/install/{step}/skip|unskip   -> the listing (skips are kept in config "install_skipped")
   POST /api/install/{step}/run           -> {"job"}  (model, claude, hooks, mcp, github, wispr)
+                                         wispr: {"carrier": "tap" | "blackhole"} (default: the Mac's best)
   POST /api/install/github/repo          {"repo": "owner/name", "alerts": true|false|null} -> {"ok", "github"}
   GET  /api/install/jobs/{job}           SSE: {"line"} / {"progress","stage",...} / {"code","url"} / {"done",...}
   POST /api/install/jobs/{job}/cancel    stops a running job (e.g. the gh login)
@@ -187,13 +189,45 @@ def check_github(_agent, login=None):
     return "done", f"watching {data['repo']}", data
 
 
+def _tap_info(agent):
+    """The agent's tap check as the page shows it: {"state", "detail", "carrier", "running"}."""
+    from . import stick_mic_device
+    dev = getattr(agent, "mic_dev", None)
+    check = dict(getattr(dev, "check", None) or {})
+    holds = getattr(agent, "holds", None)
+    wispr = getattr(agent, "wispr", None)
+    return {"state": "checking" if getattr(holds, "checking", False) else check.get("state"),
+            "detail": check.get("detail") or "", "carrier": getattr(wispr, "carrier", None),
+            "hint": stick_mic_device.PERMISSION_HINT}
+
+
 def check_wispr(agent):
+    from . import stick_mic_device
     bh = installer.blackhole_installed()
     version = installer.blackhole_version() if bh else None
-    on = bool(config.load().get("wireless_mic"))
+    cfg = config.load()
+    on = bool(cfg.get("wireless_mic"))
     mic = getattr(getattr(agent, "mic_dev", None), "name", None) or "<stick>-mic-bluetooth"
+    supported = stick_mic_device.macos_supports_tap()
+    pref = cfg.get("wireless_mic_carrier") or "auto"
     data = {"blackhole": bh, "version": version, "pinned": installer.BLACKHOLE_PIN["version"],
-            "on": on, "brew": bool(installer.brew_path()), "brew_cmd": installer.BLACKHOLE_CASK, "mic": mic}
+            "on": on, "brew": bool(installer.brew_path()), "brew_cmd": installer.BLACKHOLE_CASK, "mic": mic,
+            "tap_supported": supported, "pref": pref, "tap_mode": supported and pref != "blackhole",
+            "tap": _tap_info(agent), "tap_note": installer.TAP_NOTE}
+    if data["tap_mode"]:
+        data["needs"] = {"permission": "System Audio Recording (macOS asks once)"}
+        tap = data["tap"]
+        if not on:
+            return "todo", "no driver needed on this Mac — turn it on", data
+        if tap["carrier"] == "tap":
+            return "done", "on · carried by the Apple audio tap", data
+        if tap["state"] in (None, "checking"):
+            return "todo", "on · checking the Apple audio tap…", data
+        if tap["carrier"] == "blackhole":  # auto, and the tap isn't allowed: BlackHole carries it meanwhile
+            return "done", "on · carried by BlackHole 2ch (the Apple audio tap isn't allowed)", data
+        if tap["state"] == "failed":
+            return "todo", "on · allow System Audio Recording for the helper app", data
+        return "todo", f"on · the Apple audio tap doesn't work here ({tap['detail']}) — use BlackHole instead", data
     pin = installer.BLACKHOLE_PIN["version"]
     found = f"BlackHole {version} found" + ("" if version in (pin, None) else f" (tested with {pin})") if bh else ""
     if bh and on:
@@ -326,8 +360,20 @@ def redact_gh(e, code):
     return e
 
 
-def run_wispr(ui, _emit, _cancel):
-    installer.install_blackhole(ui)
+def run_wispr(ui, _emit, _cancel, carrier=None):
+    """carrier "tap": just on (the agent checks the tap afterwards); "blackhole": install BlackHole and
+    use it; None: what this Mac does best."""
+    from . import stick_mic_device
+    cfg = config.load()
+    if carrier == "blackhole" or (carrier is None and not installer.tap_wanted(cfg)):
+        installer.install_blackhole(ui)
+        if stick_mic_device.macos_supports_tap():
+            cfg = config.load()
+            cfg["wireless_mic_carrier"] = "blackhole"  # chose it over the tap
+            config.save(cfg)
+    elif carrier == "tap" and cfg.get("wireless_mic_carrier") == "blackhole":
+        cfg["wireless_mic_carrier"] = "auto"
+        config.save(cfg)
     installer.WirelessMic().install(ui)
 
 
@@ -360,7 +406,8 @@ def routes(agent):
             state, detail, data = await loop.run_in_executor(None, CHECKS[sid], agent)
         if state == "todo" and sid in skipped(agent.cfg):
             state = "skipped"
-        return {"id": sid, "title": s["title"], "kind": s["kind"], "why": s["why"], "needs": s.get("needs", {}),
+        needs = (data.pop("needs", None) if isinstance(data, dict) else None) or s.get("needs", {})
+        return {"id": sid, "title": s["title"], "kind": s["kind"], "why": s["why"], "needs": needs,
                 "skippable": sid in SKIPPABLE, "runnable": sid in RUNNABLE, "state": state, "detail": detail,
                 "data": data, "job": flow.current_job_id(sid)}
 
@@ -411,6 +458,13 @@ def routes(agent):
             return web.json_response({"error": f"{BY_ID[sid]['title']} has nothing to run"}, status=400)
         if flow.current_job_id(sid):
             return web.json_response({"error": "already running", "job": flow.current_job_id(sid)}, status=409)
+        try:
+            body = await request.json() if request.can_read_body else {}
+        except ValueError:
+            body = {}
+        carrier = (body or {}).get("carrier") if isinstance(body, dict) else None
+        if carrier not in (None, "tap", "blackhole"):
+            return web.json_response({"error": "carrier must be tap or blackhole"}, status=400)
         job = Job()
         flow.jobs[job.id] = job
         flow.running[sid] = job
@@ -435,7 +489,7 @@ def routes(agent):
                 elif sid == "github":
                     run_gh_login(ui, emit, stoppers, flow)
                 elif sid == "wispr":
-                    run_wispr(ui, emit, stoppers)
+                    run_wispr(ui, emit, stoppers, carrier)
                 return True, None
             except installer.NotAvailable as e:
                 return False, str(e)
@@ -448,7 +502,17 @@ def routes(agent):
             log.info("setup step %s: %s", sid, "ok" if ok else err)
             try:
                 if sid == "wispr":  # on even when BlackHole is still missing (like the Components card)
-                    agent.update_config({"wireless_mic": config.load().get("wireless_mic")})
+                    saved = config.load()
+                    agent.update_config({"wireless_mic": saved.get("wireless_mic"),
+                                         "wireless_mic_carrier": saved.get("wireless_mic_carrier", "auto")})
+                    if ok and getattr(agent, "_tap_wanted", lambda: False)():
+                        job.emit({"line": "checking the Apple audio tap (inaudible) — "
+                                          "if macOS asks about System Audio Recording, press Allow"})
+                        res = await agent.check_tap(force=True)
+                        if res and res["state"] == "ok":
+                            job.emit({"line": "the Apple audio tap works ✓"})
+                        elif res:
+                            ok, err = False, res["detail"]
                 if sid == "model" and ok:
                     await reload_speech(agent)
             except Exception as e:  # noqa: BLE001

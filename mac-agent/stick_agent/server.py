@@ -141,9 +141,23 @@ def make_app(agent):
         except ValueError:
             body = {}
         secs = min(300, max(5, int(body.get("secs") or 60)))
-        why = await agent.holds.show(secs)
+        why = await agent.show_mic(secs)
         return web.json_response({"ok": not why, "error": why or None, "secs": secs, "name": agent.mic_dev.name},
                                  status=409 if why else 200)
+
+    async def check_mic(_):
+        """Runs the Apple audio tap check now (inaudible; the first one makes macOS ask for the
+        System Audio Recording permission). -> {"ok", "state", "detail", "wireless_mic"}."""
+        from . import stick_mic_device
+        if not stick_mic_device.macos_supports_tap():
+            return web.json_response({"ok": False, "error": "the Apple audio tap needs macOS 14.2 or newer"},
+                                     status=409)
+        res = await agent.check_tap(force=True)
+        if res is None:
+            return web.json_response({"ok": False, "error": "not now: the mic is in use (try again in a moment)"},
+                                     status=409)
+        return web.json_response({"ok": res["state"] == "ok", "state": res["state"], "detail": res["detail"],
+                                  "wireless_mic": agent.wireless_status()})
 
     async def scan(_):
         return web.json_response(await link.scan())
@@ -293,6 +307,7 @@ def make_app(agent):
         web.get("/api/clips", clip_list), web.post("/api/clips/play", clip_play),
         web.get("/api/voices", voices), web.post("/api/voice/test", test_voice),
         web.post("/api/wireless-mic/show", show_mic),
+        web.post("/api/wireless-mic/check", check_mic),
         web.post("/api/pause", pause), web.post("/api/new-chat", new_chat), web.post("/api/restart", restart),
     ])
     return app

@@ -858,17 +858,39 @@ RANK_HINT = ("once: hold A, then in Wispr Flow → Settings → Microphone drag 
              "(don't pick BlackHole 2ch itself)")
 
 
+TAP_NOTE = ("macOS asks once to allow \"System Audio Recording\" for Python — that's the helper app; "
+            "it only taps its own sound")
+
+
+def tap_wanted(cfg=None):
+    """The Apple audio tap carries the wireless mic (macOS 14.2+, not set to BlackHole): no driver needed."""
+    from . import stick_mic_device
+    cfg = cfg if cfg is not None else config.load()
+    return stick_mic_device.macos_supports_tap() and cfg.get("wireless_mic_carrier", "auto") != "blackhole"
+
+
 class WirelessMic(Component):
     id = "wireless_mic"
     title = "Wireless Wispr mic"
     description = ("the stick's mic for Wispr without a cable: while A is held a \"<stick>-mic-bluetooth\" mic appears "
-                   "(BlackHole 2ch carries the audio, hidden; Wispr is never set to it)")
+                   "(an Apple audio tap of the agent's own sound carries it on macOS 14.2+, else BlackHole 2ch; "
+                   "Wispr is never set to either)")
     default = False
-    needs = {"admin": True, "terminal": f"BlackHole 2ch: `{BLACKHOLE_CASK}` in a terminal"}
+
+    @property
+    def needs(self):
+        if tap_wanted():
+            return {"permission": "System Audio Recording (macOS asks once)"}
+        return {"admin": True, "terminal": f"BlackHole 2ch: `{BLACKHOLE_CASK}` in a terminal"}
 
     def status(self):
+        cfg = config.load()
+        on = bool(cfg.get("wireless_mic"))
+        if tap_wanted(cfg):
+            if on:
+                return "installed", f"on · the Apple audio tap carries it ({TAP_NOTE}) — {RANK_HINT}"
+            return "missing", "off · no driver needed on this Mac (the Apple audio tap)"
         bh = blackhole_installed()
-        on = bool(config.load().get("wireless_mic"))
         if bh and on:
             return "installed", f"on · BlackHole 2ch found — {RANK_HINT}"
         if on:
@@ -876,6 +898,8 @@ class WirelessMic(Component):
         return "missing", "off · BlackHole 2ch found" if bh else f"off · needs BlackHole 2ch ({BLACKHOLE_CASK})"
 
     def plan(self):
+        if tap_wanted():
+            return f"turn the wireless mic on (the Apple audio tap: {TAP_NOTE})"
         return "check for BlackHole 2ch (or say how to install it), turn the wireless mic on"
 
     def install(self, ui):
@@ -883,6 +907,10 @@ class WirelessMic(Component):
         cfg["wireless_mic"] = True
         config.save(cfg)
         ui.say("wireless Wispr mic on (from a terminal: restart the agent to apply)")
+        if tap_wanted(cfg):
+            ui.say(f"the Apple audio tap carries it, no driver needed: {TAP_NOTE}")
+            ui.say(RANK_HINT)
+            return
         if not blackhole_installed():
             # Never run it ourselves: the cask installs a system audio driver and asks for the admin password
             raise NotAvailable(f"BlackHole 2ch isn't installed yet — install it from the setup page "
@@ -1030,6 +1058,8 @@ def menu(picked):
                 note.append("stick on USB")
             if c.needs.get("terminal"):
                 note.append(c.needs["terminal"])
+            if c.needs.get("permission"):
+                note.append(f"macOS permission: {c.needs['permission']}")
             locked = " (always)" if c.id == "core" else ""
             print(f"  {n}. [{mark}] {c.title}{locked} — {c.description}"
                   f"{'  · ' + '; '.join(note) if note else ''}  [{state}]")

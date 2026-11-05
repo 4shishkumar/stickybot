@@ -188,10 +188,10 @@ The agent may also send the Hardware Buddy `{"cmd":"status"}` over this link (th
 | Mac → board | `{"src":"agent","hello":1,"v":1}` every ≤10 s — the board shows "agent ready" for 25 s after each |
 | board → Mac | `{"src":"agent","evt":"talk","state":"start","rate":16000,"codec":"ima-adpcm"}` when B becomes a hold |
 | board → Mac | `{"src":"agent","evt":"talk","state":"stop"}` after the last audio frame |
-| Mac → board | `"wmic":true\|false` in the hello (and on its own, `{"src":"agent","wmic":…}`, when it changes) — the agent can play the wireless Wispr mic (its `wireless_mic` is on and BlackHole 2ch was found) |
+| Mac → board | `"wmic":true\|false` in the hello (and on its own, `{"src":"agent","wmic":…}`, when it changes) — the agent can play the wireless Wispr mic (its `wireless_mic` is on and a carrier works: the Apple audio tap passed its check, or BlackHole 2ch was found) |
 | Mac → board | `"wready":true` in the hello (agent 1.7.1+) — it answers `prepare` with `ready` (makes the *<stick>-mic-bluetooth* device) |
 | board → Mac | `{"src":"agent","evt":"wispr","state":"prepare","id":n,"rate":16000,"codec":"ima-adpcm"}` when A goes down for Wispr away from USB and the agent said `wready` (firmware 1.7.1+); audio frames follow at once |
-| Mac → board | `{"src":"agent","wispr":"ready","id":n}` — the device is there and Wispr has had its switch time: press the key. `"device":false` = no device (stick on USB, no BlackHole, CoreAudio error): press anyway |
+| Mac → board | `{"src":"agent","wispr":"ready","id":n}` — the device is there and Wispr has had its switch time: press the key. `"device":false` = no device (stick on USB, no carrier, CoreAudio error): press anyway |
 | board → Mac | `{"src":"agent","evt":"wispr","state":"start","rate":16000,"codec":"ima-adpcm"}` instead of `prepare`, to an agent without `wready` (firmware 1.7.0 always) |
 | board → Mac | `{"src":"agent","evt":"wispr","state":"stop"}` after the last audio frame (also after a press cancelled before `ready`) |
 | board → Mac | `{"src":"agent","evt":"usb","mounted":true\|false}` — plugged into a computer that enumerated its USB device (firmware 1.7.1+): when it changes, to a new agent, and every 20 s with the hellos; `usbMounted` in `@state` |
@@ -212,20 +212,33 @@ key goes down first (1.7.1 with a `wready` agent: see *the mic device* below) an
 key-down; the first ~100 ms are the mic's settle silence). While streaming, the
 key-up waits 250 ms so the audio still on its way reaches Wispr before it stops.
 `seq` restarts at 0 for every stream. The agent doesn't transcribe these: it plays
-them in real time into the BlackHole 2ch virtual device (a lost frame becomes 20 ms
+them in real time into the mic device's carrier (below; a lost frame becomes 20 ms
 of silence). The speaker stays quiet meanwhile (the codec is half-duplex: cues wait
 until the mic is off). Older agents never send `wmic`, so the board never streams to them.
 
-*The mic device* (firmware 1.7.1 + agent with `wready`): Wispr is not set to BlackHole.
-The agent shows a public CoreAudio aggregate device named **<stick>-mic-bluetooth**
-(config `wispr_mic_name`; UID `com.stickkey.wireless-mic`; its only sub-device is
-BlackHole 2ch, so what the agent plays is its input) only around a hold, and the user
-ranks it first in Wispr's microphone list once; Wispr switches to the highest-ranked
-mic present whenever devices change. Per press:
+*The mic device* (firmware 1.7.1 + agent with `wready`): the agent shows a public CoreAudio
+aggregate device named **<stick>-mic-bluetooth** (config `wispr_mic_name`; UID
+`com.stickkey.wireless-mic`) only around a hold, and the user ranks it first in Wispr's
+microphone list once; Wispr switches to the highest-ranked mic present whenever devices
+change. What the agent plays becomes its input through one of two *carriers* (config
+`wireless_mic_carrier`: `auto` (default) | `tap` | `blackhole`):
+
+- **Apple audio tap** (macOS 14.2+, no driver): a public, muting Core Audio process tap of
+  the agent's own output in the aggregate's tap list (sub-device: the default output, for
+  the clock). The agent plays into the default output; the tap mutes it and feeds the
+  aggregate. Needs *System Audio Recording* (macOS asks once). Until it's granted a tap
+  is silent and doesn't mute, so it's only used after an inaudible check (-80 dBFS tone
+  through a test-named device, `….check`) heard the tone, and audio only goes out while
+  the agent's tap exists. Tap + device are made per hold (~90–150 ms) and removed with it.
+- **BlackHole 2ch**: the aggregate's only sub-device; the agent plays into BlackHole's
+  output. Wispr is never set to BlackHole itself.
+
+`auto` = the tap once its check passed, else BlackHole if installed. The name and UID are
+the same for both, so Wispr's ranking survives a switch. Per press:
 
 1. A down → the board sends `prepare` (id = a press counter) and streams right away, but
    **holds the key**.
-2. The agent opens its output stream, creates the device if it isn't there (~100–170 ms),
+2. The agent opens its output stream, creates the device if it isn't there (~100–170 ms; tap: tap + device),
    waits `wispr_switch_ms` (default 250) only if it just created it, and sends `ready`
    with the same id. A `ready` with another id is ignored.
 3. The board presses the key on `ready`, or after **800 ms** without one

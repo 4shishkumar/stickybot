@@ -47,8 +47,15 @@ class FakeSoundDevice:
         self.streams = []
         self.fail_open = None
 
-    def query_devices(self):
-        return [dict(d, index=i) for i, d in enumerate(self.devices)]
+    def query_devices(self, kind=None):
+        devs = [dict(d, index=i) for i, d in enumerate(self.devices)]
+        if kind == "output":  # PortAudio's default output: the first one marked "default", else the first output
+            outs = [d for d in devs if d.get("max_output_channels", 0) > 0]
+            pick = next((d for d in outs if d.get("default")), outs[0] if outs else None)
+            if pick is None:
+                raise ValueError("no default output device")
+            return pick
+        return devs
 
     def OutputStream(self, **kw):  # noqa: N802 — sounddevice's name
         if self.fail_open:
@@ -59,6 +66,8 @@ class FakeSoundDevice:
 
 
 BLACKHOLE = {"name": "BlackHole 2ch", "max_output_channels": 2, "max_input_channels": 2, "default_samplerate": 48000.0}
+SPEAKERS = {"name": "MacBook Pro Speakers", "max_output_channels": 2, "max_input_channels": 0,
+            "default_samplerate": 48000.0, "default": True}
 
 
 @pytest.fixture(autouse=True)
@@ -85,17 +94,62 @@ class FakeCoreAudio:
         self.fail_create = 0      # OSStatus to return
         self.per_process = True   # macOS 14.2+
         self._next = 300
+        # process taps (macOS 14.2+)
+        self.tap_list = {}        # tap id -> (uuid, name, process)
+        self.tap_calls = []       # ("create", name, process) / ("destroy", id)
+        self.aggregates = {}      # device id -> the description it was made with
+        self.fail_tap = 0         # OSStatus for create_tap
+        self.tap_error = None     # an exception create_tap raises (e.g. Unavailable: unknown selector)
+        self.output_uid = "BuiltInSpeaker"
+        self.process = 77         # the agent's process object
+        self.tap_hears = True     # measure_input: the tone comes through (the permission is granted)
+        self.measured = []        # (dev, secs, amp)
 
     def devices(self):
         return [(d, name, uid) for d, (name, uid) in self.list.items()]
 
-    def create_aggregate(self, name, uid, sub_uid):
-        self.created.append((name, uid, sub_uid))
+    def create_aggregate(self, name, uid, sub_uid, tap_uid=None):
+        self.created.append((name, uid, sub_uid) if tap_uid is None else (name, uid, sub_uid, tap_uid))
         if self.fail_create:
             return self.fail_create, 0
         self._next += 1
         self.list[self._next] = (name, uid)
+        self.aggregates[self._next] = {"name": name, "uid": uid, "private": 0, "master": sub_uid,
+                                       "subdevices": [{"uid": sub_uid}],
+                                       **({"taps": [{"uid": tap_uid, "drift": 1}], "tapautostart": 1}
+                                          if tap_uid else {})}
         return 0, self._next
+
+    def process_object(self, pid):
+        return self.process
+
+    def default_output_uid(self):
+        return self.output_uid
+
+    def create_tap(self, name, process):
+        self.tap_calls.append(("create", name, process))
+        if self.tap_error:
+            raise self.tap_error
+        if self.fail_tap:
+            return self.fail_tap, 0, ""
+        self._next += 1
+        uuid = f"TAP-UUID-{self._next}"
+        self.tap_list[self._next] = (uuid, name, process)
+        return 0, self._next, uuid
+
+    def destroy_tap(self, tap):
+        self.tap_calls.append(("destroy", tap))
+        self.tap_list.pop(tap, None)
+        return 0
+
+    def taps(self):
+        return [(t, uuid, name) for t, (uuid, name, _p) in self.tap_list.items()]
+
+    def measure_input(self, dev, secs, amp, freq=440.0):
+        self.measured.append((dev, secs, amp))
+        if self.tap_hears:
+            return {"callbacks": 50, "rms": amp / 2 ** 0.5, "first_ms": 70.0, "ms": 130.0}
+        return {"callbacks": 140, "rms": 0.0, "first_ms": None, "ms": secs * 1000}
 
     def destroy_aggregate(self, dev):
         self.destroyed.append(dev)
@@ -115,6 +169,13 @@ def no_core_audio(monkeypatch):
     fake = FakeCoreAudio()
     monkeypatch.setattr(stick_mic_device, "CoreAudioDevices", lambda: fake)
     return fake
+
+
+@pytest.fixture(autouse=True)
+def no_tap_by_default(monkeypatch):
+    """Tests run as on a Mac without process taps (the BlackHole carrier) unless they turn them on
+    (the `tap_mac` fixture in test_tap_mic.py), whatever Mac runs them."""
+    monkeypatch.setattr(stick_mic_device, "macos_supports_tap", lambda: False)
 
 
 @pytest.fixture(autouse=True)

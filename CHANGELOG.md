@@ -24,6 +24,15 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   screens** (on by default; it needs Auto-rotate) is in the stick's menu, its settings page
   and the dashboard's Stick page. The serial `screens` demo now shows the landscape
   layouts too (`screens landscape` for just those).
+- **The wireless Wispr mic needs no driver on macOS 14.2+.** An Apple audio tap of the agent's own
+  sound now carries the stick's audio into the same “<stick>-mic-bluetooth” mic (same name, so Wispr's
+  ranking stays) — no BlackHole download, no Mac password. macOS asks once to allow *System Audio
+  Recording* for Python (the helper app; it only taps its own sound). The agent checks the tap with an
+  inaudible test before using it (at start, when turned on, and with **Check again**) and never lets the
+  stick's audio reach the speakers. BlackHole 2ch stays for older macOS, or by choice: Settings →
+  Wireless Wispr mic → **Carried by** (Automatic / Apple audio tap / BlackHole 2ch; config
+  `wireless_mic_carrier`), or *Use BlackHole instead* on the setup page. The setup page's wireless mic
+  step is now **Turn on** + the permission, and Settings shows which carrier is in use.
 
 ## [1.8.6] - 2026-11-05
 

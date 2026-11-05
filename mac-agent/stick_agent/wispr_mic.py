@@ -1,11 +1,17 @@
-"""Wireless Wispr mic: the stick's mic, played into the BlackHole 2ch virtual device.
+"""Wireless Wispr mic: the stick's mic, played where the "stick-mic-bluetooth" device hears it.
 
 While A holds the Wispr shortcut away from USB, the stick streams its mic as
 the same ADPCM frames as a B talk, between {"evt":"wispr","state":"prepare"} and
-{"evt":"wispr","state":"stop"} (PROTOCOL.md, "Mac link"). Whatever we play into
-BlackHole's output is the input of the "stick-mic-bluetooth" device that
-stick_mic_device.py shows around each hold, which Wispr ranks first — no cable,
-and Wispr is never set to BlackHole itself.
+{"evt":"wispr","state":"stop"} (PROTOCOL.md, "Mac link"). It becomes the input of
+the "stick-mic-bluetooth" device that stick_mic_device.py shows around each hold,
+which Wispr ranks first — no cable. Two carriers (stick_mic_device.py):
+
+- "tap": we play into the default output device; the agent's own process tap
+  (inside that device) mutes it and hands it to the device's input. Audio only
+  goes out while the tap exists (`gate`), so the stick never plays out of the
+  speakers. The stream is opened at "prepare" and closed once the device is
+  removed (it's a real output device: no silence kept playing into it).
+- "blackhole": we play into BlackHole 2ch's output (Wispr is never set to BlackHole itself).
 
 Wispr starts recording on key-down, so latency matters: frames are decoded as
 they arrive, put in order by seq (a lost frame becomes 20 ms of silence),
@@ -25,6 +31,7 @@ from .adpcm import decode_frame
 log = logging.getLogger("wispr")
 
 DEVICE = "BlackHole 2ch"
+DEFAULT_OUTPUT = "the default output"  # device_name for the tap carrier
 RATE = 16000          # the stick's mic
 TARGET_MS = 80        # jitter buffer: start playing once this much is queued
 MAX_MS = 200          # more than this queued (a burst, clock drift): drop the oldest back to TARGET_MS
@@ -49,6 +56,19 @@ def find_device(sd, name=DEVICE):
             return {"index": d.get("index", i), "name": d["name"], "rate": int(d.get("default_samplerate") or 48000),
                     "channels": min(2, int(d["max_output_channels"]))}
     return None
+
+
+def find_default_output(sd):
+    """The default output device -> {index, name, rate, channels}, or None."""
+    try:
+        d = sd.query_devices(kind="output")
+    except Exception as e:  # noqa: BLE001 — no default output / PortAudio broken
+        log.warning("can't find the default output device: %s", e)
+        return None
+    if not d or not d.get("max_output_channels", 0):
+        return None
+    return {"index": d.get("index"), "name": d["name"], "rate": int(d.get("default_samplerate") or 48000),
+            "channels": min(2, int(d["max_output_channels"]))}
 
 
 class Sequencer:
@@ -204,13 +224,19 @@ class JitterBuffer:
 
 
 class WisprMic:
-    """Plays Wispr streams from the stick into BlackHole. `emit(kind, **data)` reports
-    to the dashboard; `sd` is the sounddevice module (tests pass a fake)."""
+    """Plays Wispr streams from the stick into the carrier. `emit(kind, **data)` reports
+    to the dashboard; `sd` is the sounddevice module (tests pass a fake). `carrier`: "blackhole",
+    "tap" or None (none usable: `unavailable` says why); `gate()`: may audio go out now (tap mode:
+    only while our tap exists)."""
 
     def __init__(self, emit=None, sd=None, device_name=DEVICE):
         self._emit = emit or (lambda kind, **data: None)
         self._sd = sd
         self.device_name = device_name
+        self.carrier = "blackhole"
+        self.unavailable = ""        # why there's no carrier (carrier None)
+        self.gate = lambda: True
+        self.gated = 0               # blocks held back by the gate in the last stream
         self.enabled = False
         self.dev = None              # find_device() result
         self.stream = None           # sounddevice.OutputStream while open
@@ -242,8 +268,46 @@ class WisprMic:
                 log.warning("wireless mic: %s", msg)
             self._emit("wispr_mic", **self.status())
 
+    def has_blackhole(self):
+        """BlackHole 2ch is there (PortAudio restarted to see one installed since, while no stream is open)."""
+        if self.carrier == "blackhole" and self.dev:
+            return True
+        sd = self._module()
+        if sd is None:
+            return False
+        if find_device(sd, DEVICE):
+            return True
+        if self.stream is None and hasattr(sd, "_terminate"):
+            try:
+                sd._terminate()
+                sd._initialize()
+            except Exception:  # noqa: BLE001
+                return False
+            return find_device(sd, DEVICE) is not None
+        return False
+
+    def set_carrier(self, carrier, why="", gate=None):
+        """The agent picked the carrier (stick_mic_device.pick_carrier): reopen on the new device."""
+        gate = gate or (lambda: True)
+        if carrier == self.carrier and why == self.unavailable:
+            self.gate = gate
+            return
+        changed = carrier != self.carrier
+        self.carrier, self.unavailable, self.gate = carrier, why, gate
+        if changed:
+            log.info("wireless mic: carrier %s%s", carrier or "none", f" ({why})" if why else "")
+            self.close()
+            self.dev, self._looked_at, self._missing_logged = None, 0.0, False
+            self.device_name = DEFAULT_OUTPUT if carrier == "tap" else DEVICE
+        if carrier is None:
+            self._set_error(why)
+        elif self.error and not self.dev:
+            self._set_error("")
+        self._emit("wispr_mic", **self.status())
+
     def device(self, force=False):
-        """The BlackHole device, looked for again at most every RESCAN_S while it's missing.
+        """The device we play into (BlackHole, or the default output for the tap), looked for
+        again at most every RESCAN_S while it's missing.
         PortAudio only sees devices added after it started once it's restarted, which we
         only do while no stream is open."""
         if self.dev and not force:
@@ -252,6 +316,8 @@ class WisprMic:
         if again and not force and time.monotonic() - self._looked_at < RESCAN_S:
             return None
         self._looked_at = time.monotonic()
+        if self.carrier is None:
+            return None
         sd = self._module()
         if sd is None:
             return None
@@ -261,7 +327,7 @@ class WisprMic:
                 sd._initialize()
             except Exception:  # noqa: BLE001
                 pass
-        self.dev = find_device(sd, self.device_name)
+        self.dev = find_default_output(sd) if self.carrier == "tap" else find_device(sd, self.device_name)
         if self.dev:
             self._missing_logged = False
             log.info("wireless mic: playing into %s (%d Hz, %d ch)", self.dev["name"], self.dev["rate"],
@@ -269,7 +335,8 @@ class WisprMic:
             self._set_error("")
         elif not self._missing_logged:
             self._missing_logged = True
-            self._set_error(f"{self.device_name} isn't installed — run: brew install --cask blackhole-2ch")
+            self._set_error("there's no output device to play into" if self.carrier == "tap" else
+                            f"{self.device_name} isn't installed — run: brew install --cask blackhole-2ch")
         return self.dev
 
     @property
@@ -287,10 +354,19 @@ class WisprMic:
 
     def _callback(self, outdata, frames, _time, _status):
         data = self.jb.pull(frames) if self.jb else np.zeros(frames, dtype=np.float32)
+        if self.carrier != "blackhole" and not self.gate():
+            # tap mode without our tap: this is the real speakers — silence (the audio is dropped)
+            if self.active and data.any():
+                self.gated += 1
+            outdata[:] = 0
+            return
         outdata[:] = data[:, None]  # mono to every channel
 
     def open(self):
         """Opens the output stream (silence until a stream starts). Returns True if open."""
+        if self.stream is not None and getattr(self.stream, "active", True) is False and not self.active:
+            self.close()  # stopped by itself (its device went away): open it again
+            self.dev = None
         if self.stream is not None:
             return True
         dev = self.device()
@@ -321,9 +397,15 @@ class WisprMic:
             self.stream = None
 
     def warm(self):
-        """The stick connected: have the stream ready before the first key-down."""
-        if self.enabled:
+        """The stick connected: have the stream ready before the first key-down. Not in tap mode:
+        there it's the real output device (e.g. AirPods), so it's only open around a hold."""
+        if self.enabled and self.carrier != "tap":
             self.open()
+
+    def release(self):
+        """The mic device is gone: in tap mode, let go of the output device until the next hold."""
+        if self.carrier == "tap" and not self.active:
+            self.close()
 
     # --- a stream from the stick -------------------------------------------------
 
@@ -333,6 +415,7 @@ class WisprMic:
             return False
         self.jb.clear()
         self.jb.underruns = self.jb.dropped = 0
+        self.gated = 0
         self.resample = Resampler(int(rate or RATE), self.dev["rate"])
         self.seqr = Sequencer()
         self.active = True
@@ -357,12 +440,13 @@ class WisprMic:
         self.jb.drain()  # play out the rest, then silence
         self.last = {"t": time.time(), "secs": round(time.time() - self._started, 1), "frames": self.seqr.frames,
                      "lost": self.seqr.lost, "late": self.seqr.late, "underruns": self.jb.underruns,
-                     "dropped_ms": int(self.jb.dropped * 1000 / self.dev["rate"]) if self.dev else 0}
+                     "dropped_ms": int(self.jb.dropped * 1000 / self.dev["rate"]) if self.dev else 0,
+                     "gated": self.gated}
         log.info("wispr stream: %.1fs, %d frames, %d lost, %d late, %d underruns, %d ms dropped", self.last["secs"],
                  self.last["frames"], self.last["lost"], self.last["late"], self.last["underruns"],
                  self.last["dropped_ms"])
         self._emit("wispr_mic", **self.status())
 
     def status(self):
-        return {"enabled": self.enabled, "device": self.dev["name"] if self.dev else None,
+        return {"enabled": self.enabled, "device": self.dev["name"] if self.dev else None, "carrier": self.carrier,
                 "open": self.stream is not None, "streaming": self.active, "error": self.error, "last": self.last}
