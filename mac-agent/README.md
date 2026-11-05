@@ -39,7 +39,7 @@ easier for the speech model than "P R 1234".
 
 ### The other buttons
 - **A (hold):** Wispr Flow dictation (the key combo; over USB the stick is also the mic, and with the
-  [wireless Wispr mic](#wireless-wispr-mic) it is the mic without a cable too).
+  [smart Wispr mic](#smart-wispr-mic) it is the mic without a cable too).
 - **B (double press):** types your Mac password to unlock it.
 - **B (triple press):** the stick's menu.
 
@@ -88,7 +88,7 @@ then runs **`stick-agent setup`**, which asks what else to set up:
 | `claude` | on | checks Claude Code is installed and logged in; adds our 3 hooks to `~/.claude/settings.json` (backup first, other hooks kept) |
 | `github` | off | checks `gh`, logs in if needed, sets your main repo, turns on GitHub alerts |
 | `firmware` | off | flashes the bundled firmware to a stick plugged in by USB (keeps its settings) |
-| `wireless_mic` | off | the stick's mic for Wispr without a cable: checks for BlackHole 2ch (tells you the `brew` command if it's missing — it needs your password, so it never runs it) and turns `wireless_mic` on |
+| `wireless_mic` | off | the smart Wispr mic (the stick without a cable, your Mac's mic for Wispr's own shortcut): checks for BlackHole 2ch (tells you the `brew` command if it's missing — it needs your password, so it never runs it) and turns `wireless_mic` on |
 
 Options (for `install.sh` and `stick-agent setup`): `--yes` (defaults, no
 questions), `--with github,firmware`, `--without model`, `--dry-run`,
@@ -117,26 +117,57 @@ block Claude Code: if the agent isn't running they do nothing.
 
 ---
 
-### Wireless Wispr mic
-Over USB the stick is a USB microphone (*TinyUSB UAC1*). Without the cable, the agent can
-play the stick's mic into **BlackHole 2ch**, a free virtual audio device, and Wispr listens
-to that:
+### Smart Wispr mic
+Over USB the stick is a USB microphone (*TinyUSB UAC1*). Without the cable, Wispr's
+microphone is set to **BlackHole 2ch**, a free virtual audio device, for good, and the
+agent chooses what BlackHole carries:
+
+| You dictate with | Wispr hears |
+|---|---|
+| **A** on the stick (no cable) | the stick's mic, over Bluetooth |
+| Wispr's own shortcut on the Mac keyboard (⌥⌘…) | your real mic: the Mac's **default input** at that moment (System Settings → Sound → Input — so AirPods, a headset or a USB mic follow it), or the one you picked |
+| nothing | silence (no mic is open) |
 
 1. **Install BlackHole 2ch** (once; asks for your Mac password):
    `brew install --cask blackhole-2ch`
 2. **Turn it on:** `stick-agent setup --with wireless_mic`, or dashboard → **Settings →
-   Wireless Wispr mic** (or **Components → Wireless Wispr mic → Install**).
-3. **In Wispr Flow's settings, set the microphone to “BlackHole 2ch”.**
-4. Hold **A** and talk. The stick's screen says *Wispr hears the stick (BT)*; the
-   dashboard shows *Streaming to Wispr*.
+   Smart Wispr mic** (or **Components → Smart Wispr mic → Install**).
+3. **In Wispr Flow's settings, set the microphone to “BlackHole 2ch”** (once).
+4. **Allow the microphone:** the first keyboard dictation makes macOS ask whether
+   stick-agent (shown as *Python* / *python3.x*, the agent's process) may use the
+   microphone — allow it. If you missed the prompt or Wispr hears silence, the dashboard and
+   the menu bar say *Allow Microphone access for stick-agent*: **System Settings → Privacy &
+   Security → Microphone**, turn it on for that entry, then restart the agent
+   (`stick-agent restart`).
+5. Hold **A** and talk: the stick's screen says *Wispr hears the stick (BT)*. Or press Wispr's
+   shortcut on the keyboard: the menu bar shows *Wispr hears: MacBook Pro Microphone*
+   (or your headset) while Wispr records.
+
+**Without the stick** (dashboard → Settings → Smart Wispr mic, `wispr_fallback_mic` in
+`config.json`): *Mac's default input* (`"default"`, recommended — if the default is
+BlackHole itself, the built-in mic), a device by its exact name (`"USB Headset"`; when it
+isn't connected, the default input), or *Off* (`"off"`: only the stick, Wispr hears nothing
+otherwise — the old behaviour). BlackHole is never offered (it would play into itself).
+
+How it knows: macOS 14.2+ lists, per process, which devices it is recording from
+(CoreAudio, read-only; `audio_procs.py`). While Wispr Flow's helper records from BlackHole
+and the stick isn't streaming, the agent opens the real mic and plays it into BlackHole
+(~40 ms on the way; typically ready ~0.1 s after Wispr starts — the log says
+`smart mic: opened … in N ms`). When Wispr stops, the mic closes at once, so the orange
+mic dot is only there while you dictate. The stick always wins: pressing A in the middle
+of a keyboard dictation switches to the stick; when the stick stops and Wispr is still
+recording, the real mic comes back after ~0.6 s. An A dictation never opens the real mic.
+On macOS older than 14.2 only the stick reaches Wispr (the dashboard says so).
 
 While A is held away from USB (and the agent is connected), the stick streams its mic
 over Bluetooth; the agent plays it into BlackHole with ~80 ms of buffering. The key goes
 down at once and the stream starts with it; the key-up waits 250 ms so the last words
 reach Wispr. Plugged in by USB with Wispr using the stick's USB mic, the stick doesn't
 stream. The stick also has its own switch (menu → *Wireless mic*), on by default.
-With BlackHole picked in Wispr, Wispr hears nothing when the agent isn't running —
-switch Wispr back to the Mac's or the stick's USB mic then.
+With BlackHole picked in Wispr, **Wispr hears nothing when the agent isn't running** —
+switch Wispr back to the Mac's or the stick's USB mic then (or turn this off and do so).
+Anything else that records from BlackHole (a screen recorder using it for system audio)
+also counts as "recording" and gets your mic.
 Remove: `stick-agent setup --uninstall wireless_mic` (turns it off; BlackHole stays —
 `brew uninstall --cask blackhole-2ch` removes it).
 
@@ -158,6 +189,7 @@ Files: everything lives in `~/.stick-agent/` — `config.json`, `commands.json`,
 | `brain.py` | Claude Code headless (`claude -p`, stream-json), follow-ups, cancel |
 | `core.py` | the agent: talk → text → command or Claude → reply; approvals; sounds; speech |
 | `wispr_mic.py` | the wireless Wispr mic: stick audio → jitter buffer → BlackHole 2ch (sounddevice) |
+| `audio_procs.py`, `mic_router.py` | the smart Wispr mic: who records from BlackHole (CoreAudio) → the stick or a real mic into it |
 | `events.py`, `github.py`, `claude_hooks.py` | alerts: GitHub (via `gh`), Claude finished |
 | `home.py`, `feed.py`, `weather.py` | the stick's home screen card, facts/news, weather (Open-Meteo) |
 | `server.py`, `dashboard.html`, `menubar.py` | dashboard API (localhost + token) and menu bar |

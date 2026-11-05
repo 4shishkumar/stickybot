@@ -38,6 +38,7 @@ talks to what, and where every file lives. For the wire formats see
 |---|---|
 | main thread | the menu-bar icon (rumps / AppKit) |
 | `agent` thread → asyncio loop | everything else, cooperatively: Bluetooth (bleak), the web server (aiohttp), the talk pipeline, events, GitHub polling, weather, feed |
+| `wispr-monitor`, `wispr-router` threads | the smart Wispr mic: watching CoreAudio for Wispr recording; opening / closing the real mic (PortAudio's own threads run the audio callbacks) |
 | `stt` thread | Parakeet speech-to-text (MLX keeps its GPU streams per thread, so the model always runs on this one) |
 | subprocesses | `claude -p …` per Claude request, `say` for speech, `open`/`osascript` for quick commands, `gh api` for GitHub |
 
@@ -85,6 +86,23 @@ Claude Code wants to run something not pre-allowed → runs the **PermissionRequ
 1. **Press A** — the key combo goes down at once (Wispr starts recording). If the agent's hello said `"wmic":true` and no host has the USB mic open, the stick also sends `wispr start` and streams 20 ms ADPCM frames on AUDIO.
 2. **Agent** (`wispr_mic.py`) — frames are decoded, put in order by seq (lost → silence), resampled to BlackHole's rate (soxr) and played from an ~80 ms jitter buffer by a PortAudio stream (sounddevice) into **BlackHole 2ch**, which Wispr has as its microphone. Nothing is transcribed by the agent.
 3. **Release A** — the stick keeps streaming 250 ms, then the key goes up and `wispr stop` follows; the agent plays out what's left.
+
+**Smart Wispr mic** — Wispr stays on BlackHole; the agent decides what it carries (`mic_router.py`):
+
+```
+ CoreAudio per-process objects ──▶ audio_procs.RecordingMonitor ──"Wispr records"──▶ SmartMic.reconcile()
+ (macOS 14.2+: who runs input        (poll 20 Hz / listeners,                          │
+  on BlackHole, not our PID)          our PID excluded)                                │ stick streaming?
+                                                                                       ├─ yes ─▶ the stick's jitter buffer ─┐
+ stick "wispr start/stop" ──▶ WisprMic.start/stop ──────────────────────────────────────┤                                    ├─▶ output stream ─▶ BlackHole 2ch ─▶ Wispr
+                                                                                       └─ no ──▶ FallbackMic: real mic        │
+                                                                                                 (InputStream → soxr → 30 ms) ┘
+```
+
+- **Keyboard dictation:** Wispr starts recording from BlackHole → the monitor sees it (≤ 50 ms) → the router resolves the mic (`wispr_fallback_mic`: the Mac's default input via CoreAudio, or a name; never BlackHole), opens a sounddevice InputStream on it, resamples to BlackHole's rate and the shared output stream plays it. Wispr stops → the input stream closes at once.
+- **The stick wins:** the output callback plays the stick whenever a stick stream is active (and its tail), so an A press switches instantly, also mid-dictation; the real mic stays open but muted while Wispr is still recording. After a stick stream ends the router waits 0.6 s (Wispr stops just after the key-up) before handing back to the real mic. Right after Wispr starts it waits 0.15 s for a stick stream if the stick could send one, so an A dictation never opens the real mic.
+- **Permission:** the real mic needs macOS's Microphone permission for the agent's (Python) process; without it CoreAudio delivers zeros — after 1 s of only zeros (or a PortAudio error) the dashboard / menu say how to allow it.
+- **New devices** (AirPods connecting) need a PortAudio restart to be openable: done while idle when CoreAudio's device list changes, or at dictation start if the wanted mic is missing.
 
 ### 5. The home screen
 Every 8 s the agent's *hello* message carries the time (stick clock), the weather (Open-Meteo, every 30 min) and the **home card** (`home.py`: approval > last answer > Claude Code sessions > facts / news / Wikipedia). The stick draws it — and the eyes peek now and then on its own.
