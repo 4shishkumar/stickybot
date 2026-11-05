@@ -337,6 +337,13 @@ static void onMenu(menu::Action a) {
       settings::saveStandbyMin(d.standbyMin);
       settings::saveBrightnessPct(d.brightnessPct);
       Log.printf("Menu: combo %s, standby %u min\n", comboToString(d.combo).c_str(), d.standbyMin);
+      if (d.slot != hid::slot()) settings::saveSlot(d.slot);
+      if (hid::needsRestart(d.combo)) {  // Fn added or removed: new keyboard identity
+        Log.println("Keyboard identity changes for Fn, restarting");
+        ui::drawMessage("Restarting", "Fn: re-pair on the Mac", COLOR_OK);
+        delay(2500);
+        ESP.restart();
+      }
       if (d.slot != hid::slot()) {
         settings::saveSlot(d.slot);
         Log.printf("Mac %u, restarting\n", d.slot);

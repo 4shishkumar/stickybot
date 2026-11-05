@@ -12,8 +12,12 @@ static uint8_t       slot_ = 1;
 static String        name_;
 static bool          off_ = false;
 static volatile bool authEvent = false;
+static bool          appleId_ = false;  // identifying as an Apple keyboard (for fn)
+
+constexpr uint16_t APPLE_VID = 0x05AC, APPLE_PID = 0x0267;  // Apple, Magic Keyboard
 
 constexpr uint32_t CONFIRM_TIMEOUT_MS = 30000;
+constexpr uint32_t TAP_FN_MS = 30;  // a Fn-only tap: how long it's held
 static NimBLEConnInfo*   pendingConn = nullptr;
 static volatile uint32_t pendingCode = 0;
 static uint32_t          pendingSince = 0;
@@ -55,9 +59,11 @@ static void applyAddress() {
 
 // The library splits a combo into (key, modifiers). For a modifier-only
 // combo, send one modifier as the key itself (Option+Cmd -> key Cmd + Option).
+// Fn isn't an HID modifier: it goes in its own report bit (setFn), so it's
+// left out here; a Fn-only combo has key 0 and nothing else to press.
 static void split(const Combo& c, uint8_t& key, uint8_t& mods) {
   key = c.key;
-  mods = c.mods;
+  mods = c.mods & ~combo::MOD_FN;
   if (key) return;
   static const struct { uint8_t bit, key; } asKey[] = {
     {KEY_MOD_LGUI, KEY_LGUI}, {KEY_MOD_LALT, KEY_LALT},
@@ -72,10 +78,19 @@ static void split(const Combo& c, uint8_t& key, uint8_t& mods) {
   }
 }
 
+bool appleId() { return appleId_; }
+
+bool needsRestart(const Combo& c) { return ((c.mods & combo::MOD_FN) != 0) != appleId_; }
+
 void begin(uint8_t slot) {
   slot_ = slot;
   name_ = settings::name();
   kb = new HijelHID_BLEKeyboard(name_.c_str(), "DIY", 100);
+  // macOS only takes the fn / Globe key from an Apple keyboard, so a combo with
+  // Fn makes the stick say it's one (Magic Keyboard IDs, USB-IF vendor source).
+  // The Mac caches this per pairing: re-pair after it changes.
+  appleId_ = settings::combo().mods & combo::MOD_FN;
+  if (appleId_) kb->setPnpId(0x02, APPLE_VID, APPLE_PID, 0x0100);
   // Start on a throwaway random address (never the chip's public one), then
   // switch to the slot's own address straight away.
   kb->setRandomAddress(true);
@@ -135,7 +150,8 @@ bool connected() { return kb && kb->isPaired(); }
 void down(const Combo& c) {
   uint8_t key, mods;
   split(c, key, mods);
-  kb->press(key, mods);
+  if (c.mods & combo::MOD_FN) kb->setFn(true);
+  if (key) kb->press(key, mods);
 }
 
 void up() { kb->releaseAll(); }
@@ -143,7 +159,11 @@ void up() { kb->releaseAll(); }
 void tap(const Combo& c) {
   uint8_t key, mods;
   split(c, key, mods);
-  kb->tap(key, mods);
+  if (!(c.mods & combo::MOD_FN)) return kb->tap(key, mods);
+  kb->setFn(true);
+  if (key) kb->tap(key, mods);
+  else delay(TAP_FN_MS);
+  kb->setFn(false);
 }
 
 void tapEnter() { kb->tap(KEY_RETURN, 0); }

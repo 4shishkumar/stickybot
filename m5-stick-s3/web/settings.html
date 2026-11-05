@@ -321,6 +321,12 @@ $('save').onclick = async () => {
     const t = $('text').value.trim();
     const r = await call('combo', t ? {text: t} : {mods, key: $('key').value});
     $('text').value = '';
+    if (r.restarting) {  // Fn added or removed: new keyboard identity
+      msg('Saved: ' + r.combo + '. Restarting — then forget the stick in the Mac\'s Bluetooth settings and pair again.');
+      if (T === Usb) setTimeout(() => waitForBoard(), 1500);
+      else setTimeout(() => location.reload(), 8000);
+      return;
+    }
     await refresh(true);
     msg('Saved: ' + r.combo);
   } catch (e) { msg(e.message, true); }

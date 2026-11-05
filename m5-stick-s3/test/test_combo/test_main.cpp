@@ -68,6 +68,21 @@ void test_every_key_round_trips() {
   }
 }
 
+void test_fn_key() {
+  Combo c = parsed("fn");
+  TEST_ASSERT_EQUAL_HEX8(combo::MOD_FN, c.mods);
+  TEST_ASSERT_EQUAL_HEX8(0, c.key);
+  TEST_ASSERT_TRUE(c.valid());
+  TEST_ASSERT_EQUAL_HEX8(combo::MOD_FN, parsed("Globe").mods);
+  Combo f = parsed("fn+f");
+  TEST_ASSERT_EQUAL_HEX8(combo::MOD_FN, f.mods);
+  TEST_ASSERT_EQUAL_HEX8(0x09, f.key);
+  TEST_ASSERT_EQUAL_STRING("Fn", combo::toString(c).c_str());
+  Combo all = parsed("cmd+fn+ctrl");
+  TEST_ASSERT_EQUAL_STRING("Fn+Ctrl+Cmd", combo::toString(all).c_str());  // fn first, like macOS
+  TEST_ASSERT_EQUAL_HEX8(combo::MOD_MASK, combo::MOD_MASK & (all.mods | combo::MOD_SHIFT | combo::MOD_ALT));
+}
+
 void test_key_index() {
   TEST_ASSERT_EQUAL(0, keyIndex(0));
   TEST_ASSERT_EQUAL(-1, keyIndex(0xEE));
@@ -77,6 +92,7 @@ void test_key_index() {
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_aliases_and_case);
+  RUN_TEST(test_fn_key);
   RUN_TEST(test_main_keys);
   RUN_TEST(test_invalid);
   RUN_TEST(test_to_string_order);

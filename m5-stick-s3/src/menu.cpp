@@ -8,7 +8,7 @@ constexpr uint8_t  STANDBY_STEPS[] = {0, 5, 10, 30};
 constexpr uint16_t ENTER_STEPS[]   = {0, 500, 1000, 1500, 2000, 3000};
 
 enum Item {
-  MOD_CTRL, MOD_OPTION, MOD_SHIFT, MOD_CMD, KEY, TEST, ENTER,
+  MOD_FN, MOD_CTRL, MOD_OPTION, MOD_SHIFT, MOD_CMD, KEY, TEST, ENTER,
   SLOT, BT, FORGET, STANDBY, SOUND, VOLUME, M_LIFT, M_FACE, M_SHAKE, BRIGHT, AUTOROT, FLIP, WEB, DEV, POWER, SAVE, CANCEL, COUNT
 };
 
@@ -60,7 +60,7 @@ Action select() {
   touch();
   emptyWarning = false;
   switch (sel) {
-    case MOD_CTRL: case MOD_OPTION: case MOD_SHIFT: case MOD_CMD:
+    case MOD_FN: case MOD_CTRL: case MOD_OPTION: case MOD_SHIFT: case MOD_CMD:
       draft_.combo.mods ^= MODS[sel].bit;
       return Action::REDRAW;
     case KEY:     nextKey(); return Action::REDRAW;
@@ -115,7 +115,7 @@ ui::MenuView view() {
   title = emptyWarning ? "Pick a key or modifier" : comboToString(draft_.combo);
 
   ui::MenuView v{title.c_str(), {}, COUNT, sel, "A next  B change"};
-  for (int i = MOD_CTRL; i <= MOD_CMD; i++)
+  for (int i = MOD_FN; i <= MOD_CMD; i++)
     v.lines[i] = String(MODS[i].name) + ": " + ((draft_.combo.mods & MODS[i].bit) ? "ON" : "off");
   v.lines[KEY]     = String("Key: ") + KEYS[max(0, keyIndex(draft_.combo.key))].name;
   v.lines[TEST]    = "Test combo";

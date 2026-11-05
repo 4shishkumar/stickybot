@@ -87,8 +87,8 @@ const KeyName KEYS[] = {
 };
 const size_t KEY_COUNT = sizeof(KEYS) / sizeof(KEYS[0]);
 
-const ModName MODS[4] = {
-  {"Ctrl", combo::MOD_CTRL}, {"Option", combo::MOD_ALT}, {"Shift", combo::MOD_SHIFT}, {"Cmd", combo::MOD_GUI},
+const ModName MODS[MOD_COUNT] = {
+  {"Fn", combo::MOD_FN}, {"Ctrl", combo::MOD_CTRL}, {"Option", combo::MOD_ALT}, {"Shift", combo::MOD_SHIFT}, {"Cmd", combo::MOD_GUI},
 };
 
 int keyIndex(uint8_t code) {
@@ -129,6 +129,7 @@ static uint8_t modFromToken(const std::string& t) {
   if (t == "opt" || t == "option" || t == "alt")                  return MOD_ALT;
   if (t == "ctrl" || t == "control")                              return MOD_CTRL;
   if (t == "shift")                                               return MOD_SHIFT;
+  if (t == "fn" || t == "globe")                                  return MOD_FN;
   return 0;
 }
 

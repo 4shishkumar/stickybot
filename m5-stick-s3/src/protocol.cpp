@@ -69,7 +69,7 @@ static String stateJson() {
 
 static String keysJson() {
   String j = "\"mods\":[";
-  for (int i = 0; i < 4; i++) j += String(i ? "," : "") + "[\"" + MODS[i].name + "\"," + MODS[i].bit + "]";
+  for (size_t i = 0; i < MOD_COUNT; i++) j += String(i ? "," : "") + "[\"" + MODS[i].name + "\"," + MODS[i].bit + "]";
   j += "],\"keys\":[";
   for (size_t i = 0; i < KEY_COUNT; i++) j += String(i ? "," : "") + "[" + q(KEYS[i].name) + "," + KEYS[i].code + "]";
   return j + "]";
@@ -90,13 +90,18 @@ Result run(const String& action, const Args& arg) {
     if (text.length()) {
       if (!parseCombo(text, c)) return fail("Couldn't understand that combo");
     } else {
-      c.mods = arg("mods").toInt() & 0x0F;
+      c.mods = arg("mods").toInt() & combo::MOD_MASK;
       c.key  = arg("key").toInt();
       if (keyIndex(c.key) < 0 || !c.valid()) return fail("Pick a key or at least one modifier");
     }
     settings::saveCombo(c);
     Log.printf("Combo set to %s\n", comboToString(c).c_str());
-    return ok("\"combo\":" + q(comboToString(c)));
+    if (!hid::needsRestart(c)) return ok("\"combo\":" + q(comboToString(c)));
+    // Fn added or removed: the stick's keyboard identity changes (see hid.h)
+    Log.println("Keyboard identity changes for Fn, restarting - re-pair on the Mac");
+    Result r = ok("\"combo\":" + q(comboToString(c)) + ",\"restarting\":true,\"repair\":true");
+    r.restart = true;
+    return r;
   }
 
   if (action == "enter") {

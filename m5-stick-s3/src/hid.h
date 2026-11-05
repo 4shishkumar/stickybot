@@ -22,6 +22,12 @@ void tapEscape();
 void typeText(const String& s);  // US layout, ASCII
 void setBattery(uint8_t percent);
 
+// Fn / Globe: macOS only accepts it from an Apple keyboard, so while the saved
+// combo has Fn the stick identifies as one (chosen at boot). needsRestart():
+// saving this combo changes that, so restart (and re-pair on the Mac).
+bool appleId();
+bool needsRestart(const Combo& c);
+
 void disconnect();            // stay paired, stop Bluetooth until reconnect()
 void reconnect();
 bool paired(uint8_t slot);

@@ -6,6 +6,7 @@ import {firmwarePanel} from "../firmware.js";
 export const title = "Stick";
 export const subtitle = "The stick's own settings. They're saved on the stick, so they stay with it.";
 
+// Fallback for older firmware; newer sticks send their own list (with Fn) in `keys`.
 const MODS = [["Ctrl", 1], ["Option", 4], ["Shift", 2], ["Cmd", 8]];
 let root = null, st = null, keys = null, via = null, snd = null;
 
@@ -32,7 +33,9 @@ async function send(action, args, okText, restarts) {
   const r = await proto(action, args);
   if (!report(r, okText)) return false;
   if (r.reply && r.reply.restarting || restarts) {
-    toast("The stick is restarting…");
+    toast(r.reply && r.reply.repair
+      ? "The stick is restarting with a new keyboard identity (for Fn): forget it in the Mac's Bluetooth settings and pair again."
+      : "The stick is restarting…");
     setTimeout(load, 6000);
   } else load();
   return true;
@@ -112,14 +115,14 @@ function unlockCard() {
 
 function comboCard() {
   const mods = st.mods || 0;
-  const boxes = MODS.map(([label, bit]) => h("label", {class: "switch"},
+  const boxes = (keys && keys.mods ? keys.mods : MODS).map(([label, bit]) => h("label", {class: "switch"},
     h("input", {type: "checkbox", id: "mod" + label, checked: !!(mods & bit), "data-bit": bit}), h("span", null, label)));
   const keySel = h("select", {id: "comboKey"},
     h("option", {value: 0, selected: !st.key}, "(none — modifiers only)"),
     (keys && keys.keys ? keys.keys : []).map(([n, code]) => h("option", {value: code, selected: code === st.key}, n)));
   const parts = (st.combo || "").split("+").filter(Boolean);
   return card("Button A",
-    h("p", {class: "lead"}, "The key combo button A holds down on the Mac (for Wispr Flow: Option + Cmd)."),
+    h("p", {class: "lead"}, "The key combo button A holds down on the Mac (for Wispr Flow: Option + Cmd, or Fn). Adding or removing Fn restarts the stick, and the Mac needs to pair with it again."),
     h("div", {class: "combo-keys", style: "margin-bottom:14px"}, parts.map(p => h("span", {class: "kbd"}, p))),
     field("Modifiers", h("div", {class: "row", style: "gap:16px"}, boxes)),
     field("Key", keySel, keys ? null : "Key list unavailable — modifiers only."),

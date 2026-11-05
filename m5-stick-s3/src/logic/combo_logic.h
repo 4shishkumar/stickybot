@@ -18,10 +18,14 @@ extern const KeyName KEYS[];   // KEYS[0] is "(none)", code 0
 extern const size_t  KEY_COUNT;
 
 struct ModName { const char* name; uint8_t bit; };
-extern const ModName MODS[4];  // Mac order: Ctrl, Option, Shift, Cmd
+constexpr size_t MOD_COUNT = 5;
+extern const ModName MODS[MOD_COUNT];  // Mac order: Fn, Ctrl, Option, Shift, Cmd
 
 namespace combo {
 constexpr uint8_t MOD_CTRL = 0x01, MOD_SHIFT = 0x02, MOD_ALT = 0x04, MOD_GUI = 0x08;  // left-hand modifiers
+// Not an HID modifier: the Apple fn / Globe key, sent in its own report bit (hid.cpp).
+constexpr uint8_t MOD_FN = 0x10;
+constexpr uint8_t MOD_MASK = MOD_CTRL | MOD_SHIFT | MOD_ALT | MOD_GUI | MOD_FN;
 constexpr uint8_t HID_RETURN = 0x28, HID_ESCAPE = 0x29, HID_DELETE = 0x4C, HID_PAGE_UP = 0x4B, HID_PAGE_DOWN = 0x4E;
 
 std::string toString(const Combo& c);                    // "(none)" when empty
