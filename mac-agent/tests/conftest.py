@@ -13,7 +13,7 @@ os.environ["STICK_AGENT_PORT"] = "18660"
 
 import pytest  # noqa: E402
 
-from stick_agent import clips, config, events, github, wispr_mic  # noqa: E402
+from stick_agent import audio_procs, clips, config, events, github, wispr_mic  # noqa: E402
 
 
 class FakeStream:
@@ -39,16 +39,37 @@ class FakeStream:
         return out
 
 
+class FakeInputStream(FakeStream):
+    """A sounddevice.InputStream that records nothing: tests hand it blocks with feed(x)."""
+
+    def feed(self, x):
+        import numpy as np
+        x = np.asarray(x, dtype=np.float32).reshape(-1, 1)
+        self.kw["callback"](x, len(x), None, None)
+
+
 class FakeSoundDevice:
-    """Stands in for the sounddevice module (no PortAudio, no real audio devices)."""
+    """Stands in for the sounddevice module (no PortAudio, no real audio devices).
+    `pending` devices only show up after a PortAudio restart (_terminate + _initialize)."""
 
     def __init__(self, devices=()):
         self.devices = list(devices)
+        self.pending = []
         self.streams = []
+        self.inputs = []
         self.fail_open = None
+        self.fail_input = None
+        self.restarts = 0
 
     def query_devices(self):
         return [dict(d, index=i) for i, d in enumerate(self.devices)]
+
+    def _terminate(self):
+        self.restarts += 1
+
+    def _initialize(self):
+        self.devices += self.pending
+        self.pending = []
 
     def OutputStream(self, **kw):  # noqa: N802 — sounddevice's name
         if self.fail_open:
@@ -56,6 +77,38 @@ class FakeSoundDevice:
         s = FakeStream(**kw)
         self.streams.append(s)
         return s
+
+    def InputStream(self, **kw):  # noqa: N802
+        if self.fail_input:
+            raise self.fail_input
+        s = FakeInputStream(**kw)
+        self.inputs.append(s)
+        return s
+
+
+class FakeCoreAudio:
+    """Stands in for audio_procs.CoreAudio: who records from which device, the default input."""
+
+    def __init__(self):
+        self.names = {120: "BlackHole 2ch", 115: "MacBook Pro Microphone", 108: "MacBook Pro Speakers"}
+        self.users = {}           # device id -> [(pid, name)]
+        self.default = "MacBook Pro Microphone"
+        self.builtin = ["MacBook Pro Microphone"]
+
+    def device_ids(self):
+        return tuple(self.names)
+
+    def devices(self):
+        return dict(self.names)
+
+    def default_input_name(self):
+        return self.default
+
+    def builtin_input_names(self):
+        return list(self.builtin)
+
+    def input_users(self, dev):
+        return list(self.users.get(dev, []))
 
 
 BLACKHOLE = {"name": "BlackHole 2ch", "max_output_channels": 2, "max_input_channels": 2, "default_samplerate": 48000.0}
@@ -66,6 +119,18 @@ def no_real_audio(monkeypatch):
     """Tests never open a real audio device: the wireless mic sees no devices unless a test adds one."""
     fake = FakeSoundDevice()
     monkeypatch.setattr(wispr_mic, "_sounddevice", lambda: fake)
+    return fake
+
+
+MACBOOK_MIC = {"name": "MacBook Pro Microphone", "max_output_channels": 0, "max_input_channels": 1,
+               "default_samplerate": 48000.0}
+
+
+@pytest.fixture(autouse=True)
+def no_core_audio(monkeypatch):
+    """...and never ask the real CoreAudio who is recording: a fake with nobody recording."""
+    fake = FakeCoreAudio()
+    monkeypatch.setattr(audio_procs, "CoreAudio", lambda: fake)
     return fake
 
 

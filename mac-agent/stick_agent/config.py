@@ -39,6 +39,10 @@ DEFAULT_CONFIG = {
     # Wireless Wispr mic: an A hold away from USB streams the stick's mic over Bluetooth and the
     # agent plays it into BlackHole 2ch (set Wispr's microphone to it). `stick-agent setup --with wireless_mic`
     "wireless_mic": False,
+    # Smart Wispr mic (with wireless_mic on): when Wispr records without the stick (its own shortcut on
+    # the keyboard), the agent plays this mic into BlackHole too: "default" = the Mac's default input
+    # at that moment (the built-in mic if that's BlackHole), a device name, or "off" (only the stick)
+    "wispr_fallback_mic": "default",
     # Events on the stick (see events.py): kind -> "celebrate" | "nice" | "headsup" | "off";
     # kinds not listed use events.DEFAULT_RULES
     "event_rules": {},
