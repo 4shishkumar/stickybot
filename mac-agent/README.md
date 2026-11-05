@@ -38,7 +38,8 @@ easier for the speech model than "P R 1234".
 - **Click B** on any agent screen to cancel and go back to Home. **Shake** does the same.
 
 ### The other buttons
-- **A (hold):** Wispr Flow dictation (the key combo; over USB the stick is also the mic).
+- **A (hold):** Wispr Flow dictation (the key combo; over USB the stick is also the mic, and with the
+  [wireless Wispr mic](#wireless-wispr-mic) it is the mic without a cable too).
 - **B (double press):** types your Mac password to unlock it.
 - **B (triple press):** the stick's menu.
 
@@ -87,7 +88,7 @@ then runs **`stick-agent setup`**, which asks what else to set up:
 | `claude` | on | checks Claude Code is installed and logged in; adds our 3 hooks to `~/.claude/settings.json` (backup first, other hooks kept) |
 | `github` | off | checks `gh`, logs in if needed, sets your main repo, turns on GitHub alerts |
 | `firmware` | off | flashes the bundled firmware to a stick plugged in by USB (keeps its settings) |
-| `wireless_mic` | — | coming later: the stick's mic for Wispr without a cable (BlackHole) |
+| `wireless_mic` | off | the stick's mic for Wispr without a cable: checks for BlackHole 2ch (tells you the `brew` command if it's missing — it needs your password, so it never runs it) and turns `wireless_mic` on |
 
 Options (for `install.sh` and `stick-agent setup`): `--yes` (defaults, no
 questions), `--with github,firmware`, `--without model`, `--dry-run`,
@@ -116,6 +117,29 @@ block Claude Code: if the agent isn't running they do nothing.
 
 ---
 
+### Wireless Wispr mic
+Over USB the stick is a USB microphone (*TinyUSB UAC1*). Without the cable, the agent can
+play the stick's mic into **BlackHole 2ch**, a free virtual audio device, and Wispr listens
+to that:
+
+1. **Install BlackHole 2ch** (once; asks for your Mac password):
+   `brew install --cask blackhole-2ch`
+2. **Turn it on:** `stick-agent setup --with wireless_mic`, or dashboard → **Settings →
+   Wireless Wispr mic** (or **Components → Wireless Wispr mic → Install**).
+3. **In Wispr Flow's settings, set the microphone to “BlackHole 2ch”.**
+4. Hold **A** and talk. The stick's screen says *Wispr hears the stick (BT)*; the
+   dashboard shows *Streaming to Wispr*.
+
+While A is held away from USB (and the agent is connected), the stick streams its mic
+over Bluetooth; the agent plays it into BlackHole with ~80 ms of buffering. The key goes
+down at once and the stream starts with it; the key-up waits 250 ms so the last words
+reach Wispr. Plugged in by USB with Wispr using the stick's USB mic, the stick doesn't
+stream. The stick also has its own switch (menu → *Wireless mic*), on by default.
+With BlackHole picked in Wispr, Wispr hears nothing when the agent isn't running —
+switch Wispr back to the Mac's or the stick's USB mic then.
+Remove: `stick-agent setup --uninstall wireless_mic` (turns it off; BlackHole stays —
+`brew uninstall --cask blackhole-2ch` removes it).
+
 ## Using it
 - **Menu bar** icon: state at a glance, stick volume, sounds on/off, pause, restart, dashboard.
 - **Dashboard:** http://localhost:8660 — activity, history, quick commands, sounds, events, settings, logs. Only reachable from this Mac; every change needs the token in `~/.stick-agent/token` (built into the page).
@@ -133,10 +157,11 @@ Files: everything lives in `~/.stick-agent/` — `config.json`, `commands.json`,
 | `commands.py` | quick commands: phrase matching, spoken numbers, app lookup |
 | `brain.py` | Claude Code headless (`claude -p`, stream-json), follow-ups, cancel |
 | `core.py` | the agent: talk → text → command or Claude → reply; approvals; sounds; speech |
+| `wispr_mic.py` | the wireless Wispr mic: stick audio → jitter buffer → BlackHole 2ch (sounddevice) |
 | `events.py`, `github.py`, `claude_hooks.py` | alerts: GitHub (via `gh`), Claude finished |
 | `home.py`, `feed.py`, `weather.py` | the stick's home screen card, facts/news, weather (Open-Meteo) |
 | `server.py`, `dashboard.html`, `menubar.py` | dashboard API (localhost + token) and menu bar |
 
 ## Not built yet
 Next meeting on the home screen (calendar), wake word, Mac-control tools for
-Claude beyond AppleScript, wireless Wispr (via BlackHole).
+Claude beyond AppleScript.

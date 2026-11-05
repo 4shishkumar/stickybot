@@ -9,7 +9,7 @@ installing nothing unless they want the full feature set.
 |---|---|---|
 | **1. Web installer** | nothing | the stick flashed and set up; **button A + Wispr** (keys over Bluetooth, the stick's mic over USB), Enter, unlock, sounds, menu, screens |
 | **2. Web edition** | nothing — a browser tab (Chrome / Edge / Brave) + **your own API key** (Anthropic or OpenRouter) | hold B → voice agent: answers + web search, quick commands that open URLs / app links, GitHub alerts, clock + weather on the stick — while the tab is open |
-| **3. Companion app** | one command (`curl … \| sh`) | everything: your **Claude Code subscription** (no API key), commands / files / AppleScript / any app, runs in the background from login, approvals + "Claude finished" for terminal Claude Code, wireless Wispr mic (later) |
+| **3. Companion app** | one command (`curl … \| sh`) | everything: your **Claude Code subscription** (no API key), commands / files / AppleScript / any app, runs in the background from login, approvals + "Claude finished" for terminal Claude Code, wireless Wispr mic (via BlackHole) |
 
 The site uses **one interface** for levels 2 and 3: when it finds the companion app
 running on the Mac it switches to full mode; otherwise it runs the web edition in
@@ -61,7 +61,8 @@ API key? Install the companion app"* — it uses your Claude Code login instead.
 - A brain interface: Claude Code / Anthropic API / OpenRouter / Ollama selectable in settings.
 
 ### Later
-Signed `.app` (if the command-line install is a hurdle), wake word, calendar on the home screen, wireless Wispr mic (BlackHole), local model.
+Signed `.app` (if the command-line install is a hurdle), wake word, calendar on the home screen, local model.
+(Done: the wireless Wispr mic — firmware 1.7.0 + the `wireless_mic` component.)
 
 ## Risks and notes
 - **Web Bluetooth:** Chrome-family only; the user may need to pick the stick once per session; macOS Bluetooth quirks (re-pair as a fix).

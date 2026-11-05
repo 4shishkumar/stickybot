@@ -15,7 +15,7 @@ talks to what, and where every file lives. For the wire formats see
  │          sounds, events, approvals)               │◀──────▶│    link ─ stt ─ commands ─ brain ─ events ─ server/menu  │
  │    TX  → JSON to the agent (talk start/stop,      │  NUS   │      │      │        │         │                         │
  │          approve/deny, acks)                      │        │      │   Parakeet   open/    claude -p ──▶ Claude (cloud)  │
- │    AUDIO    → mic audio (ADPCM, hold B)           │        │      │   (local)    osascript   │  uses your Claude Code    │
+ │    AUDIO    → mic audio (ADPCM, hold B / A)       │        │      │   (local)    osascript   │  uses your Claude Code    │
  │    AUDIO_IN ← sound clips / speech (ADPCM)        │        │      │                          │  login                    │
  │                                                   │  USB   │      └─ hooks ◀── Claude Code (PermissionRequest,         │
  │  USB: serial port + USB microphone (hold A)       │◀──────▶│                    UserPromptSubmit, Stop)                │
@@ -81,7 +81,12 @@ Claude Code wants to run something not pre-allowed → runs the **PermissionRequ
 - **Claude finished:** `UserPromptSubmit` records the start time, `Stop` reports the end; ≥ 2 min → an event.
 - **Events** have a level per kind (dashboard → Events): celebrate / nice / headsup / off → the stick shows the full-screen screen + sound and acks.
 
-### 4. The home screen
+### 4. Wireless Wispr mic (hold A away from USB)
+1. **Press A** — the key combo goes down at once (Wispr starts recording). If the agent's hello said `"wmic":true` and no host has the USB mic open, the stick also sends `wispr start` and streams 20 ms ADPCM frames on AUDIO.
+2. **Agent** (`wispr_mic.py`) — frames are decoded, put in order by seq (lost → silence), resampled to BlackHole's rate (soxr) and played from an ~80 ms jitter buffer by a PortAudio stream (sounddevice) into **BlackHole 2ch**, which Wispr has as its microphone. Nothing is transcribed by the agent.
+3. **Release A** — the stick keeps streaming 250 ms, then the key goes up and `wispr stop` follows; the agent plays out what's left.
+
+### 5. The home screen
 Every 8 s the agent's *hello* message carries the time (stick clock), the weather (Open-Meteo, every 30 min) and the **home card** (`home.py`: approval > last answer > Claude Code sessions > facts / news / Wikipedia). The stick draws it — and the eyes peek now and then on its own.
 
 ## Why Claude Code as the brain — and the alternatives

@@ -85,6 +85,7 @@ and can be ignored.
 | `web-on` / `web-off` | | Wi-Fi settings page on/off |
 | `standby` | `min=0..120` | Battery boards: standby after N idle minutes on battery (0 = never) |
 | `brightness` | `pct=10..100` | Boards with a screen: screen brightness |
+| `wmic` | `on=0\|1` | StickS3: the wireless Wispr mic switch (see section 5) |
 
 Responses that end in a restart include `"restarting":true`.
 
@@ -172,6 +173,9 @@ Buddy messages with `"src":"cli"`; the board answers
 | Mac → board | `{"src":"agent","hello":1,"v":1}` every ≤10 s — the board shows "agent ready" for 25 s after each |
 | board → Mac | `{"src":"agent","evt":"talk","state":"start","rate":16000,"codec":"ima-adpcm"}` when B becomes a hold |
 | board → Mac | `{"src":"agent","evt":"talk","state":"stop"}` after the last audio frame |
+| Mac → board | `"wmic":true\|false` in the hello (and on its own, `{"src":"agent","wmic":…}`, when it changes) — the agent can play the wireless Wispr mic (its `wireless_mic` is on and BlackHole 2ch was found) |
+| board → Mac | `{"src":"agent","evt":"wispr","state":"start","rate":16000,"codec":"ima-adpcm"}` when A goes down for Wispr away from USB |
+| board → Mac | `{"src":"agent","evt":"wispr","state":"stop"}` after the last audio frame |
 | Mac → board | `{"src":"agent","state":"thinking"\|"working"\|"done"\|"error","heard":"…","text":"…"}` — shown on screen |
 
 Audio frames: 16 kHz mono IMA-ADPCM, ≤20 ms each, little-endian:
@@ -179,6 +183,20 @@ Audio frames: 16 kHz mono IMA-ADPCM, ≤20 ms each, little-endian:
 Each frame carries the decoder state at its start, so a lost frame only loses
 its own 20 ms. `seq` restarts at 0 for every talk. The first frames are the
 pre-roll (recorded since B went down) and arrive faster than real time.
+
+**Wireless Wispr mic** (StickS3 firmware 1.7.0+): the same audio frames, for Wispr
+instead of a request. The board streams while A holds the combo when all of these
+hold: its own switch is on (menu *Wireless mic*, `@wmic on=0|1`, state `wirelessMic`,
+default on), the agent's last hello said `"wmic":true`, the agent was heard from in
+the last 25 s, no host has the USB microphone open, and no B talk is recording. The
+key goes down first and the stream starts with it (no pre-roll: Wispr records from
+key-down; the first ~100 ms are the mic's settle silence). While streaming, the
+key-up waits 250 ms so the audio still on its way reaches Wispr before it stops.
+`seq` restarts at 0 for every stream. The agent doesn't transcribe these: it plays
+them in real time into the BlackHole 2ch virtual device (a lost frame becomes 20 ms
+of silence), which Wispr uses as its microphone. The speaker stays quiet meanwhile
+(the codec is half-duplex: cues wait until the mic is off). Older agents never send
+`wmic`, so the board never streams to them.
 
 **Sounds** (`"src":"agent"`):
 

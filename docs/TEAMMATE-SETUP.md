@@ -25,7 +25,7 @@ Two parts: **you** flash and name their stick on your Mac (about 3 minutes), the
 
 ### Wispr only (no software)
 1. **Pair:** System Settings → Bluetooth → *priya-key* → **Connect** → press **A** on the stick when it shows the code.
-2. **Wispr:** hold **A** to dictate. To use the stick's mic, plug it in by USB and pick **TinyUSB UAC1** as Wispr's mic (unplugged, Wispr uses the Mac's mic).
+2. **Wispr:** hold **A** to dictate. To use the stick's mic, plug it in by USB and pick **TinyUSB UAC1** as Wispr's mic (unplugged, Wispr uses the Mac's mic). Without a cable it needs the agent: see *Wireless Wispr mic* in `mac-agent/README.md`.
 3. **Unlock (optional):** set their Mac password on the USB settings page (step 4 above, on their Mac); then double-press **B** on the lock screen.
 
 That also gives them B click = Enter and the stick's own screens, sounds and menu.
