@@ -12,6 +12,12 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+The v1.8.5 build stopped on a test that assumed it runs on a Mac; this release has the
+same changes as 1.8.5 (the OpenRouter brain and the setup page).
+
+### Fixed
+- The setup page's tests no longer depend on the machine running them.
+
 ## [1.8.5] - 2026-11-05
 
 ### Added

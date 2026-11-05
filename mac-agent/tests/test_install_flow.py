@@ -27,6 +27,9 @@ def sandbox(home, tmp_path, monkeypatch):
     monkeypatch.setattr(installer, "brew_path", lambda: None)
     monkeypatch.setattr(installer, "blackhole_installed", lambda: False)
     monkeypatch.setattr(installer, "model_cached_bytes", lambda repo: 0)
+    # an Apple Silicon Mac on recent macOS, also when the tests run on Linux (the release build)
+    monkeypatch.setattr(install_flow.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(install_flow.platform, "mac_ver", lambda: ("15.4", ("", "", ""), "arm64"))
     return tmp_path
 
 
@@ -44,6 +47,15 @@ async def events_of(client, job):
 
 
 # --- the listing, skip / unskip ------------------------------------------------------------
+
+def test_welcome_flags_a_mac_that_cant_run_it(sandbox, monkeypatch):
+    monkeypatch.setattr(install_flow.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(install_flow.platform, "mac_ver", lambda: ("", ("", "", ""), ""))
+    state, detail, data = install_flow.check_welcome(None)
+    levels = {c["label"]: c["level"] for c in data["checks"]}
+    assert state == "unavailable" and detail == "this Mac can't run it"
+    assert levels["Apple Silicon"] == "err" and levels["macOS"] == "err"
+
 
 async def test_steps_come_in_order_with_states(client):
     r = await client.get("/api/install", headers=HOST)
