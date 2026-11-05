@@ -10,28 +10,66 @@ import rumps
 
 from . import config
 
-# SF Symbols (monochrome, follow light/dark mode like the system's own icons)
-SYMBOLS = {"ready": "waveform.circle", "listening": "waveform.circle.fill", "transcribing": "ellipsis.circle.fill",
-           "thinking": "ellipsis.circle.fill", "working": "ellipsis.circle.fill", "error": "xmark.circle",
-           "paused": "pause.circle", "no-stick": "circle.dashed", "searching": "circle.dashed",
-           "starting": "circle.dashed", "approval": "exclamationmark.circle.fill"}
+# The menu-bar icon is the dashboard's brand mark (the stick with two eyes), drawn as a template
+# image so it follows light / dark mode; the eyes show the state.
+STYLES = {"ready": "eyes", "listening": "filled", "transcribing": "up", "thinking": "up", "working": "up",
+          "error": "x", "paused": "closed", "no-stick": "dashed", "searching": "dashed", "starting": "dashed",
+          "approval": "badge"}
 _images = {}
 
 
-def symbol(name):
-    """NSImage for an SF Symbol, sized for the menu bar, or None."""
-    if name not in _images:
+def mark(style):
+    """NSImage (18 x 18 pt, template) of the StickyBot mark in `style`, or None (no AppKit)."""
+    if style not in _images:
         try:
-            from AppKit import NSImage, NSImageSymbolConfiguration
-            img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(name, "StickyBot")
-            cfg = NSImageSymbolConfiguration.configurationWithPointSize_weight_(15, 0.3)  # ~ regular weight
-            img = img.imageWithSymbolConfiguration_(cfg) if img else None
-            if img:
-                img.setTemplate_(True)
-            _images[name] = img
-        except Exception:  # noqa: BLE001 — older macOS: fall back to text
-            _images[name] = None
-    return _images[name]
+            _images[style] = _draw_mark(style)
+        except Exception:  # noqa: BLE001 — no AppKit: fall back to text
+            logging.getLogger("menubar").exception("menu-bar icon")
+            _images[style] = None
+    return _images[style]
+
+
+def _draw_mark(style):
+    from AppKit import NSBezierPath, NSColor, NSCompositingOperationClear, NSGraphicsContext, NSImage
+    from Foundation import NSMakeRect, NSMakeSize, NSPoint
+    img = NSImage.alloc().initWithSize_(NSMakeSize(18, 18))
+    img.lockFocus()
+    try:
+        NSColor.blackColor().set()
+        body = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(4.6, 1.2, 8.8, 15.6), 3.4, 3.4)
+        body.setLineWidth_(1.4)
+        if style == "dashed":
+            body.setLineDash_count_phase_([2.2, 1.6], 2, 0)
+        if style == "filled":
+            body.fill()
+        else:
+            body.stroke()
+        if style == "filled":  # eyes cut out of the filled stick
+            NSGraphicsContext.currentContext().setCompositingOperation_(NSCompositingOperationClear)
+        y = 10.6 if style == "up" else 8.6
+        if style in ("eyes", "filled", "up", "badge"):
+            for x in (6.9, 9.6):
+                NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(x, y, 1.6, 3.6), 0.8, 0.8).fill()
+        elif style == "closed":
+            for x in (6.6, 9.4):
+                NSBezierPath.fillRect_(NSMakeRect(x, 10.0, 2.2, 1.1))
+        elif style == "x":
+            for cx in (7.7, 10.4):
+                for dx in (-1, 1):
+                    line = NSBezierPath.bezierPath()
+                    line.moveToPoint_(NSPoint(cx - 1, 9.4 - dx))
+                    line.lineToPoint_(NSPoint(cx + 1, 9.4 + dx))
+                    line.setLineWidth_(1.0)
+                    line.stroke()
+        if style == "badge":  # something waits for you
+            NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(12.4, 12.4, 5.2, 5.2)).fill()
+    finally:
+        img.unlockFocus()
+    img.setTemplate_(True)
+    img.setAccessibilityDescription_("StickyBot")
+    return img
+
+
 CHECK = "Check for Updates…"
 SETUP = "Finish setup…"
 SETUP_EVERY_S = 30
@@ -115,7 +153,7 @@ class Menu(rumps.App):
         key = "approval" if prompts else s
         if key != self.shown:
             item = getattr(getattr(self, "_nsapp", None), "nsstatusitem", None)
-            img = symbol(SYMBOLS.get(key, "circle.dashed"))
+            img = mark(STYLES.get(key, "dashed"))
             if item is not None and not getattr(self, "named", False):
                 item.setAutosaveName_("stick-agent")  # macOS remembers where you ⌘-drag it
                 self.named = True
