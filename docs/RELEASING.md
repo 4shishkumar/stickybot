@@ -84,6 +84,15 @@ git push origin v1.7.2
 - **Re-running install.sh** moves a release install to the newest stable release after it.
   A fresh install starts on the latest stable release (or `main` before the first one).
 
+## The BlackHole pin (setup page)
+
+The setup page's one-click BlackHole 2ch install uses one tested package, pinned in
+`installer.BLACKHOLE_PIN` (version, url, sha256), and checks its signature (Existential
+Audio's Developer ID, notarized). To move to a newer BlackHole: test it with Wispr first
+(wireless mic, a few dictations), then copy `version`, `url` and `sha256` from
+https://formulae.brew.sh/api/cask/blackhole-2ch.json into the pin and note it in the
+changelog. An installed BlackHole is never reinstalled or downgraded.
+
 ## Developers: firmware without a release
 
 `make -C m5-stick-s3 release` builds the firmware and writes it to

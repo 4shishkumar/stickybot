@@ -7,6 +7,7 @@
   stick-agent status
   stick-agent logs       follow the log
   stick-agent open       open the dashboard
+  stick-agent install-page   open the setup page (speech model, Claude Code, GitHub, mic, your stick)
   stick-agent flash      flash the bundled firmware to a stick on USB  [--port P] [--backup]
                          --ble: over Bluetooth instead (stick 1.8.0+, needs the agent running)  [--force]
   stick-agent setup      install / check / remove parts (see `stick-agent setup --help`)
@@ -23,6 +24,7 @@ import plistlib
 import subprocess
 import sys
 import threading
+import time
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -104,8 +106,8 @@ def run(menubar=True):
 
     async def main():
         await server.serve(agent)
-        if not agent.cfg.get("stick"):
-            webbrowser.open(f"http://localhost:{config.PORT}")  # first run: pick your stick
+        if not installer_opens_page() and not agent.cfg.get("stick"):
+            webbrowser.open(f"http://localhost:{config.PORT}/#install")  # first run: the setup page
         await agent.run()
 
     if not menubar:
@@ -114,6 +116,20 @@ def run(menubar=True):
     from . import menubar as mb
     threading.Thread(target=lambda: asyncio.run(main()), daemon=True, name="agent").start()
     mb.Menu(agent).run()
+
+
+INSTALLER_FLAG = config.HOME / "installer-opens-page"  # install.sh writes it: it opens the page itself
+
+
+def installer_opens_page():
+    """True (once) when install.sh just started us and opens the setup page itself — so the
+    first run doesn't open a second tab. A flag older than 10 minutes is ignored."""
+    try:
+        fresh = time.time() - INSTALLER_FLAG.stat().st_mtime < 600
+        INSTALLER_FLAG.unlink()
+        return fresh
+    except OSError:
+        return False
 
 
 # --- background service (launchd login item) -----------------------------------
@@ -206,6 +222,9 @@ def main():
         os.execvp("tail", ["tail", "-n", "50", "-f", str(config.LOG)])
     elif cmd == "open":
         webbrowser.open(f"http://localhost:{config.PORT}")
+    elif cmd == "install-page":  # the setup page (what install.sh opens)
+        from . import install_flow
+        sys.exit(install_flow.open_page())
     elif cmd == "setup":
         from . import installer
         sys.exit(installer.main(sys.argv[2:]))

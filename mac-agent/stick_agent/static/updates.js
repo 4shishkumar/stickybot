@@ -6,7 +6,8 @@
 import {h, clear, get, post, toast, field, toggle, store, recall, remember, fmtAgo} from "./lib.js";
 
 // Runs an update job and streams it into `into`: {line} / {progress, stage} / {done, ok, error}.
-export function streamJob(jobsBase, job, into, onDone) {
+// onEvent(m) also sees every event (e.g. the setup page's {code, url} for the GitHub login).
+export function streamJob(jobsBase, job, into, onDone, onEvent) {
   const bar = h("div", {class: "progress"}, h("i"));
   const stage = h("div", {class: "small dim"}, "Starting…");
   const log = h("pre", {class: "log"});
@@ -18,6 +19,7 @@ export function streamJob(jobsBase, job, into, onDone) {
     if (m.line !== undefined) { log.textContent += m.line + "\n"; log.scrollTop = log.scrollHeight; }
     if (m.progress !== undefined) bar.firstChild.style.width = Math.max(0, Math.min(100, m.progress)) + "%";
     if (m.stage) stage.textContent = m.stage;
+    if (onEvent) onEvent(m);
     if (m.done) {
       es.close();
       bar.className = "progress " + (m.ok ? "done" : "err");

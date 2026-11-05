@@ -8,10 +8,19 @@
 #
 # What it does: checks this is an Apple Silicon Mac, installs uv (a standalone
 # Python manager — no Homebrew or system Python needed) if it's missing, makes
-# ~/.stick-agent/venv with Python 3.14, installs stick-agent into it, then hands
-# over to `stick-agent setup`, which asks what else to install (speech model,
-# Claude Code hooks, GitHub alerts, flashing a stick). Safe to run again: it
-# updates the code and only changes what's missing.
+# ~/.stick-agent/venv with Python 3.14, installs stick-agent into it, starts it
+# (the login item), then opens the setup page in your browser
+# (http://localhost:8660/#install), which walks through the rest one step at a time:
+# speech model, Claude Code, approvals, GitHub alerts, the wireless mic, your stick.
+# Reopen that page any time: `stick-agent install-page`, or the menu bar → Finish setup….
+#
+# Without a browser — an SSH session, nobody logged in at the screen, `open`
+# failing, --no-browser, or any of the setup options below — it hands over to
+# `stick-agent setup` in the terminal instead, as before. Scripts and AI agents
+# use --yes / --with / --without: those never open a browser.
+#
+# Safe to run again: it updates the code, restarts the agent so the new code
+# runs, and opens the setup page at the first step that isn't done.
 #
 # Code: a fresh install clones the repo into ~/.stick-agent/src and checks out the
 # latest stable release tag (main until the first release). Re-running moves a
@@ -19,17 +28,20 @@
 # (installs from before releases) does `git pull --ff-only`. The dashboard can do
 # the same update in one click (Settings → Updates).
 #
-# Options (passed on to `stick-agent setup`):
+# Options (passed on to `stick-agent setup`; any of them means: terminal, no browser):
 #   --yes                 no questions: install the defaults
-#   --with a,b            also install these   (core model claude github firmware)
+#   --with a,b            also install these   (core model claude github firmware wireless_mic mcp)
 #   --without a,b         skip these
 #   --dry-run             say what would happen, change nothing
 #   --uninstall [a,b|all] remove parts again   (--purge also deletes ~/.stick-agent)
 #   --no-login-item       don't add the login item (testing)
 # Own options:
 #   --src DIR             use this checkout instead of cloning / the script's folder
+#   --no-browser          set up in the terminal (`stick-agent setup`), not on the setup page
 #
-# Environment: STICK_AGENT_HOME (default ~/.stick-agent), STICK_AGENT_PORT, STICK_AGENT_LABEL.
+# Environment: STICK_AGENT_HOME (default ~/.stick-agent), STICK_AGENT_PORT, STICK_AGENT_LABEL;
+# for tests: STICK_AGENT_GUI=1|0 (is someone at the screen? default: detected),
+# STICK_AGENT_WAIT_S (how long to wait for the agent to answer, default 30).
 
 set -eu
 
@@ -61,10 +73,14 @@ Usage: ./install.sh [options]          (or: curl -fsSL <raw install.sh url> | sh
   --dry-run             show what would happen, change nothing
   --uninstall [all|a,b] remove the app (or just some components); --purge also deletes ~/.stick-agent
   --src PATH            use this checkout instead of cloning the repo
+  --no-browser          set up in the terminal instead of on the setup page
   -h, --help            this help
 
 It installs uv (if missing) into ~/.local/bin, Python + stick-agent into ~/.stick-agent,
-then runs `stick-agent setup` to pick the components. Re-running it updates.
+starts the agent, then opens the setup page (http://localhost:8660/#install) that walks
+through the rest. Reopen it with `stick-agent install-page`. With any of the options above
+(or over SSH, or with --no-browser) it runs `stick-agent setup` in the terminal instead.
+Re-running it updates.
 USAGE
       exit 0 ;;
   esac
@@ -76,10 +92,15 @@ say "stick-agent installer — log: $LOG"
 SRC=""
 DRY_RUN=0
 UNINSTALL=0
+MODE=browser   # the setup page; "terminal" = `stick-agent setup` here, as before
 for arg in "$@"; do
   case "$arg" in
-    --dry-run) DRY_RUN=1 ;;
-    --uninstall) UNINSTALL=1 ;;
+    --dry-run) DRY_RUN=1; MODE=terminal ;;
+    --uninstall) UNINSTALL=1; MODE=terminal ;;
+    --no-browser) MODE=terminal ;;
+    # scripts and AI agents: exactly today's non-interactive behaviour, never a browser
+    -y|--yes|--with|--with=*|--without|--without=*|--only|--only=*|--status|--json|--purge) MODE=terminal ;;
+    --no-login-item) MODE=terminal ;;   # no background agent to show a page
   esac
 done
 set_src_next=0
@@ -89,6 +110,7 @@ for arg in "$@"; do
   case "$arg" in
     --src) set_src_next=1 ;;
     --src=*) SRC="${arg#--src=}" ;;
+    --no-browser) ;;
     *) setup_args="$setup_args $(printf '%s' "$arg" | sed "s/'/'\\\\''/g; s/^/'/; s/\$/'/")" ;;
   esac
 done
@@ -188,7 +210,47 @@ else
   say "stick-agent $("$VENV/bin/python" -c 'import stick_agent; print(stick_agent.__version__)') ✓"
 fi
 
-# --- 5. hand over ------------------------------------------------------------------
+# --- 5. hand over: the setup page (or the terminal) -------------------------------
+# Someone at this Mac's screen? Not over SSH, `open` exists, and this user owns the console.
+gui_session() {
+  case "${STICK_AGENT_GUI:-}" in 1) return 0 ;; 0) return 1 ;; esac
+  [ -z "${SSH_CONNECTION:-}" ] && [ -z "${SSH_TTY:-}" ] || return 1
+  command -v open >/dev/null 2>&1 || return 1
+  [ "$(stat -f %Su /dev/console 2>/dev/null)" = "$(id -un)" ]
+}
+if [ "$MODE" = browser ] && ! gui_session; then
+  say "no browser here (SSH, or nobody at the screen) — setting up in the terminal"
+  MODE=terminal
+fi
+
+if [ "$MODE" = browser ]; then
+  PORT="${STICK_AGENT_PORT:-8660}"
+  URL="http://localhost:$PORT/#install"
+  step "Starting stick-agent"
+  : >"$AGENT_HOME/installer-opens-page"   # the agent's first start then doesn't open a second tab
+  # core = the `stick-agent` command + the login item; (re)starting it makes updated code run
+  if "$VENV/bin/stick-agent" setup --yes --only core >>"$LOG" 2>&1; then
+    say "waiting for it to answer…"
+    waited=0
+    up=0
+    while [ "$waited" -lt "${STICK_AGENT_WAIT_S:-30}" ]; do
+      if curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/api/status" 2>/dev/null; then up=1; break; fi
+      sleep 1
+      waited=$((waited + 1))
+    done
+    if [ "$up" = 1 ] && open "$URL" >>"$LOG" 2>&1; then
+      printf '\n\033[1mContinue in your browser → %s\033[0m\n' "$URL"
+      say "(reopen it any time: stick-agent install-page, or the menu bar icon → Finish setup…)"
+      exit 0
+    fi
+    if [ "$up" = 1 ]; then say "couldn't open a browser — setting up in the terminal instead"
+    else say "the agent didn't answer on port $PORT (details: $AGENT_HOME/launchd.out) — setting up in the terminal instead"; fi
+  else
+    say "couldn't start the agent (details in $LOG) — setting up in the terminal instead"
+  fi
+  rm -f "$AGENT_HOME/installer-opens-page"
+fi
+
 step "Setting up"
 if [ "$DRY_RUN" = 1 ] && [ ! -x "$VENV/bin/stick-agent" ]; then
   say "would run: stick-agent setup$setup_args"

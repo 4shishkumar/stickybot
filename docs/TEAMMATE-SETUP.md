@@ -32,17 +32,21 @@ Two parts: **you** flash and name their stick on your Mac (about 3 minutes), the
 That also gives them B click = Enter and the stick's own screens, sounds and menu.
 
 ### The voice agent (hold B)
-1. **Install** — one command (no GitHub account needed):
+1. **Run one line in Terminal** (no GitHub account needed):
    ```sh
    curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stick-key/main/install.sh | sh
    ```
-   or clone the repo and run `./install.sh`. It installs everything into
-   `~/.stick-agent` and asks about the optional parts (speech model ~2.5 GB, Claude
-   Code hooks, GitHub alerts). Claude Code with **their own** login is needed for
-   Claude requests (the installer points to Anthropic's installer if it's missing).
-2. **Setup wizard:** the dashboard (http://localhost:8660) opens it — pick **their**
-   stick, set their repo for the PR / Devin quick commands, then hold B and say
-   "what time is it".
+   It installs the app into `~/.stick-agent`, starts it, and opens the **setup page**
+   in the browser (http://localhost:8660/#install).
+2. **Follow the page.** One step per screen, each with a button: the speech model
+   (~2.5 GB), Claude Code (with **their own** login — the page says when to run `claude`
+   once in Terminal), approvals on the stick, the stick tools for Claude Code, GitHub
+   alerts (log in with a one-time code), the wireless Wispr mic (macOS asks for the Mac
+   password once), then **their** stick: pair, pick, name, firmware, and a first
+   "what time is it". Optional steps can be skipped. Closed the tab? `stick-agent
+   install-page`, or the menu bar icon → *Finish setup…*.
+
+Over SSH (or with `--no-browser`) the installer asks its questions in the terminal instead.
 
 Each Mac's agent only talks to the stick picked in its own dashboard, so two sticks
 in the office don't interfere.

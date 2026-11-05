@@ -1,5 +1,6 @@
 """Menu-bar icon: state at a glance, dashboard, update check, pause, restart, quit."""
 import asyncio
+import threading
 import time
 import webbrowser
 
@@ -30,6 +31,8 @@ def symbol(name):
             _images[name] = None
     return _images[name]
 CHECK = "Check for Updates…"
+SETUP = "Finish setup…"
+SETUP_EVERY_S = 30
 
 
 def check_result(s):
@@ -67,7 +70,11 @@ class Menu(rumps.App):
             self.volume_items[pct] = item
             self.volume_menu.add(item)
         self.sounds_item = rumps.MenuItem("Sounds on the stick", callback=self.toggle_sounds)
-        self.menu = [self.status_item, self.update_item, None,
+        # "Finish setup…" (the setup page) while the speech model or the stick isn't set up yet
+        self.setup_item = rumps.MenuItem(SETUP, callback=lambda _: webbrowser.open(
+            f"http://localhost:{config.PORT}/#install"))
+        self.setup_pending, self.setup_checked = None, 0.0
+        self.menu = [self.status_item, self.update_item, self.setup_item, None,
                      rumps.MenuItem("Open dashboard", callback=lambda _: webbrowser.open(f"http://localhost:{config.PORT}")),
                      self.check_item, self.volume_menu, self.sounds_item, None,
                      self.pause_item, rumps.MenuItem("Restart", callback=self.restart), None,
@@ -104,6 +111,7 @@ class Menu(rumps.App):
                 item.state = 1 if abs(vol - pct) < 13 and (pct > 0 or vol == 0) else 0
         self.sounds_item.state = 1 if snd.get("on") else 0
         self.show_update()
+        self.show_setup()
         if self.check_said and time.monotonic() - self.check_said > 8:
             self.check_item.title, self.check_said = CHECK, 0.0
 
@@ -133,6 +141,25 @@ class Menu(rumps.App):
             self.update_item._menuitem.setHidden_(not title)
         except AttributeError:  # (rumps internals moved) — an empty title still says nothing
             pass
+
+    def show_setup(self):
+        """Shows "Finish setup…" while a recommended setup step is open; checked every 30 s off the
+        menu-bar thread (it looks at the model cache)."""
+        now = time.monotonic()
+        if now - self.setup_checked >= SETUP_EVERY_S:
+            self.setup_checked = now
+
+            def check():
+                from . import install_flow
+                try:
+                    self.setup_pending = install_flow.quick_pending(self.agent.cfg)
+                except Exception:  # noqa: BLE001
+                    self.setup_pending = False
+            threading.Thread(target=check, daemon=True, name="setup-check").start()
+        try:
+            self.setup_item._menuitem.setHidden_(not self.setup_pending)
+        except AttributeError:
+            self.setup_item.title = SETUP if self.setup_pending else ""
 
     def _stick(self, payload):
         """Runs a sound command on the agent's loop (we're on the menu-bar thread)."""

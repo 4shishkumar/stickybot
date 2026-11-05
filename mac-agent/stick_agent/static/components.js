@@ -46,6 +46,8 @@ export function componentsPanel() {
       return;
     }
     box.appendChild(h("p", {class: "lead"}, "The parts of the companion app. The same list as ", h("code", null, "stick-agent setup"), " in a terminal (which can also do the ones that need a password or a login)."));
+    box.appendChild(h("div", {class: "row"}, h("a", {class: "btn sm", href: "#install"}, "Open the setup page"),
+      h("span", {class: "small dim"}, "step by step, with the Claude / GitHub logins and BlackHole for the wireless mic — and any step you skipped")));
     for (const c of list) box.appendChild(row(c));
     if (running) box.appendChild(running.el);
   }

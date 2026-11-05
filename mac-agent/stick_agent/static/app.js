@@ -10,6 +10,7 @@ import * as events from "./pages/events.js";
 import * as settings from "./pages/settings.js";
 import * as logs from "./pages/logs.js";
 import * as wizard from "./wizard.js";
+import * as install from "./install.js";
 import {mountBanner} from "./updates.js";
 
 const ICON = {
@@ -33,6 +34,7 @@ const PAGES = [
   ["logs", "Logs", logs],
 ];
 const byName = Object.fromEntries(PAGES.map(([n, , m]) => [n, m]));
+byName.install = install;  // the setup page (#install/<step>): not in the nav, shown on its own
 let currentName = null, current = null;
 
 function buildNav() {
@@ -59,7 +61,8 @@ function show(name) {
   if (current && current.leave) current.leave();
   currentName = name;
   current = byName[name];
-  remember("page", name);
+  document.body.classList.toggle("install-mode", name === "install");
+  if (name !== "install") remember("page", name);
   for (const a of document.querySelectorAll("[data-page]")) a.classList.toggle("on", a.dataset.page === name);
   setHead(current);
   const root = clear($("#page"));
@@ -75,7 +78,7 @@ function route() {
     wizard.open(() => { history.replaceState(null, "", "#" + (currentName || "overview")); });
     return;
   }
-  show(hash || recall("page", "overview"));
+  show(hash.split("/")[0] || recall("page", "overview"));  // #install/<step>: the page follows the step
 }
 
 // ---------- status pill + approvals badge ----------
@@ -113,7 +116,12 @@ function connectEvents() {
 }
 
 async function maybeOnboard() {
-  if (location.hash === "#setup") return;
+  if (location.hash === "#setup" || location.hash.startsWith("#install")) return;
+  const ins = await get("/api/install");  // a new install: the setup page first (it includes the stick)
+  if (ins && !ins.error && ins.pending && !recall("installDismissed", false) && !(await refreshStatus()).stick) {
+    location.hash = "#install";
+    return;
+  }
   if (recall("setupDismissed", false)) return;
   const ob = await get("/api/onboarding");
   const s = await refreshStatus();
