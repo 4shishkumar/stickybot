@@ -157,6 +157,7 @@ Bluetooth connection as the keyboard. Writes need the paired (encrypted) link.
 | TX | `…0003…` | board → Mac | JSON lines (notify, split into ≤180-byte pieces) |
 | Audio | `…0004…` | board → Mac | agent audio frames (notify) |
 | Audio in | `…0005…` | Mac → board | sound clips: `[0][samples u32][rate u16]` start, `[1][frame]` data, `[2]` end → play (write without response; first/last acknowledged) |
+| OTA data | `…0006…` | Mac → board | firmware image packets `[offset u32 LE][bytes]` (write without response; StickS3 1.8.0+, see *Firmware update over Bluetooth*) |
 
 The service UUID is in the advertisement (while connected too), so Mac
 programs find the board by it; they should then stay with the one board the
@@ -269,3 +270,67 @@ session's `progress()` / `pin_home()` changes it (at most every 0.5 s); boards s
 - `sound`: any event, tune or clip name the board knows (see Sounds); empty = the level's default; nothing plays if sounds are off.
 - Up to 5 are queued and shown one at a time. They wait while an approval prompt, pairing, the menu, dictation (A held) or talking (B held) is on.
 - Serial test: `event celebrate|nice|headsup <title>|<sub>|<icon>`; the `screens` demo shows all three.
+
+### Firmware update over Bluetooth (StickS3 1.8.0+)
+
+The agent can update the stick over this link — no USB cable, no Wi-Fi. Only the
+**app image** is sent (`app.bin`, offset 0x10000 in the bundle); the bootloader,
+partition table and settings (NVS) are never touched. The stick writes it to its
+*other* OTA slot (`default_8MB.csv`: `ota_0` at 0x10000, `ota_1` at 0x340000,
+3.2 MB each, `otadata` at 0xE000), so the running firmware stays intact until the
+new one is checked and made the boot slot.
+
+**Support:** the board's `@state` has `"ota":1` (and `"otaPending":true|false`).
+Older firmware has neither, and no `…0006…` characteristic: update it over USB once.
+
+**Messages** (all `"src":"agent"`; the board's answers are `"evt":"ota"`):
+
+| Direction | Message |
+|---|---|
+| Mac → board | `{"ota":{"begin":{"size":N,"sha256":"<64 hex>","version":"1.8.1","compressed":false,"force":false}}}` |
+| board → Mac | `{"evt":"ota","state":"ready","offset":0,"size":N,"resumed":false,"window":16384,"chunk":240}` — send from `offset`; at most `window` bytes past the last ack; at most `chunk` data bytes per packet (MTU − 3 − 4) |
+| board → Mac | `{"evt":"ota","state":"refused","error":"busy","why":"dictation"}` — nothing started (codes below) |
+| Mac → board | packets on `…0006…`: `[offset u32 LE][bytes]`, in order, write without response |
+| board → Mac | `{"evt":"ota","state":"ack","offset":N}` — everything before N is written; after every 4 KB, at the end, and 150 ms after the last ack when more arrived |
+| board → Mac | `{"evt":"ota","state":"ack","offset":N,"gap":true}` — a packet past N arrived, so something was lost: **resend from N** (packets after a gap are dropped; repeated every 300 ms until the resend starts) |
+| Mac → board | `{"ota":{"end":1}}` once everything is acknowledged |
+| board → Mac | `{"evt":"ota","state":"done","offset":N}` — size and SHA-256 match, the image is valid and set to boot; the board restarts ~1.5 s later. A repeated `end` gets `done` again |
+| board → Mac | `{"evt":"ota","state":"error","error":"sha"\|"image"\|…,"offset":N}` — the transfer is over (`incomplete` is the exception: bytes are missing, the session stays; `begin` again to resume) |
+| Mac → board | `{"ota":{"cancel":1}}` → `{"evt":"ota","state":"cancelled","by":"agent"}`; the stick's **B** on the update screen → `"by":"stick"` |
+| Mac → board | `{"ota":{"status":1}}` → `{"evt":"ota","state":"status","receiving":…,"offset":…,"size":…,"pending":…}` |
+| board → Mac | `{"evt":"ota","state":"confirmed","fw":"1.8.1"}` — after a reboot into a new image, once it has confirmed itself (see Rollback) |
+
+Refusal / error codes: `busy` (+ `why`: `dictation`, `talk`, `approval`, `pairing`, `menu`, `wifi-update`),
+`battery` (below 30 % and not on USB power; unknown counts as low), `pending` (the running image isn't
+confirmed yet), `unsupported` (`compressed:true` — not implemented, send the raw image), `size` (0, bigger
+than the slot, or data past the end), `sha` (not 64 hex digits, or the image read back from flash doesn't
+match), `downgrade` / `same` (older / the running version without `force`), `image` (not an ESP32-S3 app
+image — magic 0xE9 and chip id 9 in its header — or `esp_ota_end` refused it), `open`, `write`, `read`,
+`incomplete`, `timeout` (no data or `begin` for 3 min), `not_started`.
+
+**Flow control:** write-without-response packets can be dropped under pressure (Core Bluetooth drops them
+when its queue is full; the agent waits for `canSendWriteWithoutResponse`, and the stick drops packets when
+its 24 KB queue is full). The board only takes bytes in order and says where it is; the agent keeps at most
+`window` bytes unacknowledged, rewinds to the offset of a `gap`, and resends from the last ack when nothing
+comes back for 1 s with the window full. Duplicates are ignored (and re-acked).
+
+**Resume:** if the link drops, the stick keeps the session (and the update screen, "Waiting for the Mac…")
+for 3 minutes. A `begin` with the same `size` + `sha256` answers `ready` with `"resumed":true` and the
+offset to continue from; anything else starts over.
+
+**Checks:** the link must be encrypted (the characteristic is `WRITE_ENC`, i.e. the paired Mac); the agent
+checks app.bin against the bundle manifest's sha256; the stick reads the written image back from flash,
+compares its SHA-256 (mbedTLS) with `begin.sha256`, then `esp_ota_end` validates the image itself
+(segments, checksum, appended hash) before `esp_ota_set_boot_partition`. Signing is not implemented yet
+(hooks: `ota.verify_signature()` in the agent, before `commit()` in `ota.cpp`).
+
+**Rollback:** the bootloader is built with `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`. A new image boots as
+*pending verify*; firmware 1.8.0+ confirms it (`esp_ota_mark_app_valid_cancel_rollback`) after it has run
+**25 s** with Bluetooth on, under the loop watchdog (5 s). Any reset before that — a crash, a hang (the
+watchdog), a power cut — makes the bootloader start the previous firmware again. While pending, the stick
+doesn't go to standby (waking is a reset) and refuses another update (`pending`).
+
+**On the stick:** "Updating NN %" with a bar and the version; **B** cancels (nothing changes); the menu,
+prompts, events and standby wait. Then "Restarting". On `begin` the stick asks the Mac for a quick connection interval, long
+link-layer packets and the 2M PHY (macOS decides what it grants; apps on the Mac cannot set these).
+

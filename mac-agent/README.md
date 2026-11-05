@@ -189,6 +189,11 @@ trouble in Wispr (e.g. `"stick-mic-bt"`); Wispr then needs the ranking again.
 - **Menu bar** icon: state at a glance, stick volume, sounds on/off, pause, restart, dashboard.
 - **Dashboard:** http://localhost:8660 — activity, history, quick commands, sounds, events, settings, logs. Only reachable from this Mac; every change needs the token in `~/.stick-agent/token` (built into the page).
 - **Terminal:** `stick-agent status | start | stop | restart | logs | open`, `stick-agent mcp install | status | uninstall`.
+- **Firmware:** dashboard → Stick → Firmware. **Update over Bluetooth** (stick 1.8.0+, connected; no cable, ~1–2 min,
+  the stick shows the progress and B cancels) or **Update via USB** (any firmware; also the recovery path).
+  Terminal: `stick-agent flash --ble [--force]` (through the running agent) or `stick-agent flash [--port P] [--backup]`.
+  Both use the bundle in `stick_agent/firmware/` and keep the stick's settings; see
+  [PROTOCOL.md](../PROTOCOL.md#firmware-update-over-bluetooth-sticks3-180) and [BUILDING.md](../docs/BUILDING.md#over-bluetooth-no-cable-stick-firmware-180).
 
 Files: everything lives in `~/.stick-agent/` — `config.json`, `commands.json`,
 `history.jsonl`, `events.jsonl`, `agent.log`, `sounds/` (Kenney CC0 packs),
@@ -197,7 +202,8 @@ Files: everything lives in `~/.stick-agent/` — `config.json`, `commands.json`,
 ## How it works
 | Module | |
 |---|---|
-| `link.py` | Bluetooth to the chosen stick (bleak): JSON messages, mic audio in, sound clips out |
+| `link.py` | Bluetooth to the chosen stick (bleak): JSON messages, mic audio in, sound clips and firmware out |
+| `flasher.py`, `ota.py`, `firmware_api.py` | firmware updates: USB (esptool) and over Bluetooth (the app image, acks / resume, rollback check) |
 | `stt.py` | speech to text — Parakeet (MLX), English-only v2 by default (`stt_model`) |
 | `commands.py` | quick commands: phrase matching, spoken numbers, app lookup |
 | `brain.py` | Claude Code headless: a persistent stream-json session (or `claude -p` per request), follow-ups, interrupt/cancel, timings |

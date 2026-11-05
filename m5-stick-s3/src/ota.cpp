@@ -65,6 +65,7 @@ struct FlashSink : otarx::Sink {
     mbedtls_sha256_free(&ctx);
     return ok;
   }
+  // Signed firmware (not yet): verify the image's signature here, before it can become the boot slot.
   bool commit() override {
     open_ = false;
     esp_err_t e = esp_ota_end(handle);  // checks the image (header, segments, its own checksum + hash)

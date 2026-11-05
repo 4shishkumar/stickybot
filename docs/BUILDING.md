@@ -57,6 +57,29 @@ pio run -e sticks3 -t upload           # build + flash over USB
 - Then pair it with the Mac: System Settings → Bluetooth → **stick-key** → Connect, and
   accept the code on the stick (button A).
 
+### Over Bluetooth (no cable; stick firmware 1.8.0+)
+Once the stick runs 1.8.0 or newer, the agent can update it over the Bluetooth link it already has:
+dashboard → Stick → Firmware → **Update over Bluetooth**, or `stick-agent flash --ble [--force]`
+(the agent must be running; `--force` for the same or an older version). It sends the bundled
+`app.bin` (`make -C m5-stick-s3 release`) — about 2 MB, roughly 1–2 minutes depending on what
+the Mac grants the link — and the stick shows "Updating NN %" (B cancels). The stick has to be
+on USB power or ≥ 30 % battery, and not dictating / talking / showing an approval.
+
+- **Only the app slot changes.** The stick writes the inactive OTA slot (`ota_0` / `ota_1`
+  in `default_8MB.csv`), checks the SHA-256 and the image, then switches slots. Bootloader,
+  partition table and settings (NVS) are never written — pairings and settings stay.
+- **Rollback is real:** the bootloader is built with `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`
+  (pioarduino's `esp32s3/sdkconfig`). The new image boots *pending verify* and confirms
+  itself after 25 s running with Bluetooth up (under the loop watchdog); if it crashes,
+  hangs or loses power before that, the stick boots the previous firmware again. `@state`
+  shows `"otaPending":true` until then; the dashboard waits for it.
+- **Interrupted?** The stick keeps the transfer 3 minutes; the agent resumes where it got to
+  when the link comes back. Cancel or a failed check changes nothing.
+- **Recovery is always USB:** `Update via USB` / `stick-agent flash` / `pio run -t upload`
+  write the app at 0x10000 and reset the boot selection (boot_app0), whichever slot the stick
+  was running. If the stick doesn't start at all: manual download mode (below) and flash by USB.
+- Firmware **before 1.8.0** has no Bluetooth update: flash 1.8.0 by USB once.
+
 ### Over Wi-Fi (OTA)
 1. Copy `secrets.example.ini` to `secrets.ini` (git-ignored) and put your **device
    password** in it (`upload_flags = --auth=<password>`; set the password on the settings page).
@@ -121,7 +144,8 @@ The stick keeps its settings (Mac pairings, combo, Mac password, Wi-Fi, sounds�
 in the flash's NVS area (0x9000–0xDFFF). Normal flashing — `pio run -t upload`,
 `make -C m5-stick-s3 flash`, the dashboard's **Update via USB**, `stick-agent flash`
 — writes only the bootloader (0x0), partition table (0x8000), boot_app0 (0xE000)
-and the app (0x10000), so settings survive.
+and the app (0x10000), so settings survive. **Update over Bluetooth** writes only
+the app image, into the other OTA slot.
 
 A single merged/"factory" image written at 0x0 (e.g. pioarduino's
 `firmware.factory.bin`) covers the NVS area with blank padding and **erases the

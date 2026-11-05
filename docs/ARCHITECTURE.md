@@ -17,6 +17,7 @@ talks to what, and where every file lives. For the wire formats see
  │          approve/deny, acks)                      │        │      │   Parakeet   open/    claude -p ──▶ Claude (cloud)  │
  │    AUDIO    → mic audio (ADPCM, hold B / A)       │        │      │   (local)    osascript   │  uses your Claude Code    │
  │    AUDIO_IN ← sound clips / speech (ADPCM)        │        │      │                          │  login                    │
+ │    OTA      ← firmware image (update over BLE)    │        │      │                          │                           │
  │                                                   │  USB   │      └─ hooks ◀── Claude Code (PermissionRequest,         │
  │  USB: serial port + USB microphone (hold A)       │◀──────▶│                    UserPromptSubmit, Stop)                │
  └───────────────────────────────────────────────────┘        │  dashboard: http://localhost:8660  ·  menu-bar icon       │
@@ -154,6 +155,28 @@ Sources: [MCP Streamable HTTP (2026-07-28)](https://modelcontextprotocol.io/spec
 [lifecycle (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle),
 [Claude Code MCP](https://code.claude.com/docs/en/mcp).
 
+### 7. Firmware update over Bluetooth (stick 1.8.0+)
+Dashboard → Stick → Firmware → **Update over Bluetooth** (or `stick-agent flash --ble`, which asks the running
+agent: it owns the link). `firmware_api.py` starts a job; `ota.py` does the rest over the existing link:
+
+```
+ flasher.bundled() → app.bin + sha256 (checked against the manifest)
+ @state over BLE: "ota":1? version newer (or force)? not pending?
+   │  {"ota":{"begin":{size, sha256, version}}} ───────────────────────────▶ busy / battery ≥ 30 % or USB / version
+   │  ◀── {"evt":"ota","state":"ready","offset":0,"window":16384,"chunk":240}   esp_ota_begin(other slot)
+   │  [offset][240 bytes] … (write without response, canSendWriteWithoutResponse) ─▶ queue (24 KB, PSRAM)
+   │  ◀── ack every 4 KB · "gap" → resend from there · link drop → begin again = resume   main loop: esp_ota_write
+   │  {"ota":{"end":1}} ───────────────────────────────────────────────────▶ read back → SHA-256 = manifest?
+   │  ◀── "done"                                                              esp_ota_end, set boot slot, restart
+   ▼
+ waits for the stick to reconnect: @state fw = new, otaPending → false ("confirmed" after ~25 s; else it rolled back)
+```
+
+Only the app slot is written (never the bootloader, partition table or NVS), so settings and pairings stay.
+The new image boots *pending verify* and confirms itself after 25 s of running with Bluetooth up; a crash,
+hang (loop watchdog) or power cut before that boots the old firmware again (the bootloader's rollback).
+USB (`flasher.py`, esptool) stays the fallback and the recovery path; firmware before 1.8.0 can only use USB.
+
 ## Why Claude Code as the brain — and the alternatives
 
 The agent runs **Claude Code** headless: one long-lived `claude -p --input-format stream-json` session (option A+ below), with `claude -p` per request as the fallback.
@@ -185,6 +208,9 @@ Note when sharing: each teammate runs the agent with **their own** Claude Code l
   of the dashboard itself; the ones that change the Mac go through Claude Code's permission prompt, take
   argument lists (no shell), only `http(s)` URLs and installed app names.
 - The Mac password on the stick is write-only (never read back or logged); typing it is a deliberate double-press.
+- Firmware over Bluetooth only on that encrypted link; the image must match the bundled manifest's sha256 (checked by the
+  agent, and by the stick after reading it back from flash); older / same versions need `force`. Images aren't signed
+  yet (hooks in `ota.verify_signature()` and `ota.cpp`'s `commit()`).
 
 ## Sources
 - Pi: [pi.dev overview](https://agentic-ai.readthedocs.io/en/latest/AgentHarness/pi-dev/), [Pi on Terminal Trove](https://terminaltrove.com/ai-coding-agents/pi/)
