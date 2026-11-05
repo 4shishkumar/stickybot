@@ -56,7 +56,7 @@ class Home:
         last = agent.last_reply
         if last and time.time() - last["t"] < FRESH_REPLY_S:
             cands.append({"k": "reply", "a": "Last answer", "b": last["text"]})
-        own = agent.brain.proc.pid if agent.brain.busy else None
+        own = getattr(agent.brain, "pid", None)  # our own Claude Code process isn't one of yours
         n = claude_sessions(own)
         if n:
             cands.append({"k": "claude", "a": "Claude Code", "b": f"{n} session{'s' if n != 1 else ''} open"})
