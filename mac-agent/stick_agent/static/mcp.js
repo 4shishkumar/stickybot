@@ -1,5 +1,5 @@
 // The stick tools for Claude sessions (mcp_server.py): the on/off switch, the tools, and
-// whether terminal Claude Code sessions have them (`stick-agent mcp install` = `claude mcp add`).
+// whether terminal Claude Code sessions have them (`stickybot mcp install` = `claude mcp add`).
 // Installing shows the exact command first and needs a second, confirming click.
 import {h, clear, get, post, toast, field, toggle, fmtAgo} from "./lib.js";
 
@@ -36,7 +36,7 @@ export function mcpPanel(c) {
     if (busy) row.appendChild(h("span", {class: "dim"}, "Running…"));
     if (confirming === "install") status.appendChild(h("div", null, h("div", {class: "dim"}, "This runs Claude Code's own command (it adds the server to your user settings, for every project):"),
       h("pre", {class: "log", style: "white-space:pre-wrap"}, t.command || "claude mcp add …"),
-      h("div", {class: "dim"}, "<token> is the agent's secret from ~/.stick-agent/token. In a terminal: stick-agent mcp install")));
+      h("div", {class: "dim"}, "<token> is the agent's secret from ~/.stick-agent/token. In a terminal: stickybot mcp install")));
     if (confirming === "uninstall") status.appendChild(h("pre", {class: "log"}, "claude mcp remove --scope user stick"));
     status.appendChild(row);
     if (st.last_call) status.appendChild(h("div", {class: "dim"}, `${st.calls} call${st.calls === 1 ? "" : "s"} since the agent started · last: ${st.last_call.tool} from ${st.last_call.from}, ${fmtAgo(st.last_call.t)}`));

@@ -2,7 +2,7 @@
 
 The firmware ("bundle": manifest.json + the flash parts) comes from, newest version first:
   ~/.stick-agent/firmware/<version>/   a release's assets, downloaded and sha256-checked
-                                       by releases.py (the update check / `stick-agent setup`)
+                                       by releases.py (the update check / `stickybot setup`)
   ~/.stick-agent/firmware/local/       a local build: `make -C m5-stick-s3 release` (developers;
                                        it wins a tie with a release of the same version)
   stick_agent/firmware/                one shipped inside the package (no longer committed)
@@ -249,7 +249,7 @@ async def flash(port, backup=False, emit=None, parts=None):
 
 
 def cli(port=None, backup=False):
-    """`stick-agent flash [--port P] [--backup]`."""
+    """`stickybot flash [--port P] [--backup]`."""
     fw = bundled()
     if not fw:
         print(NO_FIRMWARE)

@@ -1,22 +1,23 @@
 #!/bin/sh
-# stick-agent installer — the companion app for the M5StickS3 "stick-key".
+# StickyBot installer — the Mac app for the M5StickS3 StickyBot.
 #
 # One line:
-#   curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stick-key/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stickybot/main/install.sh | sh
 # or from a clone:
 #   ./install.sh
 #
 # What it does: checks this is an Apple Silicon Mac, installs uv (a standalone
 # Python manager — no Homebrew or system Python needed) if it's missing, makes
-# ~/.stick-agent/venv with Python 3.14, installs stick-agent into it, starts it
-# (the login item), then opens the setup page in your browser
-# (http://localhost:8660/#install), which walks through the rest one step at a time:
+# ~/.stick-agent/venv with Python 3.14, installs StickyBot into it, builds
+# ~/Applications/StickyBot.app around that Python (so macOS shows "StickyBot", not
+# "Python"), starts it (the login item), then opens the setup page in the StickyBot
+# window (http://localhost:8660/#install), which walks through the rest one step at a time:
 # speech model, Claude Code, approvals, GitHub alerts, the wireless mic, your stick.
-# Reopen that page any time: `stick-agent install-page`, or the menu bar → Finish setup….
+# Reopen that page any time: `stickybot install-page`, or the menu bar → Finish setup….
 #
 # Without a browser — an SSH session, nobody logged in at the screen, `open`
 # failing, --no-browser, or any of the setup options below — it hands over to
-# `stick-agent setup` in the terminal instead, as before. Scripts and AI agents
+# `stickybot setup` in the terminal instead, as before. Scripts and AI agents
 # use --yes / --with / --without: those never open a browser.
 #
 # Safe to run again: it updates the code, restarts the agent so the new code
@@ -25,10 +26,11 @@
 # Code: a fresh install clones the repo into ~/.stick-agent/src and checks out the
 # latest stable release tag (main until the first release). Re-running moves a
 # release install to the newest stable release after it, and a branch checkout
-# (installs from before releases) does `git pull --ff-only`. The dashboard can do
-# the same update in one click (Settings → Updates).
+# (installs from before releases) does `git pull --ff-only`. A clone whose origin
+# still has the repo's old name (ashish-kumar-noon/stick-key) gets the new one.
+# The dashboard can do the same update in one click (Settings → Updates).
 #
-# Options (passed on to `stick-agent setup`; any of them means: terminal, no browser):
+# Options (passed on to `stickybot setup`; any of them means: terminal, no browser):
 #   --yes                 no questions: install the defaults
 #   --with a,b            also install these   (core model claude github firmware wireless_mic mcp)
 #   --without a,b         skip these
@@ -37,7 +39,7 @@
 #   --no-login-item       don't add the login item (testing)
 # Own options:
 #   --src DIR             use this checkout instead of cloning / the script's folder
-#   --no-browser          set up in the terminal (`stick-agent setup`), not on the setup page
+#   --no-browser          set up in the terminal (`stickybot setup`), not on the setup page
 #
 # Environment: STICK_AGENT_HOME (default ~/.stick-agent), STICK_AGENT_PORT, STICK_AGENT_LABEL;
 # for tests: STICK_AGENT_GUI=1|0 (is someone at the screen? default: detected),
@@ -45,7 +47,7 @@
 
 set -eu
 
-REPO="ashish-kumar-noon/stick-key"
+REPO="ashish-kumar-noon/stickybot"
 AGENT_HOME="${STICK_AGENT_HOME:-$HOME/.stick-agent}"
 VENV="$AGENT_HOME/venv"
 LOG="$AGENT_HOME/install.log"
@@ -63,7 +65,7 @@ for arg in "$@"; do
   case "$arg" in
     -h|--help)
       cat <<'USAGE'
-install.sh — install (or update) the stick-agent companion app on this Mac
+install.sh — install (or update) StickyBot, the stick's Mac app, on this Mac
 
 Usage: ./install.sh [options]          (or: curl -fsSL <raw install.sh url> | sh -s -- [options])
 
@@ -76,23 +78,23 @@ Usage: ./install.sh [options]          (or: curl -fsSL <raw install.sh url> | sh
   --no-browser          set up in the terminal instead of on the setup page
   -h, --help            this help
 
-It installs uv (if missing) into ~/.local/bin, Python + stick-agent into ~/.stick-agent,
-starts the agent, then opens the setup page (http://localhost:8660/#install) that walks
-through the rest. Reopen it with `stick-agent install-page`. With any of the options above
-(or over SSH, or with --no-browser) it runs `stick-agent setup` in the terminal instead.
+It installs uv (if missing) into ~/.local/bin, Python + StickyBot into ~/.stick-agent,
+builds ~/Applications/StickyBot.app, starts it, then opens the setup page
+(http://localhost:8660/#install) that walks through the rest. Reopen it with `stickybot install-page`. With any of the options above
+(or over SSH, or with --no-browser) it runs `stickybot setup` in the terminal instead.
 Re-running it updates.
 USAGE
       exit 0 ;;
   esac
 done
 
-say "stick-agent installer — log: $LOG"
+say "StickyBot installer — log: $LOG"
 
-# --- our own options; the rest goes to `stick-agent setup` -------------------------
+# --- our own options; the rest goes to `stickybot setup` -------------------------
 SRC=""
 DRY_RUN=0
 UNINSTALL=0
-MODE=browser   # the setup page; "terminal" = `stick-agent setup` here, as before
+MODE=browser   # the setup page; "terminal" = `stickybot setup` here, as before
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1; MODE=terminal ;;
@@ -122,7 +124,7 @@ step "Checking this Mac"
 say "macOS $(sw_vers -productVersion 2>/dev/null || echo '?') on Apple Silicon ✓"
 
 if [ "$UNINSTALL" = 1 ]; then
-  [ -x "$VENV/bin/stick-agent" ] || die "stick-agent isn't installed in $VENV"
+  [ -x "$VENV/bin/stick-agent" ] || die "StickyBot isn't installed in $VENV"
   eval "set -- $setup_args"
   exec "$VENV/bin/stick-agent" setup "$@"
 fi
@@ -144,7 +146,7 @@ fi
 [ -z "$UV" ] || say "uv: $UV ($("$UV" --version 2>/dev/null || echo '?'))"
 
 # --- 3. the code ------------------------------------------------------------------
-step "Getting stick-agent"
+step "Getting StickyBot"
 here="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
 if [ -z "$SRC" ] && [ -n "$here" ] && [ -f "$here/mac-agent/pyproject.toml" ]; then
   SRC="$here"   # run from a clone: use it as is (editable install)
@@ -164,6 +166,13 @@ if [ -z "$SRC" ]; then
   if [ -d "$SRC/.git" ]; then
     if [ "$DRY_RUN" = 1 ]; then say "would update $SRC (git fetch, then the latest release or git pull)"; else
       say "updating $SRC…"
+      origin="$(git -C "$SRC" remote get-url origin 2>/dev/null || true)"
+      case "$origin" in   # the repo was renamed: follow it (GitHub redirects the old name, not forever)
+        *github.com[:/]ashish-kumar-noon/stick-key|*github.com[:/]ashish-kumar-noon/stick-key.git|*github.com[:/]ashish-kumar-noon/stick-key/)
+          new_origin="$(printf '%s' "$origin" | sed 's#ashish-kumar-noon/stick-key#ashish-kumar-noon/stickybot#')"
+          run git -C "$SRC" remote set-url origin "$new_origin"
+          say "origin is now $new_origin (the repo was renamed)" ;;
+      esac
       run git -C "$SRC" fetch --tags --force --quiet origin
       if git -C "$SRC" symbolic-ref -q HEAD >/dev/null; then
         run git -C "$SRC" pull --ff-only   # on a branch (installs from before releases): follow it
@@ -205,9 +214,9 @@ else
     say "creating the Python $PYTHON_VERSION environment…"
     run "$UV" venv --python "$PYTHON_VERSION" "$VENV"
   fi
-  say "installing stick-agent and its libraries (first time: a minute or two)…"
+  say "installing StickyBot and its libraries (first time: a minute or two)…"
   run "$UV" pip install --python "$VENV/bin/python" -e "$SRC/mac-agent"
-  say "stick-agent $("$VENV/bin/python" -c 'import stick_agent; print(stick_agent.__version__)') ✓"
+  say "StickyBot $("$VENV/bin/python" -c 'import stick_agent; print(stick_agent.__version__)') ✓"
 fi
 
 # --- 5. hand over: the setup page (or the terminal) -------------------------------
@@ -226,9 +235,9 @@ fi
 if [ "$MODE" = browser ]; then
   PORT="${STICK_AGENT_PORT:-8660}"
   URL="http://localhost:$PORT/#install"
-  step "Starting stick-agent"
+  step "Starting StickyBot"
   : >"$AGENT_HOME/installer-opens-page"   # the agent's first start then doesn't open a second tab
-  # core = the `stick-agent` command + the login item; (re)starting it makes updated code run
+  # core = the `stickybot` command, StickyBot.app + the login item; (re)starting it makes updated code run
   if "$VENV/bin/stick-agent" setup --yes --only core >>"$LOG" 2>&1; then
     say "waiting for it to answer…"
     waited=0
@@ -238,12 +247,13 @@ if [ "$MODE" = browser ]; then
       sleep 1
       waited=$((waited + 1))
     done
-    if [ "$up" = 1 ] && open "$URL" >>"$LOG" 2>&1; then
-      printf '\n\033[1mContinue in your browser → %s\033[0m\n' "$URL"
-      say "(reopen it any time: stick-agent install-page, or the menu bar icon → Finish setup…)"
+    # the StickyBot window if the app shows one, else the browser (install-page does both)
+    if [ "$up" = 1 ] && "$VENV/bin/stick-agent" install-page >>"$LOG" 2>&1; then
+      printf '\n\033[1mContinue on the setup page → %s\033[0m\n' "$URL"
+      say "(reopen it any time: stickybot install-page, or the menu bar icon → Finish setup…)"
       exit 0
     fi
-    if [ "$up" = 1 ]; then say "couldn't open a browser — setting up in the terminal instead"
+    if [ "$up" = 1 ]; then say "couldn't open the setup page — setting up in the terminal instead"
     else say "the agent didn't answer on port $PORT (details: $AGENT_HOME/launchd.out) — setting up in the terminal instead"; fi
   else
     say "couldn't start the agent (details in $LOG) — setting up in the terminal instead"
@@ -253,7 +263,7 @@ fi
 
 step "Setting up"
 if [ "$DRY_RUN" = 1 ] && [ ! -x "$VENV/bin/stick-agent" ]; then
-  say "would run: stick-agent setup$setup_args"
+  say "would run: stickybot setup$setup_args"
   say "(dry run — nothing changed)"
   exit 0
 fi

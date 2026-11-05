@@ -92,7 +92,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: |
-          set -- --title "stick-key $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
+          set -- --title "StickyBot $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
           if [ "$PRERELEASE" = true ]; then set -- "$@" --prerelease; fi
           gh release create "$GITHUB_REF_NAME" "$@" \
             dist/manifest.json dist/bootloader.bin dist/partitions.bin dist/boot_app0.bin dist/app.bin

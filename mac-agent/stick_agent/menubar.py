@@ -1,5 +1,7 @@
-"""Menu-bar icon: state at a glance, dashboard, update check, pause, restart, quit."""
+"""StickyBot's menu-bar icon: state at a glance, the dashboard (its own window or the browser),
+update check, pause, restart, quit."""
 import asyncio
+import logging
 import threading
 import time
 import webbrowser
@@ -21,7 +23,7 @@ def symbol(name):
     if name not in _images:
         try:
             from AppKit import NSImage, NSImageSymbolConfiguration
-            img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(name, "stick-agent")
+            img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(name, "StickyBot")
             cfg = NSImageSymbolConfiguration.configurationWithPointSize_weight_(15, 0.3)  # ~ regular weight
             img = img.imageWithSymbolConfiguration_(cfg) if img else None
             if img:
@@ -52,12 +54,21 @@ LABELS = {"ready": "Ready — hold B on the stick", "listening": "Listening…",
 
 class Menu(rumps.App):
     def __init__(self, agent):
-        super().__init__("stick-agent", title="", quit_button=None)
+        super().__init__("StickyBot", title="", quit_button=None)
         self.shown = None
         self.agent = agent
+        self.window = None  # the dashboard window (window.py), if WebKit is there
+        try:
+            from . import window
+            if window.available():
+                self.window = window.Window()
+        except Exception:  # noqa: BLE001 — the browser then
+            logging.getLogger("window").exception("no dashboard window")
+        agent.window = self.window.show_soon if self.window else None
+        self.reopen_listening = False
         self.status_item = rumps.MenuItem("Starting…")
         # "Update available: v1.8.0" (updates.py) — hidden until there is one
-        self.update_item = rumps.MenuItem("", callback=lambda _: webbrowser.open(f"http://localhost:{config.PORT}/#settings"))
+        self.update_item = rumps.MenuItem("", callback=lambda _: self.open_page("settings"))
         self.update_shown = None
         self.check_item = rumps.MenuItem(CHECK, callback=self.check_updates)  # its title shows the result
         self.check_said = 0.0
@@ -71,18 +82,34 @@ class Menu(rumps.App):
             self.volume_menu.add(item)
         self.sounds_item = rumps.MenuItem("Sounds on the stick", callback=self.toggle_sounds)
         # "Finish setup…" (the setup page) while the speech model or the stick isn't set up yet
-        self.setup_item = rumps.MenuItem(SETUP, callback=lambda _: webbrowser.open(
-            f"http://localhost:{config.PORT}/#install"))
+        self.setup_item = rumps.MenuItem(SETUP, callback=lambda _: self.open_page("install"))
         self.setup_pending, self.setup_checked = None, 0.0
         self.menu = [self.status_item, self.update_item, self.setup_item, None,
-                     rumps.MenuItem("Open dashboard", callback=lambda _: webbrowser.open(f"http://localhost:{config.PORT}")),
+                     rumps.MenuItem("Open StickyBot", callback=lambda _: self.open_page()),
+                     rumps.MenuItem("Open in browser", callback=lambda _: webbrowser.open(f"http://localhost:{config.PORT}")),
                      self.check_item, self.volume_menu, self.sounds_item, None,
                      self.pause_item, rumps.MenuItem("Restart", callback=self.restart), None,
-                     rumps.MenuItem("Quit stick-agent", callback=self.quit)]
+                     rumps.MenuItem("Quit StickyBot", callback=self.quit)]
         self.timer = rumps.Timer(self.refresh, 0.5)
         self.timer.start()
 
+    def open_page(self, page=""):
+        """Main thread (a menu callback): the dashboard in the StickyBot window, else the browser."""
+        if self.window:
+            try:
+                self.window.show(page)
+                return
+            except Exception:  # noqa: BLE001
+                logging.getLogger("window").exception("couldn't show the window")
+        webbrowser.open(f"http://localhost:{config.PORT}/" + (f"#{page}" if page else ""))
+
     def refresh(self, _):
+        if self.window and not self.reopen_listening:  # NSApplication has finished launching by now
+            self.reopen_listening = True
+            try:
+                self.window.listen_for_reopen()
+            except Exception:  # noqa: BLE001
+                logging.getLogger("window").exception("no reopen handler")
         s = self.agent.state
         prompts = len(self.agent.prompts)
         key = "approval" if prompts else s
@@ -97,7 +124,7 @@ class Menu(rumps.App):
                 item.button().setTitle_("")
                 self.shown = key
             elif item is not None:
-                self.title = "Stick"
+                self.title = "StickyBot"
                 self.shown = key
         text = f"Waiting for approval ({prompts})" if prompts else LABELS.get(s, s)
         if self.agent.detail and s in ("working", "error"):

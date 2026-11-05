@@ -10,6 +10,8 @@ import tempfile
 
 os.environ["STICK_AGENT_HOME"] = tempfile.mkdtemp(prefix="stick-agent-test-")
 os.environ["STICK_AGENT_PORT"] = "18660"
+# StickyBot.app (app.py): never ~/Applications. Tests that build one set their own path.
+os.environ["STICK_AGENT_APP"] = os.path.join(tempfile.mkdtemp(prefix="stickybot-app-test-"), "StickyBot.app")
 
 import pytest  # noqa: E402
 

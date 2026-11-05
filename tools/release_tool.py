@@ -25,7 +25,7 @@ INIT = ROOT / "mac-agent" / "stick_agent" / "__init__.py"
 PYPROJECT = ROOT / "mac-agent" / "pyproject.toml"
 CHANGELOG = ROOT / "CHANGELOG.md"
 CONFIG_H = ROOT / "m5-stick-s3" / "src" / "config.h"
-REPO_URL = "https://github.com/ashish-kumar-noon/stick-key"
+REPO_URL = "https://github.com/ashish-kumar-noon/stickybot"
 HEADING = re.compile(r"^## \[([^\]]+)\](.*)$", re.M)
 
 

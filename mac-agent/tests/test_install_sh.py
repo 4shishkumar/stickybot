@@ -24,7 +24,11 @@ case "$1" in
 esac
 """,
     "python.stub": "#!/bin/sh\necho 9.9.9\n",
-    "agent.stub": '#!/bin/sh\necho "stick-agent $*" >>"$FAKE_LOG"\nexit "${FAKE_AGENT_RC:-0}"\n',
+    "agent.stub": ('#!/bin/sh\necho "stick-agent $*" >>"$FAKE_LOG"\n'
+                   '[ "$1" = install-page ] && exit "${FAKE_PAGE_RC:-0}"\nexit "${FAKE_AGENT_RC:-0}"\n'),
+    # real git, except what would reach the network
+    "git": ('#!/bin/sh\ncase "$3" in fetch|pull) echo "git $*" >>"$FAKE_LOG"; exit 0 ;; esac\n'
+            'exec /usr/bin/git "$@"\n'),
     "curl": '#!/bin/sh\necho "curl $*" >>"$FAKE_LOG"\nexit "${FAKE_CURL_RC:-0}"\n',
     "open": '#!/bin/sh\necho "open $*" >>"$FAKE_LOG"\nexit "${FAKE_OPEN_RC:-0}"\n',
 }
@@ -46,8 +50,14 @@ def fake(tmp_path):
            "FAKE_BIN": str(bin_), "STICK_AGENT_HOME": str(tmp_path / ".stick-agent"), "STICK_AGENT_PORT": "18998",
            "STICK_AGENT_GUI": "1", "STICK_AGENT_WAIT_S": "2", "TERM": "dumb"}
 
-    def run(*args, **extra):
-        r = subprocess.run(["/bin/sh", str(SCRIPT), "--src", str(src), *args], env={**env, **extra},
+    alone = tmp_path / "dl" / "install.sh"  # as if downloaded (curl | sh): not next to a clone
+    alone.parent.mkdir()
+    alone.write_text(SCRIPT.read_text())
+
+    def run(*args, src_arg=True, **extra):
+        script = SCRIPT if src_arg else alone
+        r = subprocess.run(["/bin/sh", str(script), *(["--src", str(src)] if src_arg else []), *args],
+                           env={**env, **extra},
                            capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
                            start_new_session=True)  # no /dev/tty: like a script / an AI agent
         r.calls = [line for line in log.read_text().splitlines() if not line.startswith("uv ")]
@@ -61,10 +71,10 @@ def test_default_opens_the_setup_page(fake):
     r = fake()
     assert r.returncode == 0, r.stdout + r.stderr
     assert "stick-agent setup --yes --only core" in r.calls
-    assert "open http://localhost:18998/#install" in r.calls
+    assert "stick-agent install-page" in r.calls  # the StickyBot window, else the browser
     assert any(c.startswith("curl ") and "18998/api/status" in c for c in r.calls)
-    assert "Continue in your browser → http://localhost:18998/#install" in r.stdout
-    assert "stick-agent install-page" in r.stdout
+    assert "Continue on the setup page → http://localhost:18998/#install" in r.stdout
+    assert "stickybot install-page" in r.stdout
     assert (fake.home / "installer-opens-page").exists()  # the agent won't open a second tab
 
 
@@ -73,7 +83,7 @@ def test_rerun_restarts_and_opens_again(fake):
     r = fake()
     assert r.returncode == 0
     assert r.calls[0] == "stick-agent setup --yes --only core"  # (re)starts the agent: new code runs
-    assert "open http://localhost:18998/#install" in r.calls
+    assert "stick-agent install-page" in r.calls
 
 
 @pytest.mark.parametrize("args, setup", [
@@ -105,9 +115,9 @@ def test_no_gui_uses_the_terminal(fake):
 
 
 def test_open_failing_falls_back_to_the_terminal(fake):
-    r = fake(FAKE_OPEN_RC="1")
+    r = fake(FAKE_PAGE_RC="1")
     assert r.calls[-1] == "stick-agent setup"
-    assert "couldn't open a browser" in r.stdout
+    assert "couldn't open the setup page" in r.stdout
     assert not (fake.home / "installer-opens-page").exists()
 
 
@@ -127,3 +137,26 @@ def test_help_mentions_the_setup_page(fake):
 
 def test_posix_syntax():
     assert subprocess.run(["/bin/sh", "-n", str(SCRIPT)]).returncode == 0
+
+
+def test_an_install_clone_under_the_old_repo_name_follows_the_rename(fake):
+    src = fake.home / "src"
+    subprocess.run(["git", "init", "-q", str(src)], check=True)
+    subprocess.run(["git", "-C", str(src), "remote", "add", "origin",
+                    "https://github.com/ashish-kumar-noon/stick-key.git"], check=True)
+    (src / "mac-agent").mkdir()
+    (src / "mac-agent/pyproject.toml").write_text("")
+    r = fake(src_arg=False)
+    assert r.returncode == 0, r.stdout + r.stderr
+    url = subprocess.run(["git", "-C", str(src), "remote", "get-url", "origin"], capture_output=True, text=True)
+    assert url.stdout.strip() == "https://github.com/ashish-kumar-noon/stickybot.git"
+    assert "the repo was renamed" in r.stdout
+    assert any(c.startswith("git -C") and "fetch" in c for c in r.calls)  # then fetched as before
+    r = fake(src_arg=False)  # once
+    assert "the repo was renamed" not in r.stdout
+
+
+def test_the_one_line_install_uses_the_new_repo_name():
+    text = SCRIPT.read_text()
+    assert 'REPO="ashish-kumar-noon/stickybot"' in text
+    assert "raw.githubusercontent.com/ashish-kumar-noon/stickybot/main/install.sh" in text

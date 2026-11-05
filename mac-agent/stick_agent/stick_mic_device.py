@@ -1,9 +1,9 @@
-"""The "stick-mic-bluetooth" microphone: a CoreAudio device that exists only while A is held.
+"""The "<stick>-bt-mic" microphone ("stickybot-bt-mic"): a CoreAudio device that exists only while A is held.
 
 Wispr Flow keeps a ranked list of microphones and, whenever the device list
 changes, uses the highest-ranked one that is present. So the agent makes a mic
 appear just before the stick presses Wispr's shortcut and removes it shortly
-after the key-up: with "stick-mic-bluetooth" ranked first, Wispr hears the stick
+after the key-up: with "<stick>-bt-mic" ranked first, Wispr hears the stick
 while A is held and the user's usual mic the rest of the time. Nothing is
 pinned and nothing forwards the real mic.
 
@@ -23,7 +23,7 @@ stick's audio into its input is one of two "carriers":
   plays into BlackHole's output, which is the aggregate's input.
 
 Any process may create and destroy aggregates and taps without admin rights;
-macOS lists the aggregate like a physical mic ("stick-mic-bluetooth (Aggregate)").
+macOS lists the aggregate like a physical mic ("stickybot-bt-mic (Aggregate)").
 
 Aggregates and public taps both outlive the process that created them, so every
 start, disconnect and shutdown path destroys the aggregates with our UID and the
@@ -40,13 +40,16 @@ import logging
 import math
 import os
 import platform
+import re
 import struct
 import threading
 import time
 
 log = logging.getLogger("wispr")
 
-NAME = "stick-mic-bluetooth"  # the old fixed name (and the fallback before a stick is picked)
+NAME = "stickybot-bt-mic"  # the fallback: no stick picked yet, or its name has nothing usable
+OLD_NAME = "stick-mic-bluetooth"  # the fixed name before 1.8.1
+OLD_AUTO = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*-mic-bluetooth")  # "<slug>-mic-bluetooth", 1.8.1-1.8.6
 
 
 def slug(stick_name):
@@ -63,10 +66,20 @@ def slug(stick_name):
 
 
 def name_for(stick_name):
-    """The Bluetooth mic's name for this stick: '<stick>-mic-bluetooth' ('stick-key-mic-bluetooth'),
-    so two sticks' mics differ; the USB mic is '<stick>-mic-usb'."""
+    """The Bluetooth mic's name for this stick: '<stick>-bt-mic' ('stickybot-bt-mic'), so two
+    sticks' mics differ; the USB mic is '<stick>-usb-mic' (the firmware names that one)."""
     s = slug(stick_name)
-    return f"{s}-mic-bluetooth" if s else NAME
+    return f"{s}-bt-mic" if s else NAME
+
+
+def is_auto_name(name):
+    """A saved wispr_mic_name that is an older automatic name ("stick-mic-bluetooth",
+    "<slug>-mic-bluetooth"): it means "automatic", so the mic follows the stick's name
+    ("<slug>-bt-mic" now). Anything else was typed in and wins."""
+    name = str(name or "").strip()
+    return name == OLD_NAME or bool(OLD_AUTO.fullmatch(name))
+
+
 UID = "com.stickkey.wireless-mic"
 CARRIER = "BlackHole 2ch"  # the driver underneath; Wispr never needs to be set to it
 TAP, BLACKHOLE = "tap", "blackhole"  # the carriers (module docstring)
@@ -75,7 +88,8 @@ CARRIER_PREFS = ("auto", TAP, BLACKHOLE)  # config wireless_mic_carrier
 TAP_SUFFIX = ".tap"            # a tap's name = the aggregate's UID + this (how stale ones are found)
 CHECK_SUFFIX = ".check"        # the probe's device: UID + this, name + "-check" (never the real one)
 TAP_MIN_MACOS = (14, 2)
-PERMISSION_HINT = ("allow System Audio Recording for the helper app (it shows as “Python”): System Settings → "
+PERMISSION_HINT = ("allow System Audio Recording for StickyBot (“Python” if StickyBot.app isn't set up): "
+                   "System Settings → "
                    "Privacy & Security → Screen & System Audio Recording → System Audio Recording Only")
 
 

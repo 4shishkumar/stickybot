@@ -13,7 +13,7 @@ export async function api(path, opts = {}) {
       headers: {"Content-Type": "application/json", "X-Stick-Token": TOKEN, ...(opts.headers || {})},
     });
   } catch (e) {
-    return {error: "The agent isn't responding. Is it running? (stick-agent status)", offline: true};
+    return {error: "The agent isn't responding. Is it running? (stickybot status)", offline: true};
   }
   let data = null;
   if ((r.headers.get("content-type") || "").includes("json")) {

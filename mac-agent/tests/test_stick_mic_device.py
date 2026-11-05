@@ -1,4 +1,4 @@
-"""The stick-mic-bluetooth device: created around an A hold, removed after it (fake CoreAudio)."""
+"""The <stick>-bt-mic device: created around an A hold, removed after it (fake CoreAudio)."""
 import asyncio
 import os
 
@@ -22,7 +22,7 @@ def fast(monkeypatch):
 def test_creates_a_public_aggregate_on_blackhole(no_core_audio):
     d = StickMicDevice(own_pid=1)
     assert d.ensure_present() == "created"
-    assert no_core_audio.created == [("stick-mic-bluetooth", UID, "BlackHole2ch_UID")]
+    assert no_core_audio.created == [("stickybot-bt-mic", UID, "BlackHole2ch_UID")]
     assert d.present and d.create_ms is not None
     assert d.ensure_present() == "present" and len(no_core_audio.created) == 1  # not twice
 
@@ -36,8 +36,8 @@ def test_remove_destroys_it(no_core_audio):
 
 
 def test_stale_ones_are_removed(no_core_audio):
-    no_core_audio.list[250] = ("stick-mic-bluetooth", UID)  # left by an agent that was killed
-    no_core_audio.list[251] = ("stick-mic-bluetooth", UID)
+    no_core_audio.list[250] = ("stickybot-bt-mic", UID)  # left by an agent that was killed
+    no_core_audio.list[251] = ("stickybot-bt-mic", UID)
     no_core_audio.list[252] = ("Someone else's aggregate", "com.other.agg")
     d = StickMicDevice(own_pid=1)
     assert d.cleanup_stale() == 2
@@ -45,7 +45,7 @@ def test_stale_ones_are_removed(no_core_audio):
 
 
 def test_an_existing_one_is_reused_after_a_restart(no_core_audio):
-    no_core_audio.list[250] = ("stick-mic-bluetooth", UID)
+    no_core_audio.list[250] = ("stickybot-bt-mic", UID)
     d = StickMicDevice(own_pid=1)
     assert d.ensure_present() == "present" and d.dev == 250 and no_core_audio.created == []
 
@@ -244,7 +244,7 @@ async def test_drop_removes_it_now(no_core_audio):
 
 
 def test_shutdown_is_synchronous_and_removes_leftovers(no_core_audio):
-    no_core_audio.list[250] = ("stick-mic-bluetooth", UID)
+    no_core_audio.list[250] = ("stickybot-bt-mic", UID)
     h, _ = holds()
     h.shutdown()
     assert no_core_audio.ours() == []
@@ -292,7 +292,7 @@ async def test_prepare_stream_stop_through_the_agent(wired, no_core_audio, no_re
     assert not wired.wispr.active
     assert await wait_for(lambda: not no_core_audio.ours())
     st = wired.status()["wireless_mic"]["device_mic"]
-    assert st["name"] == "stick-mic-bluetooth" and not st["present"]
+    assert st["name"] == "stickybot-bt-mic" and not st["present"]
 
 
 async def test_old_firmware_start_makes_no_device(wired, no_core_audio):
@@ -345,17 +345,35 @@ def test_names_follow_the_stick():
     from stick_agent import stick_mic_device as m
     assert m.slug("Arbaaz StickS3") == "arbaaz-sticks3"
     assert m.slug("  stick-key ") == "stick-key" and m.slug("Ana's  key!") == "ana-s-key" and m.slug("") == ""
-    assert m.name_for("stick-key") == "stick-key-mic-bluetooth"
-    assert m.name_for("Arbaaz StickS3") == "arbaaz-sticks3-mic-bluetooth"
-    assert m.name_for(None) == m.name_for("!!") == "stick-mic-bluetooth"  # no stick picked yet
+    assert m.name_for("StickyBot") == "stickybot-bt-mic"  # a default-named stick
+    assert m.name_for("stick-key") == "stick-key-bt-mic"
+    assert m.name_for("Arbaaz StickS3") == "arbaaz-sticks3-bt-mic"
+    assert m.name_for(None) == m.name_for("!!") == "stickybot-bt-mic"  # no stick picked yet
+
+
+@pytest.mark.parametrize("saved", ["stick-mic-bluetooth", "arbaaz-sticks3-mic-bluetooth", "stick-key-mic-bluetooth",
+                                   "  desk-mic-bluetooth "])
+def test_old_automatic_names_mean_automatic(saved):
+    from stick_agent import stick_mic_device as m
+    assert m.is_auto_name(saved)
+
+
+@pytest.mark.parametrize("typed", ["my mic", "Desk Mic-bluetooth", "stickybot-bt-mic", "wispr mic bluetooth", ""])
+def test_typed_names_are_not_automatic(typed):
+    from stick_agent import stick_mic_device as m
+    assert not m.is_auto_name(typed)
 
 
 async def test_the_mic_is_named_after_the_picked_stick(wired, no_core_audio):
     wired.cfg["stick"] = {"address": "X", "name": "Arbaaz StickS3"}
-    wired.cfg["wispr_mic_name"] = "stick-mic-bluetooth"  # the old default, saved in older configs: automatic
-    assert wired._mic_name() == "arbaaz-sticks3-mic-bluetooth"
+    for old in ("stick-mic-bluetooth", "arbaaz-sticks3-mic-bluetooth", "stick-key-mic-bluetooth"):
+        wired.cfg["wispr_mic_name"] = old  # an older automatic name, saved in older configs: automatic
+        assert wired._mic_name() == "arbaaz-sticks3-bt-mic"
     wired.cfg["wispr_mic_name"] = "my mic"
-    assert wired._mic_name() == "my mic"
+    assert wired._mic_name() == "my mic"  # typed in: it wins
+    wired.cfg["stick"] = {"address": "X", "name": "StickyBot"}
+    wired.cfg["wispr_mic_name"] = ""
+    assert wired._mic_name() == "stickybot-bt-mic"
 
 
 async def test_a_renamed_stick_renames_its_mic(wired, no_core_audio):
@@ -368,7 +386,7 @@ async def test_a_renamed_stick_renames_its_mic(wired, no_core_audio):
     assert config.load()["stick"]["name"] == "Desk Stick"
     assert await wait_for(lambda: not no_core_audio.ours())  # the old one goes
     await wired.holds.show(60)
-    assert [no_core_audio.list[d][0] for d in no_core_audio.ours()] == ["desk-stick-mic-bluetooth"]
+    assert [no_core_audio.list[d][0] for d in no_core_audio.ours()] == ["desk-stick-bt-mic"]
     await wired.holds.drop("test")
     wired._on_message({"src": "agent", "evt": "wispr", "name": "ignored"})  # not a @state reply
     assert wired.cfg["stick"]["name"] == "Desk Stick"

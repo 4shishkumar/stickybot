@@ -2,18 +2,18 @@
 // bar of steps, Install buttons with live progress (the agent's /api/install jobs), Skip on
 // the optional ones. The step lives in the URL, so a reload resumes. "Your stick" hands off
 // to the setup wizard (wizard.js); the repo goes through the same call as the wizard's.
-import {h, clear, get, post, toast, report, remember} from "./lib.js";
+import {h, clear, get, post, toast, report, remember, store} from "./lib.js";
 import {streamJob} from "./updates.js";
 import * as wizard from "./wizard.js";
 
 // el.append(), but leaving out null / undefined / false (append() would show them as text, e.g. "null")
 const append = (el, ...kids) => el.append(...kids.filter(k => k !== null && k !== undefined && k !== false));
 
-export const title = "Set up Stick Agent";
+export const title = "Set up StickyBot";
 export const subtitle = "";
 
-const DOCS = "https://github.com/ashish-kumar-noon/stick-key/blob/main/mac-agent/README.md";
-const TEAM_DOCS = "https://github.com/ashish-kumar-noon/stick-key/blob/main/docs/TEAMMATE-SETUP.md";
+const DOCS = "https://github.com/ashish-kumar-noon/stickybot/blob/main/mac-agent/README.md";
+const TEAM_DOCS = "https://github.com/ashish-kumar-noon/stickybot/blob/main/docs/TEAMMATE-SETUP.md";
 const KIND = {required: "", recommended: "Recommended", optional: "Optional"};
 const PILL = {done: ["ok", "Done"], todo: ["", "To do"], skipped: ["", "Skipped"], unavailable: ["warn", "Not available"]};
 const POLL_MS = 4000;
@@ -48,7 +48,7 @@ async function load() {
     // first start: the agent may still be coming up (or loading the speech model)
     clear(root).appendChild(shell(h("div", {class: "notice"}, h("div", {class: "grow"},
       h("b", null, r.missing ? "This version of the agent has no setup page" : "Waiting for the agent…"),
-      h("span", {class: "dim"}, r.missing ? "Update it, or use stick-agent setup in Terminal." : "It's starting up. This page retries by itself.")))));
+      h("span", {class: "dim"}, r.missing ? "Update it, or use stickybot setup in Terminal." : "It's starting up. This page retries by itself.")))));
     if (!r.missing) timer = setTimeout(load, 2000);
     return;
   }
@@ -116,7 +116,7 @@ function shell(body) {
   return h("div", {class: "inst"},
     h("header", {class: "inst-top"},
       h("div", {class: "brand-mark", "aria-hidden": "true"}, h("div", {class: "brand-eyes"}, h("i"), h("i"))),
-      h("div", {class: "grow"}, h("div", {class: "brand-name"}, "Set up Stick Agent"),
+      h("div", {class: "grow"}, h("div", {class: "brand-name"}, "Set up StickyBot"),
         h("div", {class: "small faint"}, "One step at a time. Optional steps can be skipped and done later.")),
       h("a", {class: "btn ghost sm", href: "#overview", onclick: () => remember("installDismissed", true)}, "Skip to dashboard")),
     h("nav", {class: "inst-steps", id: "instSteps", "aria-label": "Setup steps"}),
@@ -259,21 +259,24 @@ async function checkTap(btn) {
 
 function useTapInstead(out) {
   return h("details", null, h("summary", {class: "small"}, "No driver needed: use the Apple audio tap instead"),
-    h("p", {class: "small dim"}, "This Mac can carry the stick's audio with an Apple audio tap of the helper app's own sound (macOS 14.2+), so BlackHole isn't needed."),
+    h("p", {class: "small dim"}, "This Mac can carry the stick's audio with an Apple audio tap of StickyBot's own sound (macOS 14.2+), so BlackHole isn't needed."),
     actionRow(h("button", {class: "btn sm", type: "button", onclick: e => { e.target.disabled = true; runJob(out, {body: {carrier: "tap"}}); }}, "Use the Apple audio tap")));
 }
+
+// What macOS calls the agent in its prompts: "StickyBot" (StickyBot.app) or "Python" (before it's set up)
+const appName = () => ((store.status || {}).app || {}).name || "StickyBot";
 
 function wisprTap(el, s, d, out) {
   const tap = d.tap || {};
   const prompt = h("div", {class: "notice", style: "margin:8px 0"}, h("div", {class: "grow"},
     h("b", null, "macOS will ask once: "),
-    h("span", null, "allow “System Audio Recording” for ", h("b", null, "Python"), " — that's the helper app. It only taps its own sound (the stick's audio it plays), muted, never other apps.")));
+    h("span", null, "allow “System Audio Recording” for ", h("b", null, appName()), appName() === "Python" ? " — that's StickyBot (StickyBot.app isn't set up yet)." : ".", " It only taps its own sound (the stick's audio it plays), muted, never other apps.")));
   const blackholeInstead = h("details", null, h("summary", {class: "small"}, "Use BlackHole instead"),
-    h("p", {class: "small dim"}, `BlackHole 2ch is a free audio driver by Existential Audio. Stick Agent downloads the tested version ${d.pinned}, checks its checksum and signature, then macOS asks for your Mac password.`),
+    h("p", {class: "small dim"}, `BlackHole 2ch is a free audio driver by Existential Audio. StickyBot downloads the tested version ${d.pinned}, checks its checksum and signature, then macOS asks for your Mac password.`),
     actionRow(h("button", {class: "btn sm", type: "button", onclick: e => { e.target.disabled = true; runJob(out, {body: {carrier: "blackhole"}}); }},
       d.blackhole ? "Use BlackHole 2ch" : "Install BlackHole 2ch")));
   if (!d.on) {
-    append(el, h("p", {class: "small dim"}, "This Mac needs no extra driver: an Apple audio tap of the helper app's own sound carries the stick's mic to Wispr Flow."),
+    append(el, h("p", {class: "small dim"}, "This Mac needs no extra driver: an Apple audio tap of StickyBot's own sound carries the stick's mic to Wispr Flow."),
       prompt,
       actionRow(h("button", {class: "btn primary", type: "button", onclick: e => { e.target.disabled = true; runJob(out, {body: {carrier: "tap"}}); }}, "Turn on")), out,
       blackholeInstead);
@@ -296,7 +299,7 @@ function wisprTap(el, s, d, out) {
     prompt,
     h("ol", {class: "small dim inst-ul"},
       h("li", null, "If macOS showed a prompt, press Allow."),
-      h("li", null, "Otherwise open System Settings → Privacy & Security → Screen & System Audio Recording, and under “System Audio Recording Only” turn on Python (add it with + if it isn't listed)."),
+      h("li", null, `Otherwise open System Settings → Privacy & Security → Screen & System Audio Recording, and under “System Audio Recording Only” turn on ${appName()} (add it with + if it isn't listed).`),
       h("li", null, "Then press Check.")),
     actionRow(h("button", {class: "btn primary", type: "button", disabled: tap.state === "checking", onclick: e => checkTap(e.target)}, "Check"),
       h("a", {class: "btn ghost sm", href: "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture", target: "_blank", rel: "noopener"}, "Open System Settings")),
@@ -437,9 +440,9 @@ const RENDER = {
       append(el, h("p", {class: "small dim"}, "The stick's mic reaches Wispr Flow through ", h("b", null, "BlackHole 2ch"),
         ", a free audio driver by Existential Audio. It stays hidden: Wispr is never set to it."),
         h("ol", {class: "small dim inst-ul"},
-          h("li", null, `Stick Agent downloads the tested version ${d.pinned} from existential.audio,`),
+          h("li", null, `StickyBot downloads the tested version ${d.pinned} from existential.audio,`),
           h("li", null, "checks its checksum and that it's signed by Existential Audio and notarized by Apple,"),
-          h("li", null, "then macOS asks for your Mac password in its own window (Stick Agent never sees it).")),
+          h("li", null, "then macOS asks for your Mac password in its own window (StickyBot never sees it).")),
         actionRow(h("button", {class: "btn primary", type: "button", onclick: e => { e.target.disabled = true; runJob(out); }}, "Install BlackHole 2ch")), out,
         d.brew ? h("details", null, h("summary", {class: "small"}, "Prefer Homebrew?"), copyable(d.brew_cmd),
           actionRow(h("button", {class: "btn sm", type: "button", onclick: refresh}, "Check again"))) : null,
@@ -482,7 +485,7 @@ const RENDER = {
     })));
     append(el, 
       h("p", {class: "small dim"}, "Change any of this later in ", h("a", {href: "#settings"}, "Settings → Components"),
-        ", or come back here with ", h("code", null, "stick-agent install-page"), " or the menu bar's Finish setup…."),
+        ", or come back here with ", h("code", null, "stickybot install-page"), " or the menu bar's Finish setup…."),
       h("p", {class: "small dim"}, "More: ", h("a", {href: DOCS, target: "_blank", rel: "noopener"}, "what the stick can do"), " · ",
         h("a", {href: TEAM_DOCS, target: "_blank", rel: "noopener"}, "setting up a teammate")),
       actionRow(h("a", {class: "btn primary", href: "#overview", onclick: () => remember("installDismissed", true)}, "Go to the dashboard")));

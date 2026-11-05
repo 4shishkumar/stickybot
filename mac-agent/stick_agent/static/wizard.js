@@ -77,7 +77,7 @@ function head(body, title, lead) {
 
 // 1 --------------------------------------------------------------------------
 function firmwareStep(body) {
-  head(body, "Update the firmware", "Plug the stick into this Mac with a USB-C cable. A new stick runs M5Stack's own firmware; this replaces it with the stick-key firmware. A stick that's already up to date can skip this.");
+  head(body, "Update the firmware", "Plug the stick into this Mac with a USB-C cable. A new stick runs M5Stack's own firmware; this replaces it with the StickyBot firmware. A stick that's already up to date can skip this.");
   body.appendChild(firmwarePanel({backupDefault: true, onDone: async ok => { if (ok) { await mark("firmware"); toast("Firmware done. Next: pair it."); } }}));
   foot(body, {primary: async () => { await mark("firmware"); next(); }, primaryLabel: "It's up to date — next"});
 }
@@ -87,7 +87,7 @@ function pairStep(body) {
   head(body, "Pair with your Mac", "The stick is a Bluetooth keyboard, so the Mac pairs with it once.");
   body.appendChild(h("ol", null,
     h("li", null, "On the Mac, open ", h("b", null, "System Settings → Bluetooth"), " (", h("a", {href: "x-apple.systempreferences:com.apple.Bluetooth"}, "open it"), ")."),
-    h("li", null, "Find ", h("b", null, "stick-key"), " (or its name) under Nearby Devices and click ", h("b", null, "Connect"), "."),
+    h("li", null, "Find ", h("b", null, "StickyBot"), " (or its name) under Nearby Devices and click ", h("b", null, "Connect"), "."),
     h("li", null, "The stick shows a 6-digit code. If it matches the Mac's, press ", h("b", null, "A"), " on the stick to accept."),
     h("li", null, "When it says Connected, come back here.")));
   body.appendChild(h("p", {class: "small faint"}, "Already paired? Just continue."));
@@ -121,7 +121,7 @@ function pickStep(body) {
 
 // 4 --------------------------------------------------------------------------
 function nameStep(body) {
-  const cur = (store.status.stick && store.status.stick.name) || "stick-key";
+  const cur = (store.status.stick && store.status.stick.name) || "StickyBot";
   head(body, "Name it", "This is the name the Mac shows in Bluetooth settings. Handy when a team has several sticks.");
   const name = h("input", {id: "wizName", value: cur, maxlength: 20});
   body.appendChild(h("div", {class: "row"}, name));

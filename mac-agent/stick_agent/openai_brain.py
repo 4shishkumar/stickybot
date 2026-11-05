@@ -462,7 +462,7 @@ class OpenRouterBrain(OpenAICompatBrain):
     label = "OpenRouter"
     base_url = "https://openrouter.ai/api/v1"
     needs_key = True
-    REFERER = "https://github.com/ashish-kumar-noon/stick-key"
+    REFERER = "https://github.com/ashish-kumar-noon/stickybot"
 
     def __init__(self, agent=None):
         super().__init__(agent)
@@ -477,7 +477,7 @@ class OpenRouterBrain(OpenAICompatBrain):
         return keychain.get("openrouter")
 
     def headers(self, key):
-        return {**super().headers(key), "HTTP-Referer": self.REFERER, "X-Title": "stick-key"}
+        return {**super().headers(key), "HTTP-Referer": self.REFERER, "X-Title": "StickyBot"}
 
     def max_tokens(self, cfg):
         try:
@@ -528,7 +528,7 @@ class OpenRouterBrain(OpenAICompatBrain):
                 try:
                     timeout = aiohttp.ClientTimeout(total=20)
                     async with self._http().get(self.base_url + "/models", timeout=timeout,
-                                                headers={"HTTP-Referer": self.REFERER, "X-Title": "stick-key"}) as r:
+                                                headers={"HTTP-Referer": self.REFERER, "X-Title": "StickyBot"}) as r:
                         if r.status != 200:
                             raise ApiError(r.status, await error_message(r))
                         data = (await r.json(content_type=None)).get("data")

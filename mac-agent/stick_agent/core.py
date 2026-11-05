@@ -4,7 +4,6 @@ import collections
 import json
 import logging
 import os
-import sys
 import time
 import uuid
 
@@ -121,12 +120,13 @@ class Agent:
         self.loop = None
         self.stats = {"requests": 0, "quick": 0, "claude": 0, "started": time.time()}
         self.listeners = []  # extra callbacks for every message from the stick
+        self.window = None   # (page) -> bool: shows the dashboard in the StickyBot window (menubar.py sets it)
         self.speaker = Speaker(lambda: self.link, self._speech_output,
                                       lambda: self.cfg.get("speak_voice") or "")
         # A held away from USB: the stick's mic into the carrier (the Apple audio tap or BlackHole)
         self.wispr = wispr_mic.WisprMic(emit=self.emit_soon)
         self.wispr.set_enabled(self.cfg.get("wireless_mic"))
-        # ...heard by Wispr through the "stick-mic-bluetooth" device, which exists only around an A hold
+        # ...heard by Wispr through the "<stick>-bt-mic" device, which exists only around an A hold
         self.stick_usb = None  # the stick is plugged into a computer by USB (it says so; None = unknown / older)
         self.mic_dev = mic_device.StickMicDevice(name=self._mic_name())
         self.holds = mic_device.Holds(self.mic_dev, send=lambda msg: self.link.send(msg),
@@ -183,12 +183,12 @@ class Agent:
             self.wispr.open()
         return await self.holds.show(secs)
 
-    # --- the stick-mic-bluetooth device -----------------------------------------
+    # --- the <stick>-bt-mic device --------------------------------------------
 
     def _mic_name(self):
-        """wispr_mic_name if set, else named after the picked stick ("stick-key-mic-bluetooth")."""
+        """wispr_mic_name if set, else named after the picked stick ("stickybot-bt-mic")."""
         name = str(self.cfg.get("wispr_mic_name") or "").strip()
-        if name and name != mic_device.NAME:  # the old fixed default means "automatic" too
+        if name and not mic_device.is_auto_name(name):  # old automatic names mean "automatic" too
             return name
         return mic_device.name_for((self.cfg.get("stick") or {}).get("name"))
 
@@ -208,7 +208,7 @@ class Agent:
             asyncio.ensure_future(self.holds.drop(why))
 
     def mic_device_unavailable(self):
-        """"" if the stick-mic-bluetooth device may exist now, else why not."""
+        """"" if the Bluetooth mic device may exist now, else why not."""
         if not self.wispr.enabled:
             return "the wireless Wispr mic is off"
         if not self.wispr.carrier:
@@ -245,8 +245,18 @@ class Agent:
     def restart_now(self):
         """Starts the agent again in this process (new code from disk; launchd sees the same pid).
         execv skips atexit: remove the stick mic device first."""
+        from . import app
         self.shutdown()
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        exe, argv = app.restart_argv()  # as StickyBot.app if that's what we are
+        os.execv(exe, argv)
+
+    def open_page(self, page=""):
+        """The dashboard (at #page) in the StickyBot window if there is one, else the browser.
+        Any thread."""
+        if self.window and self.window(page):
+            return
+        import webbrowser
+        webbrowser.open(f"http://localhost:{config.PORT}/" + (f"#{page}" if page else ""))
 
     def restart_soon(self, delay=0.3):
         """restart_now() once the current reply (e.g. an HTTP response) has gone out."""
@@ -286,7 +296,13 @@ class Agent:
                 "stick_approvals": self.cfg.get("stick_approvals", True), "wireless_mic": self.wireless_status(),
                 "update": {k: v for k, v in self.updates.status().items()
                            if k in ("available", "title", "agent_update", "firmware_update", "checking")},
-                "brain": self.brain.status() if getattr(self.brain, "status", None) else None}
+                "brain": self.brain.status() if getattr(self.brain, "status", None) else None,
+                "app": self.app_status()}
+
+    def app_status(self):
+        """How macOS knows this process: "StickyBot" (the app bundle) or "Python"."""
+        from . import app
+        return {"name": app.display_name(), "window": bool(self.window)}
 
     def _history(self, entry):
         with config.HISTORY.open("a") as f:

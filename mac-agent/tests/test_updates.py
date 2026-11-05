@@ -15,7 +15,7 @@ HOST = {"Host": f"localhost:{config.PORT}"}
 def release(tag, fw=None):
     v = tag[1:]
     assets = {"manifest.json": {"size": 1}} if fw else {}
-    return {"tag": tag, "version": v, "prerelease": releases.is_prerelease(v), "name": f"stick-key {tag}",
+    return {"tag": tag, "version": v, "prerelease": releases.is_prerelease(v), "name": f"StickyBot {tag}",
             "notes": f"### Added\n- things in {tag}", "url": f"https://example/{tag}", "published": "2026-11-06",
             "assets": assets}
 

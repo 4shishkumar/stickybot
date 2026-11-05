@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code PermissionRequest hook -> stick-agent.
+"""Claude Code PermissionRequest hook -> StickyBot (the agent).
 
 Claude Code runs this when a tool needs permission. It asks the agent
 (http://localhost:8660), which shows the prompt on the stick and the

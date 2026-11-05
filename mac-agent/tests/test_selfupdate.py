@@ -17,9 +17,11 @@ TAG = "v9.0.0"
 class FakeGit:
     """git_out + run_cmd: answers from a table, records every command, can fail one step."""
 
-    def __init__(self, root, dirty="", fail=None, version="9.0.0"):
-        self.root, self.dirty, self.fail, self.version = root, dirty, fail, version
+    def __init__(self, root, dirty="", fail=None, version="9.0.0",
+                 origin="https://github.com/ashish-kumar-noon/stickybot.git"):
+        self.root, self.dirty, self.fail, self.version, self.origin = root, dirty, fail, version, origin
         self.ran = []
+        self.set_url = []
 
     def git_out(self, root, *args, timeout=20):
         assert root == self.root, f"git against {root}, not the test clone"
@@ -31,6 +33,12 @@ class FakeGit:
             return 0, self.dirty
         if args[0] == "rev-parse":
             return 0, "abc1234def5678"
+        if args[:2] == ("remote", "get-url"):
+            return 0, self.origin
+        if args[:2] == ("remote", "set-url"):
+            self.set_url.append(args[3])
+            self.origin = args[3]
+            return 0, ""
         raise AssertionError(args)
 
     async def run_cmd(self, cmd, emit):
@@ -76,12 +84,12 @@ def test_local_changes_block_it(clone):
 
 
 def test_a_developer_checkout_gets_instructions(home, tmp_path, monkeypatch):
-    dev = make_checkout(tmp_path / "code" / "stick-key")
+    dev = make_checkout(tmp_path / "code" / "stickybot")
     monkeypatch.setattr(selfupdate, "git_out", FakeGit(dev).git_out)
     info = selfupdate.install_info(dev)
     assert info["kind"] == "dev" and not info["can_update"]
     assert info["instructions"][0] == f"cd {dev}" and any("git pull --ff-only" in x for x in info["instructions"])
-    assert info["instructions"][-1] == "stick-agent restart"
+    assert info["instructions"][-1] == "stickybot restart"
 
 
 def test_not_a_checkout(tmp_path):
@@ -113,8 +121,9 @@ async def test_update_runs_the_steps_then_restarts(clone):
     events, restarted = [], []
     await selfupdate.update(TAG, events.append, restart=lambda: restarted.append(1))
     root = str(clone.root)
-    assert clone.ran == [c for _, c in selfupdate.plan(TAG, root, uv="/Users/me/.local/bin/uv")]
-    assert restarted == [1]
+    assert clone.ran == [*(c for _, c in selfupdate.plan(TAG, root, uv="/Users/me/.local/bin/uv")),
+                         [sys.executable, "-m", "stick_agent", "app", "build"]]  # StickyBot.app, if needed
+    assert restarted == [1] and clone.set_url == []  # origin already has the new name
     assert {"progress": 100, "stage": "restart"} in events
     assert any(e.get("line", "").startswith("$ git -C") for e in events)
 
@@ -127,6 +136,7 @@ async def test_a_failed_install_goes_back(clone):
     assert restarted == []
     back = ["git", "-C", str(clone.root), "-c", "advice.detachedHead=false", "checkout", "--quiet", "abc1234def5678"]
     assert clone.ran[-2] == back and "pip" in clone.ran[-1]  # the old checkout, installed again
+    assert clone.ran[-1][-2:] != ["app", "build"]  # no app build after a failed update
 
 
 async def test_a_failed_fetch_changes_nothing(clone):
@@ -240,3 +250,54 @@ async def test_a_firmware_updater_needs_firmware(client, ota, monkeypatch):
     monkeypatch.setattr(flasher, "bundled", lambda: None)
     r = await client.post("/api/update/firmware/ota", headers=client.auth)
     assert r.status == 409 and "make -C m5-stick-s3 release" in (await r.json())["error"]
+
+
+# --- the repo's rename (stick-key -> stickybot) ---------------------------------------------
+
+@pytest.mark.parametrize("old, new", [
+    ("https://github.com/ashish-kumar-noon/stick-key.git", "https://github.com/ashish-kumar-noon/stickybot.git"),
+    ("https://github.com/ashish-kumar-noon/stick-key", "https://github.com/ashish-kumar-noon/stickybot"),
+    ("git@github.com:ashish-kumar-noon/stick-key.git", "git@github.com:ashish-kumar-noon/stickybot.git"),
+    ("ssh://git@github.com/ashish-kumar-noon/stick-key", "ssh://git@github.com/ashish-kumar-noon/stickybot"),
+])
+def test_an_old_origin_gets_the_new_name(old, new):
+    assert selfupdate.renamed_origin(old) == new
+
+
+@pytest.mark.parametrize("url", ["https://github.com/ashish-kumar-noon/stickybot.git",
+                                 "https://github.com/someone/stick-key.git",  # a fork: theirs
+                                 "https://github.com/ashish-kumar-noon/stick-key-extras.git", ""])
+def test_other_origins_are_left_alone(url):
+    assert selfupdate.renamed_origin(url) is None
+
+
+async def test_update_switches_an_old_origin_first(clone):
+    clone.origin = "https://github.com/ashish-kumar-noon/stick-key.git"
+    events = []
+    await selfupdate.update(TAG, events.append, restart=lambda: None)
+    assert clone.set_url == ["https://github.com/ashish-kumar-noon/stickybot.git"]
+    assert "fetch" in clone.ran[0]  # set before the fetch
+    assert any("the repo was renamed" in e.get("line", "") for e in events)
+
+
+def test_fix_origin_against_a_real_clone(tmp_path, monkeypatch):
+    """Real git (no network): an install clone made under the old name follows the rename."""
+    import shutil
+    import subprocess
+    if not shutil.which("git"):
+        pytest.skip("no git")
+    root = tmp_path / "src"
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "remote", "add", "origin",
+                    "https://github.com/ashish-kumar-noon/stick-key.git"], check=True)
+    monkeypatch.setattr(selfupdate, "git_out", lambda r, *a, timeout=20: _git(r, *a))
+    assert selfupdate.fix_origin(root) == "https://github.com/ashish-kumar-noon/stickybot.git"
+    assert selfupdate.fix_origin(root) is None  # once
+    url = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"], capture_output=True, text=True)
+    assert url.stdout.strip() == "https://github.com/ashish-kumar-noon/stickybot.git"
+
+
+def _git(root, *args):
+    import subprocess
+    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
+    return r.returncode, (r.stdout or r.stderr).strip()

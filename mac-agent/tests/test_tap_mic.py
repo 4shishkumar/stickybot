@@ -84,7 +84,7 @@ def test_tap_mode_makes_a_public_aggregate_with_our_tap(no_core_audio):
     assert d.ensure_present() == "created"
     (tap_id, (uuid, name, process)), = no_core_audio.tap_list.items()
     assert name == UID + ".tap" and process == 77  # the agent's own process object
-    assert no_core_audio.created == [("stick-mic-bluetooth", UID, "BuiltInSpeaker", uuid)]
+    assert no_core_audio.created == [("stickybot-bt-mic", UID, "BuiltInSpeaker", uuid)]
     desc = no_core_audio.aggregates[d.dev]
     assert desc["private"] == 0 and desc["master"] == "BuiltInSpeaker"
     assert desc["taps"] == [{"uid": uuid, "drift": 1}] and desc["tapautostart"] == 1
@@ -102,7 +102,7 @@ def test_removing_it_destroys_the_tap_too(no_core_audio):
 
 
 def test_a_leftover_aggregate_without_our_tap_is_made_again(no_core_audio):
-    no_core_audio.list[250] = ("stick-mic-bluetooth", UID)  # from a crashed agent: its tap is gone
+    no_core_audio.list[250] = ("stickybot-bt-mic", UID)  # from a crashed agent: its tap is gone
     d = tapped()
     assert d.ensure_present() == "created" and 250 not in no_core_audio.list and d.tap_live
 
@@ -142,7 +142,7 @@ def test_no_default_output(no_core_audio):
 def test_stale_taps_are_removed_by_name(no_core_audio):
     no_core_audio.tap_list = {60: ("A", UID + ".tap", 5), 61: ("B", UID + ".check.tap", 5),
                               62: ("C", "someone else's tap", 5)}
-    no_core_audio.list[251] = ("stick-mic-bluetooth-check", UID + ".check")  # an interrupted check
+    no_core_audio.list[251] = ("stickybot-bt-mic-check", UID + ".check")  # an interrupted check
     StickMicDevice().cleanup_stale()
     assert list(no_core_audio.tap_list) == [62] and 251 not in no_core_audio.list
 
@@ -155,7 +155,7 @@ def test_check_hears_the_tone(no_core_audio):
     assert res["state"] == "ok" and res["first_ms"] == 70.0 and res["create_ms"] is not None
     # a test-named device, never the real name / UID, and everything removed afterwards
     (_n, uid, _sub, _tap), = no_core_audio.created
-    assert uid == UID + ".check" and no_core_audio.created[0][0] == "stick-mic-bluetooth-check"
+    assert uid == UID + ".check" and no_core_audio.created[0][0] == "stickybot-bt-mic-check"
     assert no_core_audio.ours() == [] and no_core_audio.ours(UID + ".check") == [] and no_core_audio.tap_list == {}
     (_dev, secs, amp), = no_core_audio.measured
     assert amp <= 1e-4 and secs <= 2  # inaudible, short

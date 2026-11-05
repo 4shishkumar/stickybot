@@ -29,7 +29,7 @@ ESPRESSIF_VID = 0x303A
 # One entry per firmware project in the repo.
 PROJECTS = {
     "m5-stick-s3": {"label": "M5StickS3", "board": "m5-sticks3", "env": "sticks3",
-                    "ota_env": "sticks3_ota", "host": "stick-key.local"},
+                    "ota_env": "sticks3_ota", "host": "stickybot.local"},
     "xiao-esp32-c3": {"label": "XIAO ESP32-C3", "board": "xiao-esp32-c3", "env": "xiao_c3",
                       "ota_env": "xiao_c3_ota", "host": "xiao-key.local"},
 }

@@ -144,7 +144,7 @@ class MacKeychain:
                 st = self.sec.SecItemUpdate(self._dict(base, owned),
                                             self._dict([(self.k["kSecValueData"], data)], owned))
                 if st == self.NOT_FOUND:
-                    label = self._str(f"stick-key {account} API key", owned)
+                    label = self._str(f"StickyBot {account} API key", owned)
                     st = self.sec.SecItemAdd(self._dict(base + [(self.k["kSecValueData"], data),
                                                                 (self.k["kSecAttrLabel"], label)], owned), None)
                 if st != 0:

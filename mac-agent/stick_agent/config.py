@@ -16,7 +16,7 @@ DEFAULTS = Path(__file__).parent / "defaults"
 PORT = int(os.environ.get("STICK_AGENT_PORT", 8660))
 
 DEFAULT_CONFIG = {
-    "stick": None,            # {"address": CoreBluetooth id, "name": "stick-key"} — set in the dashboard
+    "stick": None,            # {"address": CoreBluetooth id, "name": "StickyBot"} — set in the dashboard
     "model": "sonnet",        # Claude model for voice requests (fast); "opus" for harder tasks
     # Speech model: v2 is English-only (won't mistake a short "PR 1234" for Russian);
     # v3 understands 25 languages but guesses the language on its own.
@@ -51,17 +51,17 @@ DEFAULT_CONFIG = {
     "install_skipped": [],    # setup page (#install) steps the user skipped (see install_flow.py)
     "stick_approvals": True,  # Claude Code permission prompts go to the stick + dashboard first
     # The stick tools for Claude sessions (mcp_server.py): an MCP server at http://127.0.0.1:8660/mcp,
-    # given to voice requests; terminal sessions: `stick-agent mcp install`
+    # given to voice requests; terminal sessions: `stickybot mcp install`
     "mcp_server": True,
     # Wireless Wispr mic: an A hold away from USB streams the stick's mic over Bluetooth; just for the
-    # hold, the agent shows it as the "<stick>-mic-bluetooth" mic (rank it first in Wispr's microphone
-    # list once). `stick-agent setup --with wireless_mic`
+    # hold, the agent shows it as the "<stick>-bt-mic" mic (rank it first in Wispr's microphone
+    # list once). `stickybot setup --with wireless_mic`
     "wireless_mic": False,
     # What carries the audio into that mic: "tap" = an Apple audio tap of the agent's own sound (macOS
     # 14.2+, no driver; asks once for System Audio Recording), "blackhole" = the BlackHole 2ch driver,
     # "auto" = the tap once it's proven to work, else BlackHole if installed
     "wireless_mic_carrier": "auto",
-    "wispr_mic_name": "",  # "" = after the stick ("stick-key-mic-bluetooth"); changing it: rank it in Wispr again
+    "wispr_mic_name": "",  # "" = after the stick ("stickybot-bt-mic"); changing it: rank it in Wispr again
     "wispr_switch_ms": 250,   # after the device appears: time for Wispr to switch to it before the key goes down
     "wispr_tail_ms": 800,     # after the key-up: keep the device while Wispr finishes (then the usual mic again)
     # Events on the stick (see events.py): kind -> "celebrate" | "nice" | "headsup" | "off";
@@ -70,7 +70,7 @@ DEFAULT_CONFIG = {
     "quiet_hours": {"on": False, "from": "19:00", "to": "09:00"},  # events show, but silently
     "claude_done_min_s": 120,  # "Claude finished" only for tasks at least this long
     "github": {"on": True, "interval_s": 120, "primary_repo": ""},  # PR watcher (gh CLI)
-    # Updates (updates.py): look for a newer stick-key release at start-up and every 24 h;
+    # Updates (updates.py): look for a newer StickyBot release at start-up and every 24 h;
     # "stable" = releases only, "beta" = prereleases (vX.Y.Z-beta.N) too
     "update_check": True,
     "update_channel": "stable",

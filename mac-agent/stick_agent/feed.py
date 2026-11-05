@@ -15,7 +15,7 @@ import aiohttp
 
 log = logging.getLogger("feed")
 REFRESH_S = 30 * 60
-UA = {"User-Agent": "stick-agent/0.1 (desk gadget)"}
+UA = {"User-Agent": "StickyBot/0.1 (desk gadget)"}
 
 
 class Feed:

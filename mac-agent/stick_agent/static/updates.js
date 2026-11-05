@@ -39,7 +39,7 @@ function reloadWhenBack(stage) {
     tries++;
     const s = await get("/api/status");
     if (!s.error && tries > 2) { location.reload(); return; }
-    if (tries > 60) { stage.textContent = "The agent hasn't come back yet — check `stick-agent status`."; return; }
+    if (tries > 60) { stage.textContent = "The agent hasn't come back yet — check `stickybot status`."; return; }
     setTimeout(poll, 1000);
   };
   setTimeout(poll, 2000);
@@ -124,7 +124,7 @@ export function updatesPanel(c) {
     if (!u) { info.appendChild(h("span", {class: "dim"}, "Checking…")); return; }
     if (u.error && u.missing) { info.appendChild(h("span", {class: "dim"}, "This version of the agent can't check for updates.")); return; }
     const lat = u.latest;
-    // Two numbers on purpose: every release has its own (the helper app's); the stick firmware's
+    // Two numbers on purpose: every release has its own (StickyBot's); the stick firmware's
     // only changes when a release changes the stick, so most releases need no stick update.
     const state = (have, latest, newer) => !latest || !have ? "" : newer ? ` → ${latest} available` : " · latest";
     info.appendChild(h("div", {class: "kv"},
@@ -141,7 +141,7 @@ export function updatesPanel(c) {
       const canClick = !u.agent_update || (u.install && u.install.can_update);
       info.appendChild(h("div", {class: "notice ok"}, h("div", {class: "grow"}, h("b", null, u.title), h("span", {class: "dim"}, versionsLine(u))), canClick ? btn : null));
     } else if (lat && !u.error) {
-      info.appendChild(h("div", {class: "dim"}, "You're up to date: the helper app and the stick firmware are both the latest."));
+      info.appendChild(h("div", {class: "dim"}, "You're up to date: StickyBot and the stick firmware are both the latest."));
     }
     if (u.install && !u.install.can_update && u.agent_update) info.appendChild(instructions(u.install));
     const notes = notesBlock(lat, false);

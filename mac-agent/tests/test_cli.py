@@ -19,7 +19,8 @@ def test_help_only_prints(argv, monkeypatch, capsys, no_flashing):
     monkeypatch.setattr(cli, "run", lambda **_: pytest.fail("ran the agent"))
     monkeypatch.setattr(cli, "restart", lambda: pytest.fail("restarted"))
     cli.main()
-    assert "stick-agent flash" in capsys.readouterr().out and no_flashing == []
+    out = capsys.readouterr().out
+    assert "stickybot flash" in out and "`stick-agent` works too" in out and no_flashing == []
 
 
 def test_flash_refuses_unknown_options(monkeypatch, no_flashing):
@@ -36,3 +37,10 @@ def test_flash_options_still_work(monkeypatch, no_flashing):
         with pytest.raises(SystemExit):
             cli.main()
         assert no_flashing.pop() == want
+
+
+def test_both_command_names_are_entry_points():
+    import tomllib
+    from pathlib import Path
+    scripts = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())["project"]["scripts"]
+    assert scripts == {"stickybot": "stick_agent.__main__:main", "stick-agent": "stick_agent.__main__:main"}

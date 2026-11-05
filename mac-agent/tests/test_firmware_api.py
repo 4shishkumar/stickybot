@@ -199,6 +199,15 @@ async def test_onboarding_auto_steps(client, home):
     assert s["repo"] and s["tested"]
 
 
+@pytest.mark.parametrize("name, named", [("StickyBot", False), ("stick-key", False), ("Desk Stick", True)])
+async def test_named_means_not_a_default_name(client, name, named):
+    """A new / reset stick is "StickyBot" (firmware 1.9.0+), an older one "stick-key": both still default."""
+    stick_replies(client.agent, {**STATE, "name": name})
+    client.agent.cfg["stick"] = {"address": "X", "name": name}
+    s = (await (await client.get("/api/onboarding", headers=HOST)).json())["steps"]
+    assert s["named"] is named
+
+
 async def test_onboarding_old_firmware(client, usb, monkeypatch):
     stick_replies(client.agent, {**STATE, "fw": "1.5.0"})
     monkeypatch.setattr(firmware_api, "usb_proto", lambda port, line, timeout_s=2.5: {**STATE, "fw": "1.5.0"})

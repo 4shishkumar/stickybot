@@ -91,7 +91,7 @@ function paintStatus(s) {
   const n = (s.prompts || []).length;
   for (const b of document.querySelectorAll("[data-badge]")) { b.hidden = !n; b.textContent = n; }
   $("#brandSub").textContent = s.stick ? s.stick.name : "your Mac, by voice";
-  document.title = n ? `(${n}) Stick Agent` : "Stick Agent";
+  document.title = n ? `(${n}) StickyBot` : "StickyBot";
 }
 
 // ---------- live events ----------
