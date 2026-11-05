@@ -35,8 +35,10 @@ Protocol, checked against the spec at modelcontextprotocol.io (Nov 2026):
 
 Tools that change the Mac (open_url, open_app, quick_command) are deliberately not pre-allowed
 anywhere: Claude Code asks for permission as for any tool, which our PermissionRequest hook puts
-on the stick (A / B). Everything fails closed ("stick not connected") without the stick, except
-stick_status. Alerts (notify, celebrate, speak) are rate-limited so a loop can't spam the stick.
+on the stick (A / B). Brains without Claude Code (OpenRouter, openai_brain.py) run the same tools
+through StickTools.call_approved(), which shows that same prompt first. Everything fails closed
+("stick not connected") without the stick, except stick_status. Alerts (notify, celebrate, speak) are
+rate-limited so a loop can't spam the stick.
 """
 import asyncio
 import base64
@@ -178,6 +180,19 @@ def allowed_tool_names():
     return [f"mcp__{SERVER_NAME}__{t}" for t in FEEDBACK_TOOLS]
 
 
+def openai_tools():
+    """The same tools as OpenAI-style function definitions (the OpenRouter / Ollama brains)."""
+    return [{"type": "function", "function": {"name": t["name"], "description": t["description"],
+                                              "parameters": t["inputSchema"]}} for t in TOOLS]
+
+
+def approval_hint(name, args):
+    """What the approval prompt on the stick shows for a Mac tool (like hook.py's describe())."""
+    args = args if isinstance(args, dict) else {}
+    key = {"open_url": "url", "open_app": "name", "quick_command": "phrase"}.get(name)
+    return str(args.get(key, "")) if key else summarize(args)
+
+
 class ToolError(Exception):
     """A tool can't do it: the text goes back to Claude with isError (it can correct itself)."""
 
@@ -314,6 +329,21 @@ class StickTools:
         log.info("%s: %s(%s) -> %s%s (%d ms)", who, name, summarize(args, 40), "error: " if err else "", text[:80], ms)
         self.agent.emit("mcp", tool=name, origin=who, args=summarize(args), result=text[:200], ok=not err, ms=ms)
         return text, err, structured
+
+    async def call_approved(self, name, args, who):
+        """call() for a brain without Claude Code's permission prompt (OpenRouter, Ollama): the Mac
+        tools ask on the stick first (A / B), the same prompt Claude Code's hook shows."""
+        if name in MAC_TOOLS and name in BY_NAME:
+            hint = approval_hint(name, args)
+            decision = await self.agent.ask_permission(name, hint[:300], who)
+            if decision != "allow":
+                why = ("needs the user's approval, but stick approvals are turned off (dashboard → Settings)"
+                       if decision is None and not self.agent.cfg.get("stick_approvals", True)
+                       else "the user didn't approve it" if decision == "deny" else "no answer on the stick")
+                log.info("%s: %s(%s) not run: %s", who, name, summarize(args, 40), why)
+                self.agent.emit("mcp", tool=name, origin=who, args=summarize(args), result=why, ok=False, ms=0)
+                return why, True, None
+        return await self.call(name, args, who)
 
     # --- feedback -----------------------------------------------------------------------
 
@@ -530,7 +560,7 @@ def ok_origin(request):
 
 
 def routes(agent):
-    tools = StickTools(agent)
+    tools = getattr(agent, "mcp_tools", None) or StickTools(agent)  # (an OpenRouter brain may have made it)
     agent.mcp_tools = tools
     inflight = {}  # (caller, request id) -> task (legacy clients cancel with notifications/cancelled)
 

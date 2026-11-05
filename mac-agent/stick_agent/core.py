@@ -8,7 +8,7 @@ import sys
 import time
 import uuid
 
-from . import brain, clips, commands, config, events, feed, github, home, link, stt, updates, weather, wispr_mic
+from . import brain, brains, clips, commands, config, events, feed, github, home, link, stt, updates, weather, wispr_mic
 from . import stick_mic_device as mic_device
 from .adpcm import Recording
 from .speech import Sentences, Speaker
@@ -97,7 +97,7 @@ class Agent:
         config.ensure_home()
         self.cfg = config.load()
         self.stt = stt.STT()
-        self.brain = brain.Brain()
+        self.brain = brains.Brains(self)  # Claude Code or OpenRouter, as picked in Settings
         self.link = link.Link(self._on_message, self._on_audio, self._on_link, self._hello_extra)
         self.last_reply = None  # {"t", "text"} for the home screen
         self.weather = weather.Weather()
@@ -244,7 +244,7 @@ class Agent:
             # its name now (renamed on the stick?): the reply comes back through _on_message
             asyncio.ensure_future(self.link.send({"src": "agent", "proto": "@state", "id": "name"}))
             if getattr(self.brain, "prewarm", None):
-                asyncio.ensure_future(self.brain.prewarm())  # Claude Code ready before the first request
+                asyncio.ensure_future(self.brain.prewarm())  # Claude Code ready before the first request (if picked)
             self.wispr.warm()  # ready before the first key-down
         else:
             self.wispr.stop()
@@ -681,6 +681,10 @@ class Agent:
                 asyncio.ensure_future(self.link.send({"src": "agent", "wmic": self.wispr.ready}))
         if "idle_content" in changes:
             self.feed._next = 0
+        if "brain" in changes and getattr(self.brain, "switched", None):
+            self.brain.switched()
+            if self.link.connected and self.loop:
+                asyncio.ensure_future(self.brain.prewarm())  # back to Claude: its session ready again
         if recheck and self.cfg.get("update_check", True) is not False and self.loop:
             asyncio.ensure_future(self.updates.check())  # e.g. the new channel's latest release
         if "weather" in changes or "weather_location" in changes:

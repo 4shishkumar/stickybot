@@ -13,7 +13,7 @@ os.environ["STICK_AGENT_PORT"] = "18660"
 
 import pytest  # noqa: E402
 
-from stick_agent import clips, config, events, github, releases, stick_mic_device, wispr_mic  # noqa: E402
+from stick_agent import clips, config, events, github, keychain, releases, stick_mic_device, wispr_mic  # noqa: E402
 
 
 class FakeStream:
@@ -137,6 +137,19 @@ def no_real_self_update(monkeypatch):
     monkeypatch.setattr(selfupdate, "git_out", refuse)
     monkeypatch.setattr(selfupdate, "run_cmd", refuse)
     monkeypatch.setattr(core.Agent, "restart_now", refuse)
+
+
+@pytest.fixture(autouse=True)
+def no_real_keychain(monkeypatch):
+    """Tests never read or write the real Keychain: keys live in memory (keychain.MemoryBackend)."""
+    def refuse(*a, **kw):
+        raise AssertionError("a test reached for the real Keychain")
+    monkeypatch.setattr(keychain.MacKeychain, "_load", refuse)
+    monkeypatch.delenv("STICK_AGENT_OPENROUTER_KEY", raising=False)
+    fake = keychain.MemoryBackend()
+    keychain.set_backend(fake)
+    yield fake
+    keychain.set_backend(None)
 
 
 @pytest.fixture

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import clips, commands, components_api, config, firmware_api, link, mcp_server, mcp_setup, updates
+from . import brain_api, clips, commands, components_api, config, firmware_api, link, mcp_server, mcp_setup, updates
 from . import events as evmod
 
 log = logging.getLogger("server")
@@ -116,6 +116,9 @@ def make_app(agent):
     async def put_config(request):
         body = await request.json()
         allowed = {k: v for k, v in body.items() if k in config.DEFAULT_CONFIG}
+        bad = brain_api.valid_config(allowed)
+        if bad:
+            return web.json_response({"error": bad}, status=400)
         agent.update_config(allowed)
         return web.json_response(agent.cfg)
 
@@ -258,6 +261,7 @@ def make_app(agent):
     app.add_routes(components_api.routes(agent))
     app.add_routes(mcp_server.routes(agent))
     app.add_routes(updates.routes(agent))
+    app.add_routes(brain_api.routes(agent))
     app.add_routes([
         web.get("/api/mcp", mcp_status), web.post("/api/mcp/terminal/{action:install|uninstall}", mcp_terminal),
         web.post("/api/mcp/answer", mcp_answer),

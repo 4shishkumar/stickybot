@@ -33,6 +33,11 @@ DEFAULT_CONFIG = {
     "brain_mode": "session",
     "brain_prewarm": True,    # start the session when the stick connects, before the first request
     "brain_idle_min": 10,     # session unused this long -> stopped; the next request starts a new chat
+    # Who answers (brains.py): "claude" = Claude Code, your subscription; "openrouter" = any model on
+    # OpenRouter with your own API key (kept in the Keychain, never here), pay per use
+    "brain": "claude",
+    "openrouter_model": "",   # an OpenRouter model id ("" = pick one in Settings → Brain)
+    "openrouter_max_tokens": 400,  # reply length cap per round (the stick shows ~200 characters)
     "stream_replies": True,   # show the reply on the stick while Claude writes it
     "stream_interval_ms": 300,  # at most one screen update per this many ms (Bluetooth)
     "speak_stream": True,     # speak sentence by sentence as the reply is written (with speak_replies)
