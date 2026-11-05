@@ -21,6 +21,7 @@ struct Draft {
   bool    devMode;
   bool    sound;
   uint8_t volume;  // 0-255
+  bool    wmic;    // wireless Wispr mic
 };
 
 void         open(const Draft& current, bool btOff);

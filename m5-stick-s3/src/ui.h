@@ -80,7 +80,7 @@ void setLevel(int peak);
 void setTilt(float ax, float ay);   // accelerometer (g), for the eyes following the tilt            // mic level for the live screens (call ~25x/s)
 
 void drawPage(Page p, const Dash& d);
-void drawHolding(const Combo& c, bool usbMic);  // A held: dictation
+void drawHolding(const Combo& c, bool usbMic, bool wirelessMic = false);  // A held: dictation
 void drawMenu(const MenuView& m);
 void drawInfo(const char* title, const String lines[], int count, const char* hint);
 void drawMessage(const char* title, const char* sub, uint16_t bg);

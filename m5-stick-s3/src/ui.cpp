@@ -793,7 +793,7 @@ static void meter(int y, uint16_t c) {
 }
 
 // Button A held: dictation.
-void drawHolding(const Combo& c, bool usbMic) {
+void drawHolding(const Combo& c, bool usbMic, bool wirelessMic) {
   dockEnd();  // normal screens are portrait
   canvas.fillScreen(GROUND);
   txt("Dictating", W / 2, 24, F18, WISPR, middle_center);
@@ -801,10 +801,12 @@ void drawHolding(const Combo& c, bool usbMic) {
   int n = comboParts(c, parts, 5);
   String one;
   for (int i = 0; i < n; i++) one += (i ? "+" : "") + parts[i];
-  txt(one + " held - " + (usbMic ? "stick mic on" : "Mac's mic"), W / 2, 46, F9, DIM, middle_center);
+  bool stickMic = usbMic || wirelessMic;
+  txt(one + " held - " + (stickMic ? "stick mic on" : "Mac's mic"), W / 2, 46, F9, DIM, middle_center);
   orb(W / 2, 112, WISPR);
   meter(186, WISPR);
-  txt(usbMic ? "Wispr hears the stick" : "plug in USB for the stick mic", W / 2, 216, F9, FAINT, middle_center);
+  txt(usbMic ? "Wispr hears the stick" : wirelessMic ? "Wispr hears the stick (BT)" : "plug in USB for the stick mic",
+      W / 2, 216, F9, FAINT, middle_center);
   canvas.pushSprite(0, 0);
 }
 

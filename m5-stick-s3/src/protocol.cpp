@@ -56,6 +56,7 @@ static String stateJson() {
   j += ",\"brightness\":" + String(settings::brightnessPct());
   j += String(",\"autoRotate\":") + (settings::autoRotate() ? "true" : "false");
   j += String(",\"devMode\":") + (settings::devMode() ? "true" : "false");
+  j += String(",\"wirelessMic\":") + (settings::wirelessMic() ? "true" : "false");
   j += String(",\"macPassSet\":") + (settings::macPassword().length() ? "true" : "false");
   j += ",\"enterDelay\":" + String(settings::enterDelayMs());
   j += ",\"slot\":" + String(hid::slot()) + ",\"slots\":[";
@@ -206,6 +207,13 @@ Result run(const String& action, const Args& arg) {
     String v = arg("on");
     settings::saveAutoRotate(v == "1" || v == "true");
     return ok();
+  }
+
+  if (action == "wmic") {
+    String v = arg("on");
+    settings::saveWirelessMic(v == "1" || v == "true");
+    Log.printf("Wireless Wispr mic %s\n", settings::wirelessMic() ? "on" : "off");
+    return ok(String("\"wirelessMic\":") + (settings::wirelessMic() ? "true" : "false"));
   }
 
   if (action == "brightness") {

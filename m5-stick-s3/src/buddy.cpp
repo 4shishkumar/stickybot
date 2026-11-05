@@ -153,8 +153,15 @@ static void handleSound(JsonObject s) {
   sendSounds();  // reply with the current settings
 }
 
+static bool wmic_ = false;  // the agent's wireless Wispr mic is on and has its output device
+
 static void handleAgent(JsonDocument& d) {
   agentSeen = millis();
+  if (d["wmic"].is<bool>()) {  // in every hello, and on its own when changed in the dashboard
+    bool on = d["wmic"].as<bool>();
+    if (on != wmic_) Log.printf("Agent: wireless Wispr mic %s\n", on ? "on" : "off");
+    wmic_ = on;
+  }
   if (d["proto"].is<const char*>()) {  // a settings command, same as "@..." over USB
     String line = d["proto"].as<String>();
     line.trim();
@@ -378,6 +385,14 @@ void agentTalkEvent(bool start) {
   if (start) fastLink();
   send(start ? "{\"src\":\"agent\",\"evt\":\"talk\",\"state\":\"start\",\"rate\":16000,\"codec\":\"ima-adpcm\"}"
              : "{\"src\":\"agent\",\"evt\":\"talk\",\"state\":\"stop\"}");
+}
+
+bool agentWirelessMic() { return wmic_ && agentLinked(); }
+
+void wisprEvent(bool start) {
+  if (start) fastLink();
+  send(start ? "{\"src\":\"agent\",\"evt\":\"wispr\",\"state\":\"start\",\"rate\":16000,\"codec\":\"ima-adpcm\"}"
+             : "{\"src\":\"agent\",\"evt\":\"wispr\",\"state\":\"stop\"}");
 }
 
 size_t audioPayloadMax() {

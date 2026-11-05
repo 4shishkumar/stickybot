@@ -35,6 +35,7 @@
 #include "motion.h"
 #include "mic.h"
 #include "logic/clock.h"
+#include "logic/wispr.h"
 #include "sound.h"
 #include "events.h"
 #include <HijelHID_BLEKeyboard.h>  // KEY_MOD_* constants
@@ -173,7 +174,7 @@ static void render() {
   switch (mode) {
     case Mode::STATUS:
       if (docked)                         ui::drawDock(readDash(), dockSide(), nightTime());
-      else if (comboDown)                 ui::drawHolding(status.combo, mic::usbStreaming());
+      else if (comboDown)                 ui::drawHolding(status.combo, mic::usbStreaming(), mic::wisprStreaming());
       else if (agentTalking)              ui::drawTalk(buddy::agentLinked());
       else if (millis() < agentShowUntil && agentSeenAt < talkEndedAt) ui::drawAgent("thinking", "", "");
       else if (millis() < agentShowUntil) ui::drawAgent(buddy::agent().state, buddy::agent().heard, buddy::agent().text);
@@ -250,19 +251,39 @@ static bool canStandby() {
 
 // --- Button A: the combo -------------------------------------------------------
 
+// Wireless Wispr mic: while streaming, the key-up waits a moment (keyUpAt) for the
+// audio still on its way to the Mac, so Wispr doesn't stop before the last words.
+static bool     wisprMic = false;
+static uint32_t keyUpAt = 0, releasedAt = 0;
+
+static void comboUp() {
+  keyUpAt = 0;
+  hid::up();  // always release, even if pairing dropped mid-press
+  if (wisprMic) mic::wisprEnd();
+  wisprMic = false;
+  Log.printf("-> %s up\n", comboToString(settings::combo()).c_str());
+  uint16_t delayMs = settings::enterDelayMs();
+  if (delayMs && releasedAt - comboSince >= ENTER_MIN_HOLD_MS)
+    enterAt = max((uint32_t)millis() + 1, releasedAt + delayMs);  // from the release, as without the tail
+}
+
 static void comboPress() {
   if (!hid::connected()) {
     if (ui::awake()) showMessage("Not connected", "Pair on the Mac first", COLOR_WARN);
     Log.println("[button] not connected, ignored");
     return;
   }
+  if (keyUpAt) comboUp();  // pressed again during the tail: finish the last press first
   enterAt = 0;  // a new press cancels a pending Enter
-  hid::down(settings::combo());
+  hid::down(settings::combo());  // first: the key never waits for the mic
   comboDown = true;
   mic::usbTalk(true);
   comboSince = millis();
   dirty = true;
-  Log.printf("-> %s down\n", comboToString(settings::combo()).c_str());
+  wisprMic = wispr::shouldStream({settings::wirelessMic(), buddy::agentWirelessMic(), buddy::agentLinked(),
+                                  mic::usbStreaming(), mic::wisprStreaming() || agentTalking}) &&
+             mic::wisprStart();
+  Log.printf("-> %s down%s\n", comboToString(settings::combo()).c_str(), wisprMic ? " (mic to Wispr by Bluetooth)" : "");
 }
 
 static void sendEnter(const char* why) {
@@ -273,13 +294,13 @@ static void sendEnter(const char* why) {
 
 static void comboRelease() {
   if (!comboDown) return;
-  hid::up();  // always release, even if pairing dropped mid-press
   comboDown = false;
   mic::usbTalk(false);
   dirty = true;
-  Log.printf("-> %s up\n", comboToString(settings::combo()).c_str());
-  uint16_t delayMs = settings::enterDelayMs();
-  if (delayMs && millis() - comboSince >= ENTER_MIN_HOLD_MS) enterAt = millis() + delayMs;
+  releasedAt = millis();
+  uint32_t tail = wispr::keyUpDelayMs(wisprMic);
+  if (tail) keyUpAt = millis() + tail;
+  else comboUp();
 }
 
 // --- Menu ------------------------------------------------------------------------
@@ -333,6 +354,7 @@ static void onMenu(menu::Action a) {
       settings::saveDevMode(d.devMode);
       settings::saveSoundOn(d.sound);
       settings::saveSoundVolume(d.volume);
+      settings::saveWirelessMic(d.wmic);
       if (!d.autoRotate) ui::setFlipped(settings::flipped());
       settings::saveStandbyMin(d.standbyMin);
       settings::saveBrightnessPct(d.brightnessPct);
@@ -550,6 +572,7 @@ void loop() {
     if (mode == Mode::WEB || (mode == Mode::STATUS && ui::awake() && !comboDown)) dirty = true;
   }
 
+  if (keyUpAt && millis() >= keyUpAt) comboUp();
   if (enterAt && millis() >= enterAt) {
     enterAt = 0;
     sendEnter("after hold");
@@ -793,7 +816,8 @@ void loop() {
           menu::open({settings::combo(), hid::slot(), settings::standbyMin(), settings::brightnessPct(),
                       settings::enterDelayMs(),
                       settings::liftWakes(), settings::faceDownSleeps(), settings::shakeEscapes(),
-                      settings::autoRotate(), settings::devMode(), settings::soundOn(), settings::soundVolume()},
+                      settings::autoRotate(), settings::devMode(), settings::soundOn(), settings::soundVolume(),
+                      settings::wirelessMic()},
                      hid::state() == hid::Bt::OFF);
           mode = Mode::MENU;
           dirty = true;

@@ -36,6 +36,7 @@ static volatile int  lastPeak = 0;
 static bool          micOn = false;
 static volatile bool suspended = false;
 static uint32_t      endSince = 0;
+static bool          forWispr = false;  // the agent stream is for Wispr (A), not a talk (B); main loop only
 
 // Task-only state
 static Frame    ring[RING];
@@ -161,11 +162,14 @@ void begin() {
 void loop() {
   if (ending && (drained || millis() - endSince > END_TIMEOUT_MS)) {
     if (sending) {
-      buddy::agentTalkEvent(false);
-      Log.printf("Agent audio: %lu frames sent, %lu dropped, %lu busy retries, link %s\n", (unsigned long)statFrames,
-                 (unsigned long)statDropped, (unsigned long)statBusy, buddy::linkInfo().c_str());
+      if (forWispr) buddy::wisprEvent(false);
+      else buddy::agentTalkEvent(false);
+      Log.printf("%s audio: %lu frames sent, %lu dropped, %lu busy retries, link %s\n", forWispr ? "Wispr" : "Agent",
+                 (unsigned long)statFrames, (unsigned long)statDropped, (unsigned long)statBusy,
+                 buddy::linkInfo().c_str());
     }
     armed = sending = ending = drained = false;
+    forWispr = false;
   }
 
   // The mic runs for the whole press, even while the Mac briefly reopens the
@@ -195,18 +199,42 @@ void preRoll() {
   armed = true;
 }
 
+// The talk functions leave a Wispr stream alone (B pressed while it finishes).
 void agentTalk() {
+  if (forWispr) return;
   if (!armed) preRoll();
   buddy::agentTalkEvent(true);
   sending = true;
 }
 
-void agentEnd() {
+static void finish() {
   if (!armed || ending) return;
   if (!sending) { armed = false; return; }  // just a click: drop the pre-roll
   endSince = millis();
   ending = true;
 }
+
+void agentEnd() {
+  if (!forWispr) finish();
+}
+
+// No pre-roll needed: Wispr starts recording on key-down too, so streaming
+// starts at once (the first ~100 ms are the mic's settle silence).
+bool wisprStart() {
+  if (armed) return false;  // a talk is recording
+  forWispr = true;
+  drained = ending = false;
+  sending = true;
+  armed = true;
+  buddy::wisprEvent(true);
+  return true;
+}
+
+void wisprEnd() {
+  if (forWispr) finish();
+}
+
+bool wisprStreaming() { return forWispr && armed; }
 
 bool usbStreaming() { return isStreaming; }
 bool live() { return micOn; }

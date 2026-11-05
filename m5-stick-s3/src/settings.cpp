@@ -122,6 +122,9 @@ void saveMacPassword(const String& p) {
 bool devMode()           { return prefs.getBool("devmode", true); }
 void saveDevMode(bool on)  { prefs.putBool("devmode", on); }
 
+bool wirelessMic()            { return prefs.getBool("wmic", true); }
+void saveWirelessMic(bool on)  { prefs.putBool("wmic", on); }
+
 bool needsBondReset() { return !prefs.getBool("slots_v1", false); }
 void bondResetDone()  { prefs.putBool("slots_v1", true); }
 

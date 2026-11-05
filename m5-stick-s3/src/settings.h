@@ -65,7 +65,12 @@ void   saveMacPassword(const String& p);  // empty = clear
 bool   devMode();
 void   saveDevMode(bool on);
 
-bool   needsBondReset();              // first boot after upgrading to slots
+// Wireless Wispr mic: an A hold away from USB streams the mic to the Mac agent
+// (only when the agent has it turned on too).
+bool   wirelessMic();
+void   saveWirelessMic(bool on);
+
+bool   needsBondReset();             // first boot after upgrading to slots
 void   bondResetDone();
 
 }  // namespace settings

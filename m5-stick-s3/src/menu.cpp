@@ -9,7 +9,7 @@ constexpr uint16_t ENTER_STEPS[]   = {0, 500, 1000, 1500, 2000, 3000};
 
 enum Item {
   MOD_FN, MOD_CTRL, MOD_OPTION, MOD_SHIFT, MOD_CMD, KEY, TEST, ENTER,
-  SLOT, BT, FORGET, STANDBY, SOUND, VOLUME, M_LIFT, M_FACE, M_SHAKE, BRIGHT, AUTOROT, FLIP, WEB, DEV, POWER, SAVE, CANCEL, COUNT
+  SLOT, BT, FORGET, STANDBY, SOUND, VOLUME, WMIC, M_LIFT, M_FACE, M_SHAKE, BRIGHT, AUTOROT, FLIP, WEB, DEV, POWER, SAVE, CANCEL, COUNT
 };
 
 static Draft    draft_;
@@ -91,6 +91,7 @@ Action select() {
     case FLIP:    return Action::FLIP;
     case DEV:     draft_.devMode = !draft_.devMode; return Action::REDRAW;
     case SOUND:   draft_.sound = !draft_.sound; return Action::REDRAW;
+    case WMIC:    draft_.wmic = !draft_.wmic; return Action::REDRAW;
     case VOLUME:  draft_.volume = draft_.volume >= 255 ? 64 : draft_.volume >= 192 ? 255 : draft_.volume >= 128 ? 192 : 128;
                   return Action::VOLUME;
     case POWER:   return Action::POWER_OFF;
@@ -133,6 +134,7 @@ ui::MenuView view() {
   v.lines[FLIP]    = "Flip screen";
   v.lines[DEV]     = String("Dev mode: ") + (draft_.devMode ? "ON" : "off");
   v.lines[SOUND]   = String("Sounds: ") + (draft_.sound ? "ON" : "off");
+  v.lines[WMIC]    = String("Wireless mic: ") + (draft_.wmic ? "ON" : "off");
   v.lines[VOLUME]  = String("Volume: ") + (draft_.volume * 100 + 127) / 255 + "%";
   v.lines[POWER]   = "Power off";
   v.lines[WEB]     = "Web settings";
@@ -144,6 +146,7 @@ ui::MenuView view() {
   else if (sel == ENTER) v.hint = "Enter after a hold";
   else if (sel == SLOT && draft_.slot != originalSlot) v.hint = "Save to switch Mac";
   else if (sel == DEV) v.hint = "USB: Wi-Fi on, OTA+logs";
+  else if (sel == WMIC) v.hint = "A hold: Wispr mic by BT";
   else if (sel == TEST || sel == BT || sel == FLIP || sel == WEB || sel == POWER || sel >= SAVE) v.hint = "A next  B select";
   return v;
 }

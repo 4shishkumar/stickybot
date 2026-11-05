@@ -45,6 +45,8 @@ const  Agent& lastAnswer();        // the last successful exchange ("done"), for
 uint32_t agentUpdated();           // millis() of the last status, 0 = none
 void   agentTalkEvent(bool start); // tell the agent a talk press started / ended
 void   agentCancel();              // dismissed on the stick: the agent drops the request
+bool   agentWirelessMic();         // the agent can play the mic into Wispr ("wmic" in its hello)
+void   wisprEvent(bool start);     // tell the agent a Wispr stream started / ended
 size_t audioPayloadMax();          // largest audio frame one notification can carry
 bool   sendAudio(const uint8_t* data, size_t len);  // safe from any task
 void   eventShown(const String& id);  // ack: {"src":"agent","evt":"event_shown","id":...}
