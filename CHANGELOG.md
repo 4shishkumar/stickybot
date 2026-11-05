@@ -12,6 +12,14 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- **Pick the brain: Claude Code or OpenRouter** (Settings → Brain). OpenRouter uses your own API key,
+  pay per use, with any model from its list (prices shown, a fast cheap model suggested). Replies stream
+  to the stick and are spoken sentence by sentence like Claude's; the stick tools work, and opening an
+  app or a URL asks on the stick first. Each request's time and cost show in Settings, and **Test** sends
+  one short request. The key is kept in the macOS Keychain, never in `config.json`, and can't be read back
+  (`STICK_AGENT_OPENROUTER_KEY` overrides it for development). Switching needs no restart.
+
 ## [1.8.4] - 2026-11-05
 
 ### Changed

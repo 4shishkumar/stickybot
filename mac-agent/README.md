@@ -39,6 +39,21 @@ easier for the speech model than "P R 1234".
 - Web search and reading run without asking; commands that change things ask on the stick (A yes / B no, 30 s, then Claude Code asks in the terminal).
 - **Click B** on any agent screen to cancel and go back to Home. **Shake** does the same.
 
+### Pick a brain: Claude Code or OpenRouter
+Settings → **Brain** picks who answers (everything above that isn't a quick command):
+- **Claude Code** (default) — your Claude subscription, no key. It can search the web and run commands on your Mac (with your approval).
+- **OpenRouter** — your own [OpenRouter](https://openrouter.ai) API key, **pay per use**; pick any model (the list shows
+  each model's price per million tokens; a fast, cheap one that can use tools is suggested). It answers from the model's
+  own knowledge (no web search or shell) and can use the stick tools — opening an app or a URL, or running a quick
+  command, asks on the stick first (A / B). The dashboard shows each request's time and cost; **Test** sends one short request.
+  - **Privacy:** what you say, and the conversation so far, goes to OpenRouter and the model's provider.
+  - **The key** is kept in your Mac's login **Keychain** (service `com.stickkey.agent`, account `openrouter`), never in
+    `config.json`; the dashboard can save or remove it but never reads it back (it shows "saved (…abcd)").
+    For development, the environment variable `STICK_AGENT_OPENROUTER_KEY` overrides it.
+  - Settings: `openrouter_model`, `openrouter_max_tokens` (400). Follow-ups and "new chat" work as with Claude.
+
+Switching applies from the next request, no restart needed.
+
 ### The other buttons
 - **A (hold):** Wispr Flow dictation (the key combo; over USB the stick is also the mic, and with the
   [wireless Wispr mic](#wireless-wispr-mic) it is the mic without a cable too).
@@ -200,6 +215,8 @@ Files: everything lives in `~/.stick-agent/` — `config.json`, `commands.json`,
 | `stt.py` | speech to text — Parakeet (MLX), English-only v2 by default (`stt_model`) |
 | `commands.py` | quick commands: phrase matching, spoken numbers, app lookup |
 | `brain.py` | Claude Code headless: a persistent stream-json session (or `claude -p` per request), follow-ups, interrupt/cancel, timings |
+| `brains.py`, `openai_brain.py`, `brain_api.py` | the brain picked in Settings; the OpenRouter brain (OpenAI-compatible chat, streaming, the stick tools); Settings → Brain API |
+| `keychain.py` | API keys in the macOS Keychain (Security framework via ctypes) |
 | `speech.py` | replies read aloud: sentence splitting, `say` per sentence, a queue to the stick speaker or the Mac |
 | `core.py` | the agent: talk → text → command or Claude → reply; approvals; sounds; speech |
 | `wispr_mic.py` | the wireless Wispr mic: stick audio → jitter buffer → BlackHole 2ch (sounddevice) |
