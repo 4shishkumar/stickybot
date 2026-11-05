@@ -5,6 +5,7 @@
 #include "hid.h"
 #include "web.h"
 #include "battery.h"
+#include "ota.h"
 #include <M5Unified.h>
 #include "ui.h"
 #include "motion.h"
@@ -58,6 +59,7 @@ static String stateJson() {
   j += String(",\"autoRotate\":") + (settings::autoRotate() ? "true" : "false");
   j += String(",\"devMode\":") + (settings::devMode() ? "true" : "false");
   j += String(",\"wirelessMic\":") + (settings::wirelessMic() ? "true" : "false");
+  j += String(",\"ota\":1,\"otaPending\":") + (ota::pendingVerify() ? "true" : "false");  // Bluetooth update (1.8.0+)
   j += String(",\"usbMounted\":") + (mic::usbMounted() ? "true" : "false");
   j += String(",\"macPassSet\":") + (settings::macPassword().length() ? "true" : "false");
   j += ",\"enterDelay\":" + String(settings::enterDelayMs());

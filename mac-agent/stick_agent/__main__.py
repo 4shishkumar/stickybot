@@ -8,6 +8,7 @@
   stick-agent logs       follow the log
   stick-agent open       open the dashboard
   stick-agent flash      flash the bundled firmware to a stick on USB  [--port P] [--backup]
+                         --ble: over Bluetooth instead (stick 1.8.0+, needs the agent running)  [--force]
   stick-agent setup      install / check / remove parts (see `stick-agent setup --help`)
   stick-agent mcp        the stick tools for terminal Claude Code sessions: install | uninstall | status  [--yes]
   stick-agent uninstall  remove everything it installed  [--purge: also delete ~/.stick-agent]
@@ -206,9 +207,12 @@ def main():
     elif cmd == "uninstall":  # = setup --uninstall all
         from . import installer
         sys.exit(installer.main(["--uninstall", "all", *sys.argv[2:]]))
-    elif cmd == "flash":  # stick-agent flash [--port P] [--backup]
+    elif cmd == "flash":  # stick-agent flash [--port P] [--backup] | --ble [--force]
         from . import flasher
         args = sys.argv[2:]
+        if "--ble" in args:
+            from . import ota
+            sys.exit(ota.cli("--force" in args))
         port = args[args.index("--port") + 1] if "--port" in args and args.index("--port") + 1 < len(args) else None
         sys.exit(flasher.cli(port, "--backup" in args))
     else:

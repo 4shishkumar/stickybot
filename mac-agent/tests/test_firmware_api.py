@@ -79,7 +79,7 @@ async def test_firmware_shape(client):
     assert d["bundled"] == {"version": "1.6.0", "board": "m5-sticks3", "built": "today", "sha256": "x", "size": 101,
                             "source": "bundled", "release": None}
     assert d["usb"] == [{"port": STICK_PORT["port"], "serial": "ABC123", "version": "1.6.0", "board": "m5-sticks3"}]
-    assert d["connected"] == {"name": "my-stick", "version": "1.6.0"}
+    assert d["connected"] == {"name": "my-stick", "version": "1.6.0", "ota": False}  # 1.6.0: no "ota" in @state
 
 
 async def test_firmware_without_bundle_or_link(client, monkeypatch):
