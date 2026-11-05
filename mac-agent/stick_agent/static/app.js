@@ -10,6 +10,7 @@ import * as events from "./pages/events.js";
 import * as settings from "./pages/settings.js";
 import * as logs from "./pages/logs.js";
 import * as wizard from "./wizard.js";
+import {mountBanner} from "./updates.js";
 
 const ICON = {
   overview: '<rect x="3" y="3" width="7" height="8" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="15" width="7" height="6" rx="1.5"/>',
@@ -122,6 +123,7 @@ async function maybeOnboard() {
 
 store.on((type, data) => { if (type === "status") paintStatus(data); });
 buildNav();
+mountBanner($("#updateBanner"));
 $("#addStick").addEventListener("click", () => { location.hash = "#setup"; });
 window.addEventListener("hashchange", route);
 route();

@@ -2,6 +2,7 @@
 import {h, clear, card, field, toggle, get, put, post, report, toast, refreshStatus, store} from "../lib.js";
 import {componentsPanel} from "../components.js";
 import {mcpPanel} from "../mcp.js";
+import {updatesPanel} from "../updates.js";
 
 export const title = "Settings";
 export const subtitle = "How the agent behaves. Changes apply right away once you save.";
@@ -84,6 +85,7 @@ export async function render(el) {
       field("Stick approvals", toggle("stickApprovals", "Claude Code's permission prompts go to the stick and here first", c.stick_approvals !== false),
         "Off: Claude Code asks in the terminal straight away. On: it waits up to 30 s for A / B.")),
     card("Stick tools for Claude Code (MCP)", mcpPanel(c)),
+    card("Updates", updatesPanel(c)),
     card("Advanced",
       field("Run without asking", h("input", {id: "safeTools", class: "mono", value: (c.safe_tools || []).join(", ")}), "Claude Code tools that never need approval."),
       field("Claude path", h("input", {id: "claudePath", class: "mono", placeholder: "found automatically", value: c.claude_path || ""})),
@@ -248,6 +250,8 @@ async function save() {
     wispr_mic_name: v("wisprMicName").value.trim() || "stick-mic-bluetooth",
     safe_tools: v("safeTools").value.split(",").map(s => s.trim()).filter(Boolean),
     claude_path: v("claudePath").value.trim(),
+    update_channel: v("updChannel").value,
+    update_check: v("updCheck").checked,
   });
   if (report(r, "Settings saved")) refreshStatus();
 }
