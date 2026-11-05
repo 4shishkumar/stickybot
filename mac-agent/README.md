@@ -129,7 +129,7 @@ The setup page does the rest, one step per screen, each with a button and live p
 | Approvals on the stick | optional | shows the 3 hooks first, then adds them to `~/.claude/settings.json` (backup first) |
 | Stick tools for Claude Code | optional | runs `claude mcp add …` (see below) |
 | GitHub alerts | optional | shows `brew install gh` if `gh` is missing; logs in with a one-time code shown on the page (enter it at github.com/login/device); asks for your main repo |
-| Wireless Wispr mic | optional | installs BlackHole 2ch — a pinned, tested version (0.7.1), sha256 and signature checked, with the Mac's own password dialog — and turns the mic on |
+| Wireless Wispr mic | optional | macOS 14.2+: turns the mic on and checks the Apple audio tap (no driver; macOS asks once for *System Audio Recording*). Older macOS, or *Use BlackHole instead*: installs BlackHole 2ch — a pinned, tested version (0.7.1), sha256 and signature checked, with the Mac's own password dialog |
 | Your stick | recommended | the setup wizard: pair, pick, name, firmware (USB or Bluetooth), try it |
 
 Skip any optional step; skipped steps can be done later from the last screen or
@@ -149,7 +149,7 @@ components:
 | `claude` | on | checks Claude Code is installed and logged in; adds our 3 hooks to `~/.claude/settings.json` (backup first, other hooks kept) |
 | `github` | off | checks `gh`, logs in if needed, sets your main repo, turns on GitHub alerts |
 | `firmware` | off | downloads the latest release's firmware (sha256-checked) and flashes it to a stick plugged in by USB (keeps its settings) |
-| `wireless_mic` | off | the stick's mic for Wispr without a cable: checks for BlackHole 2ch (tells you the `brew` command if it's missing — it needs your password, so it never runs it) and turns `wireless_mic` on; then rank “<stick>-mic-bluetooth” first in Wispr once |
+| `wireless_mic` | off | the stick's mic for Wispr without a cable: turns `wireless_mic` on (macOS 14.2+: carried by the Apple audio tap, no driver; older macOS: checks for BlackHole 2ch and tells you the `brew` command if it's missing — it needs your password, so it never runs it); then rank “<stick>-mic-bluetooth” first in Wispr once |
 
 Options (for `install.sh` and `stick-agent setup`): `--yes` (defaults, no
 questions), `--with github,firmware`, `--without model`, `--dry-run`,
@@ -183,11 +183,21 @@ older firmware: *TinyUSB UAC1*). Without the cable, the agent makes a microphone
 uses the highest-ranked mic that is present — switches to it for that dictation. The rest
 of the time it isn't there and Wispr uses your usual mic (keyboard shortcut included).
 
-1. **Install BlackHole 2ch** (once; asks for your Mac password): one click on the setup page
-   (`stick-agent install-page` → *Wireless Wispr mic*), or
-   `brew install --cask blackhole-2ch` — the hidden carrier of the audio; Wispr is never set to it.
-2. **Turn it on:** `stick-agent setup --with wireless_mic`, or dashboard → **Settings →
+1. **Turn it on:** the setup page (`stick-agent install-page` → *Wireless Wispr mic* →
+   **Turn on**), `stick-agent setup --with wireless_mic`, or dashboard → **Settings →
    Wireless Wispr mic** (or **Components → Wireless Wispr mic → Install**). Firmware 1.7.1+.
+2. **macOS 14.2 or newer: no driver.** The audio is carried by an *Apple audio tap* of the
+   agent's own sound. macOS asks once to allow **System Audio Recording** for **Python** —
+   that's the helper app (it only taps its own sound, muted; never other apps). Press
+   *Allow*; if you missed it: System Settings → Privacy & Security → Screen & System Audio
+   Recording → *System Audio Recording Only* → turn on Python, then *Check again*
+   (Settings → Wireless Wispr mic, or the setup page). The agent checks the tap with an
+   inaudible test before using it, and never plays the stick through the speakers.
+   **Older macOS, or by choice** (Settings → *Carried by* → BlackHole 2ch, or *Use BlackHole
+   instead* on the setup page): **install BlackHole 2ch** once (asks for your Mac password) —
+   one click on the setup page, or `brew install --cask blackhole-2ch`; the hidden carrier of
+   the audio; Wispr is never set to it. *Automatic* (the default) uses the tap once it's
+   allowed, else BlackHole if it's installed.
 3. **Rank it once:** hold **A** once (or dashboard → Settings → *Show “<stick>-mic-bluetooth”
    for 60 s*); in **Wispr Flow → Settings → Microphone**, drag **<stick>-mic-bluetooth
    (Aggregate)** to the top of the ranking. Put **<stick>-mic-usb** wherever you like — Wispr
@@ -197,7 +207,7 @@ of the time it isn't there and Wispr uses your usual mic (keyboard shortcut incl
    on the cable); the dashboard shows the last hold's timings.
 
 How a hold goes (away from USB, agent connected): A down → the stick starts streaming and
-sends `prepare`; the agent creates the device (~100–170 ms), waits `wispr_switch_ms`
+sends `prepare`; the agent creates the device (~100–170 ms; with the tap: tap + device), waits `wispr_switch_ms`
 (250 ms) for Wispr to switch, and answers `ready`; only then does the stick press Wispr's
 shortcut (it presses anyway after 800 ms). Let go before that = no key at all (a quick tap
 does nothing). On release the key-up waits 250 ms for the audio on its way, the agent keeps
@@ -210,8 +220,9 @@ computer: on USB the stick is its USB mic exactly as before (the key at once, no
 Bluetooth audio), and the agent removes the device at once if the stick is plugged in or
 disconnects. It is also removed when the agent quits or is stopped (a leftover from a crash
 is removed at the next start). The stick has its own switch (menu → *Wireless mic*, on by
-default). Remove: `stick-agent setup --uninstall wireless_mic` (turns it off; BlackHole
-stays — `brew uninstall --cask blackhole-2ch` removes it).
+default). Remove: `stick-agent setup --uninstall wireless_mic` (turns it off; BlackHole, if
+you installed it, stays — `brew uninstall --cask blackhole-2ch` removes it). Switching the
+carrier keeps the device's name and UID, so Wispr's ranking stays.
 
 `wispr_mic_name` (config) renames the device if “bluetooth” in its name ever causes
 trouble in Wispr (e.g. `"stick-mic-bt"`); Wispr then needs the ranking again.
@@ -242,8 +253,8 @@ Files: everything lives in `~/.stick-agent/` — `config.json`, `commands.json`,
 | `keychain.py` | API keys in the macOS Keychain (Security framework via ctypes) |
 | `speech.py` | replies read aloud: sentence splitting, `say` per sentence, a queue to the stick speaker or the Mac |
 | `core.py` | the agent: talk → text → command or Claude → reply; approvals; sounds; speech |
-| `wispr_mic.py` | the wireless Wispr mic: stick audio → jitter buffer → BlackHole 2ch (sounddevice) |
-| `stick_mic_device.py` | the "<stick>-mic-bluetooth" device around each A hold: a CoreAudio aggregate on BlackHole (ctypes), the prepare → ready → tail flow |
+| `wispr_mic.py` | the wireless Wispr mic: stick audio → jitter buffer → the default output (Apple audio tap) or BlackHole 2ch (sounddevice) |
+| `stick_mic_device.py` | the "<stick>-mic-bluetooth" device around each A hold: a CoreAudio aggregate with the agent's process tap or on BlackHole (ctypes), the tap check, the carrier choice, the prepare → ready → tail flow |
 | `events.py`, `github.py`, `claude_hooks.py` | alerts: GitHub (via `gh`), Claude finished |
 | `home.py`, `feed.py`, `weather.py` | the stick's home screen card, facts/news, weather (Open-Meteo) |
 | `server.py`, `dashboard.html`, `menubar.py` | dashboard API (localhost + token) and menu bar |

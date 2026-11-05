@@ -12,6 +12,17 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- **The wireless Wispr mic needs no driver on macOS 14.2+.** An Apple audio tap of the agent's own
+  sound now carries the stick's audio into the same “<stick>-mic-bluetooth” mic (same name, so Wispr's
+  ranking stays) — no BlackHole download, no Mac password. macOS asks once to allow *System Audio
+  Recording* for Python (the helper app; it only taps its own sound). The agent checks the tap with an
+  inaudible test before using it (at start, when turned on, and with **Check again**) and never lets the
+  stick's audio reach the speakers. BlackHole 2ch stays for older macOS, or by choice: Settings →
+  Wireless Wispr mic → **Carried by** (Automatic / Apple audio tap / BlackHole 2ch; config
+  `wireless_mic_carrier`), or *Use BlackHole instead* on the setup page. The setup page's wireless mic
+  step is now **Turn on** + the permission, and Settings shows which carrier is in use.
+
 ## [1.8.6] - 2026-11-05
 
 The v1.8.5 build stopped on a test that assumed it runs on a Mac; this release has the

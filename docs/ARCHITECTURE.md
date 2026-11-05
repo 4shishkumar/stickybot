@@ -93,9 +93,10 @@ Wispr Flow keeps a ranked list of mics and uses the highest-ranked one present, 
 
 ```
  stick                          agent (stick_mic_device.py, wispr_mic.py)            CoreAudio / Wispr
- A down ── prepare id=n ──────▶ wispr_mic.start (output into BlackHole open)
+ A down ── prepare id=n ──────▶ wispr_mic.start (output open: default output / BlackHole)
    │  stream ADPCM ───────────▶ ensure_present(): aggregate "<stick>-mic-bluetooth" ─▶ device appears (~100-170 ms)
-   │                            (public, sub-device BlackHole 2ch, ctypes)          Wispr: devicechange → ranks it first
+   │                            (public; tap: + our process tap, sub-device the      Wispr: devicechange → ranks it first
+   │                             default output · BlackHole: sub-device BlackHole)
    │                            wait wispr_switch_ms (250)
    │  ◀────────── ready id=n ── 
  key down (≤ 800 ms after A) ─────────────────────────────────────────────────────▶ Wispr records from it
@@ -104,9 +105,20 @@ Wispr Flow keeps a ranked list of mics and uses the highest-ranked one present, 
 ```
 
 1. **Press A** (firmware 1.7.1, not plugged into a computer — TinyUSB mounted + VBUS means *USB*: the key at once, the USB mic *<stick>-mic-usb*, nothing over Bluetooth). If the agent's hello said `"wmic":true,"wready":true`, the stick sends `wispr prepare` with an id and streams 20 ms ADPCM frames on AUDIO right away, but holds the key.
-2. **Agent** — `Holds.prepare()` creates the aggregate on its `stick-mic` worker thread, waits the switch time and answers `ready`; the stick presses the key on it (or after 800 ms anyway). Released before that = no key. Meanwhile `wispr_mic.py` decodes the frames, puts them in order by seq (lost → silence), resamples to BlackHole's rate (soxr) and plays them from an ~80 ms jitter buffer by a PortAudio stream (sounddevice) into **BlackHole 2ch**, whose input is the aggregate's. Nothing is transcribed by the agent.
+2. **Agent** — `Holds.prepare()` creates the aggregate on its `stick-mic` worker thread, waits the switch time and answers `ready`; the stick presses the key on it (or after 800 ms anyway). Released before that = no key. Meanwhile `wispr_mic.py` decodes the frames, puts them in order by seq (lost → silence), resamples to the output's rate (soxr) and plays them from an ~80 ms jitter buffer by a PortAudio stream (sounddevice) into the **carrier** (below). Nothing is transcribed by the agent.
 3. **Release A** — the stick keeps streaming 250 ms, then the key goes up and `wispr stop` follows; the agent plays out what's left, keeps the device for the tail (and while CoreAudio shows another process still reading BlackHole, ≤ 4 s), then removes it. A new `prepare` in that time finds it present and gets `ready` at once.
-4. **Safety** — the device is removed at once when the stick disconnects or reports `usb mounted`, when the feature is turned off, and on exit / SIGTERM / restart; at start the agent removes any left over (an aggregate outlives the process that made it). A 1.7.0 stick sends `wispr start` instead: the agent streams as before but makes no device.
+4. **Safety** — the device is removed at once when the stick disconnects or reports `usb mounted`, when the feature is turned off, and on exit / SIGTERM / restart; at start the agent removes any left over (an aggregate — and a public tap — outlives the process that made it: leftovers are found by UID / tap name). A 1.7.0 stick sends `wispr start` instead: the agent streams as before but makes no device.
+
+**Carriers** (`wireless_mic_carrier`, picked by `stick_mic_device.pick_carrier()`):
+
+| | Apple audio tap (macOS 14.2+) | BlackHole 2ch |
+|---|---|---|
+| install | nothing; macOS asks once for *System Audio Recording* (shown as “Python”, the helper app) | the pinned 0.7.1 pkg + the Mac's password dialog |
+| the aggregate | sub-device = the default output (clock) + a **public, muting, stereo-mixdown process tap of the agent's own process** in its tap list (`CATapDescription` through the Objective-C runtime via ctypes — every selector checked with `respondsToSelector:` first; `AudioHardwareCreateProcessTap`) | sub-device = BlackHole 2ch |
+| the agent plays into | the default output — the tap mutes all of the agent's own sound and hands it to the aggregate (`say` / `afplay` are separate processes, so not affected) | BlackHole's output |
+| lifetime | tap + device per hold (~90–150 ms), so the agent's audio is only muted then | device per hold |
+
+`auto` uses the tap once its **check** passed, else BlackHole if installed, else none (the stick is told `wmic:false` and why shows in Settings). The check (`StickMicDevice.probe`): a test-named tap + aggregate (`com.stickkey.wireless-mic.check`), an IOProc that plays a -80 dBFS 440 Hz tone into it and listens on its input; heard within 1.5 s → `ok` (typically ~70 ms, ~200 ms in all), else `failed` (no permission yet: a tap without it is silent **and doesn't mute**). It runs at start (wireless mic on), when the mic or the carrier setting is turned on, and from *Check again* (Settings, setup page) — never during a hold. And in tap mode `wispr_mic.py` only lets audio out while the agent's own tap exists (`tap_live`), so the stick never plays out of the speakers. A private aggregate would hide the check from Wispr, but its IOProc never runs, so the check device is public for its ~0.2 s.
 
 ### 5. The home screen
 Every 8 s the agent's *hello* message carries the time (stick clock), the weather (Open-Meteo, every 30 min) and the **home card** (`home.py`: approval > last answer > Claude Code sessions > facts / news / Wikipedia). The stick draws it — and the eyes peek now and then on its own.
