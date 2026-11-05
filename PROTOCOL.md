@@ -174,8 +174,12 @@ Buddy messages with `"src":"cli"`; the board answers
 | board → Mac | `{"src":"agent","evt":"talk","state":"start","rate":16000,"codec":"ima-adpcm"}` when B becomes a hold |
 | board → Mac | `{"src":"agent","evt":"talk","state":"stop"}` after the last audio frame |
 | Mac → board | `"wmic":true\|false` in the hello (and on its own, `{"src":"agent","wmic":…}`, when it changes) — the agent can play the wireless Wispr mic (its `wireless_mic` is on and BlackHole 2ch was found) |
-| board → Mac | `{"src":"agent","evt":"wispr","state":"start","rate":16000,"codec":"ima-adpcm"}` when A goes down for Wispr away from USB |
-| board → Mac | `{"src":"agent","evt":"wispr","state":"stop"}` after the last audio frame |
+| Mac → board | `"wready":true` in the hello (agent 1.7.1+) — it answers `prepare` with `ready` (makes the *stick-mic-bluetooth* device) |
+| board → Mac | `{"src":"agent","evt":"wispr","state":"prepare","id":n,"rate":16000,"codec":"ima-adpcm"}` when A goes down for Wispr away from USB and the agent said `wready` (firmware 1.7.1+); audio frames follow at once |
+| Mac → board | `{"src":"agent","wispr":"ready","id":n}` — the device is there and Wispr has had its switch time: press the key. `"device":false` = no device (stick on USB, no BlackHole, CoreAudio error): press anyway |
+| board → Mac | `{"src":"agent","evt":"wispr","state":"start","rate":16000,"codec":"ima-adpcm"}` instead of `prepare`, to an agent without `wready` (firmware 1.7.0 always) |
+| board → Mac | `{"src":"agent","evt":"wispr","state":"stop"}` after the last audio frame (also after a press cancelled before `ready`) |
+| board → Mac | `{"src":"agent","evt":"usb","mounted":true\|false}` — plugged into a computer that enumerated its USB device (firmware 1.7.1+): when it changes, to a new agent, and every 20 s with the hellos; `usbMounted` in `@state` |
 | Mac → board | `{"src":"agent","state":"thinking"\|"working"\|"done"\|"error","heard":"…","text":"…"}` — shown on screen |
 
 Audio frames: 16 kHz mono IMA-ADPCM, ≤20 ms each, little-endian:
@@ -184,19 +188,48 @@ Each frame carries the decoder state at its start, so a lost frame only loses
 its own 20 ms. `seq` restarts at 0 for every talk. The first frames are the
 pre-roll (recorded since B went down) and arrive faster than real time.
 
-**Wireless Wispr mic** (StickS3 firmware 1.7.0+): the same audio frames, for Wispr
+**Wireless Wispr mic** (StickS3 firmware 1.7.0+; the mic device 1.7.1+): the same audio frames, for Wispr
 instead of a request. The board streams while A holds the combo when all of these
 hold: its own switch is on (menu *Wireless mic*, `@wmic on=0|1`, state `wirelessMic`,
 default on), the agent's last hello said `"wmic":true`, the agent was heard from in
-the last 25 s, no host has the USB microphone open, and no B talk is recording. The
-key goes down first and the stream starts with it (no pre-roll: Wispr records from
+the last 25 s, it is not plugged into a computer (1.7.0: no host has the USB microphone open), and no B talk is recording. The
+key goes down first (1.7.1 with a `wready` agent: see *the mic device* below) and the stream starts with it (no pre-roll: Wispr records from
 key-down; the first ~100 ms are the mic's settle silence). While streaming, the
 key-up waits 250 ms so the audio still on its way reaches Wispr before it stops.
 `seq` restarts at 0 for every stream. The agent doesn't transcribe these: it plays
 them in real time into the BlackHole 2ch virtual device (a lost frame becomes 20 ms
-of silence), which Wispr uses as its microphone. The speaker stays quiet meanwhile
-(the codec is half-duplex: cues wait until the mic is off). Older agents never send
-`wmic`, so the board never streams to them.
+of silence). The speaker stays quiet meanwhile (the codec is half-duplex: cues wait
+until the mic is off). Older agents never send `wmic`, so the board never streams to them.
+
+*The mic device* (firmware 1.7.1 + agent with `wready`): Wispr is not set to BlackHole.
+The agent shows a public CoreAudio aggregate device named **stick-mic-bluetooth**
+(config `wispr_mic_name`; UID `com.stickkey.wireless-mic`; its only sub-device is
+BlackHole 2ch, so what the agent plays is its input) only around a hold, and the user
+ranks it first in Wispr's microphone list once; Wispr switches to the highest-ranked
+mic present whenever devices change. Per press:
+
+1. A down → the board sends `prepare` (id = a press counter) and streams right away, but
+   **holds the key**.
+2. The agent opens its output stream, creates the device if it isn't there (~100–170 ms),
+   waits `wispr_switch_ms` (default 250) only if it just created it, and sends `ready`
+   with the same id. A `ready` with another id is ignored.
+3. The board presses the key on `ready`, or after **800 ms** without one
+   (`wispr::READY_TIMEOUT_MS`). A released before that is cancelled: no key at all,
+   the stream ends with `stop`.
+4. Release → the 250 ms tail → key up → `stop`. The agent keeps the device
+   `wispr_tail_ms` (default 800), longer while another process is still reading it
+   (≤ 4 s more; removing it mid-dictation stops Wispr with *MicDisconnected*), then
+   destroys it. A `prepare` in that time finds it present: `ready` at once.
+
+The device exists only while the board is connected by Bluetooth and not USB-mounted:
+the agent answers `prepare` with `"device":false` and removes the device at once on
+`{"evt":"usb","mounted":true}` or when the link drops; also when `wireless_mic` is turned
+off, on exit / SIGTERM / restart, and (left over from a crash) at start.
+
+**USB wins**: while the board is plugged into a computer (TinyUSB mounted *and* VBUS
+present — a charger-only cable never mounts), A is the USB microphone exactly as
+before 1.7: the key at once, no `prepare`, no Bluetooth audio. The USB mic is named
+**stick-mic-usb** (its audio interface string; firmware 1.7.1+, before: "TinyUSB UAC1").
 
 **Sounds** (`"src":"agent"`):
 

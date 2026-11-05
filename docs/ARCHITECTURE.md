@@ -39,6 +39,7 @@ talks to what, and where every file lives. For the wire formats see
 | main thread | the menu-bar icon (rumps / AppKit) |
 | `agent` thread → asyncio loop | everything else, cooperatively: Bluetooth (bleak), the web server (aiohttp), the talk pipeline, events, GitHub polling, weather, feed |
 | `stt` thread | Parakeet speech-to-text (MLX keeps its GPU streams per thread, so the model always runs on this one) |
+| `stick-mic` thread | creates / removes the stick-mic-bluetooth CoreAudio device and checks who reads it (one at a time, off the event loop) |
 | subprocesses | `claude -p …` per Claude request, `say` for speech, `open`/`osascript` for quick commands, `gh api` for GitHub |
 
 ## Where things live
@@ -82,9 +83,24 @@ Claude Code wants to run something not pre-allowed → runs the **PermissionRequ
 - **Events** have a level per kind (dashboard → Events): celebrate / nice / headsup / off → the stick shows the full-screen screen + sound and acks.
 
 ### 4. Wireless Wispr mic (hold A away from USB)
-1. **Press A** — the key combo goes down at once (Wispr starts recording). If the agent's hello said `"wmic":true` and no host has the USB mic open, the stick also sends `wispr start` and streams 20 ms ADPCM frames on AUDIO.
-2. **Agent** (`wispr_mic.py`) — frames are decoded, put in order by seq (lost → silence), resampled to BlackHole's rate (soxr) and played from an ~80 ms jitter buffer by a PortAudio stream (sounddevice) into **BlackHole 2ch**, which Wispr has as its microphone. Nothing is transcribed by the agent.
-3. **Release A** — the stick keeps streaming 250 ms, then the key goes up and `wispr stop` follows; the agent plays out what's left.
+Wispr Flow keeps a ranked list of mics and uses the highest-ranked one present, re-checking whenever the device list changes. The agent makes a mic, **stick-mic-bluetooth**, exist only around an A hold; ranked first once, it is what Wispr records from while A is held, and the user's usual mic otherwise.
+
+```
+ stick                          agent (stick_mic_device.py, wispr_mic.py)            CoreAudio / Wispr
+ A down ── prepare id=n ──────▶ wispr_mic.start (output into BlackHole open)
+   │  stream ADPCM ───────────▶ ensure_present(): aggregate "stick-mic-bluetooth" ─▶ device appears (~100-170 ms)
+   │                            (public, sub-device BlackHole 2ch, ctypes)          Wispr: devicechange → ranks it first
+   │                            wait wispr_switch_ms (250)
+   │  ◀────────── ready id=n ── 
+ key down (≤ 800 ms after A) ─────────────────────────────────────────────────────▶ Wispr records from it
+ A up → 250 ms → key up, stop ▶ wispr_mic.stop; keep wispr_tail_ms (800) + while
+                                Wispr still reads it (≤ 4 s) → remove() ─────────▶ gone: Wispr back to the usual mic
+```
+
+1. **Press A** (firmware 1.7.1, not plugged into a computer — TinyUSB mounted + VBUS means *USB*: the key at once, the USB mic *stick-mic-usb*, nothing over Bluetooth). If the agent's hello said `"wmic":true,"wready":true`, the stick sends `wispr prepare` with an id and streams 20 ms ADPCM frames on AUDIO right away, but holds the key.
+2. **Agent** — `Holds.prepare()` creates the aggregate on its `stick-mic` worker thread, waits the switch time and answers `ready`; the stick presses the key on it (or after 800 ms anyway). Released before that = no key. Meanwhile `wispr_mic.py` decodes the frames, puts them in order by seq (lost → silence), resamples to BlackHole's rate (soxr) and plays them from an ~80 ms jitter buffer by a PortAudio stream (sounddevice) into **BlackHole 2ch**, whose input is the aggregate's. Nothing is transcribed by the agent.
+3. **Release A** — the stick keeps streaming 250 ms, then the key goes up and `wispr stop` follows; the agent plays out what's left, keeps the device for the tail (and while CoreAudio shows another process still reading BlackHole, ≤ 4 s), then removes it. A new `prepare` in that time finds it present and gets `ready` at once.
+4. **Safety** — the device is removed at once when the stick disconnects or reports `usb mounted`, when the feature is turned off, and on exit / SIGTERM / restart; at start the agent removes any left over (an aggregate outlives the process that made it). A 1.7.0 stick sends `wispr start` instead: the agent streams as before but makes no device.
 
 ### 5. The home screen
 Every 8 s the agent's *hello* message carries the time (stick clock), the weather (Open-Meteo, every 30 min) and the **home card** (`home.py`: approval > last answer > Claude Code sessions > facts / news / Wikipedia). The stick draws it — and the eyes peek now and then on its own.

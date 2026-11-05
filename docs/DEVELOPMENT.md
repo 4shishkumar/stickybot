@@ -39,6 +39,11 @@ make lint             # ruff on mac-agent
 - GitHub change detection runs on `tests/fixtures/github_base.json` (GraphQL-shaped).
 - The hook scripts run as real subprocesses against a test server on the agent's port.
 - Mark anything needing the model or hardware `@pytest.mark.slow`.
+- **Audio devices:** tests never open a real audio device (`FakeSoundDevice`) and never create
+  a CoreAudio device (`FakeCoreAudio` replaces `stick_mic_device.CoreAudioDevices`, autouse).
+  The one real end-to-end check creates and removes a test-named aggregate:
+  `cd mac-agent && STICK_MIC_E2E=1 ~/.stick-agent/venv/bin/python -m pytest -m coreaudio`
+  (deselected by default). Check nothing is left: `system_profiler SPAudioDataType | grep stick-mic`.
 
 ### Firmware tests
 Pure logic (no Arduino, no hardware) lives in headers/files the `native` PlatformIO env can

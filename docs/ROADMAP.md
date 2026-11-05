@@ -62,7 +62,7 @@ API key? Install the companion app"* — it uses your Claude Code login instead.
 
 ### Later
 Signed `.app` (if the command-line install is a hurdle), wake word, calendar on the home screen, local model.
-(Done: the wireless Wispr mic — firmware 1.7.0 + the `wireless_mic` component.)
+(Done: the wireless Wispr mic — firmware 1.7.1 + the `wireless_mic` component: a "stick-mic-bluetooth" device that exists only while A is held, so Wispr is never pinned to it.)
 
 ## Risks and notes
 - **Web Bluetooth:** Chrome-family only; the user may need to pick the stick once per session; macOS Bluetooth quirks (re-pair as a fix).

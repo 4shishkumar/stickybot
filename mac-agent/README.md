@@ -88,7 +88,7 @@ then runs **`stick-agent setup`**, which asks what else to set up:
 | `claude` | on | checks Claude Code is installed and logged in; adds our 3 hooks to `~/.claude/settings.json` (backup first, other hooks kept) |
 | `github` | off | checks `gh`, logs in if needed, sets your main repo, turns on GitHub alerts |
 | `firmware` | off | flashes the bundled firmware to a stick plugged in by USB (keeps its settings) |
-| `wireless_mic` | off | the stick's mic for Wispr without a cable: checks for BlackHole 2ch (tells you the `brew` command if it's missing — it needs your password, so it never runs it) and turns `wireless_mic` on |
+| `wireless_mic` | off | the stick's mic for Wispr without a cable: checks for BlackHole 2ch (tells you the `brew` command if it's missing — it needs your password, so it never runs it) and turns `wireless_mic` on; then rank “stick-mic-bluetooth” first in Wispr once |
 
 Options (for `install.sh` and `stick-agent setup`): `--yes` (defaults, no
 questions), `--with github,firmware`, `--without model`, `--dry-run`,
@@ -118,27 +118,43 @@ block Claude Code: if the agent isn't running they do nothing.
 ---
 
 ### Wireless Wispr mic
-Over USB the stick is a USB microphone (*TinyUSB UAC1*). Without the cable, the agent can
-play the stick's mic into **BlackHole 2ch**, a free virtual audio device, and Wispr listens
-to that:
+Plugged in by USB the stick is a USB microphone, **stick-mic-usb** (firmware 1.7.1+;
+older firmware: *TinyUSB UAC1*). Without the cable, the agent makes a microphone called
+**stick-mic-bluetooth** appear on the Mac **only while you hold A**, and Wispr — which always
+uses the highest-ranked mic that is present — switches to it for that dictation. The rest
+of the time it isn't there and Wispr uses your usual mic (keyboard shortcut included).
 
 1. **Install BlackHole 2ch** (once; asks for your Mac password):
-   `brew install --cask blackhole-2ch`
+   `brew install --cask blackhole-2ch` — the hidden carrier of the audio; Wispr is never set to it.
 2. **Turn it on:** `stick-agent setup --with wireless_mic`, or dashboard → **Settings →
-   Wireless Wispr mic** (or **Components → Wireless Wispr mic → Install**).
-3. **In Wispr Flow's settings, set the microphone to “BlackHole 2ch”.**
-4. Hold **A** and talk. The stick's screen says *Wispr hears the stick (BT)*; the
-   dashboard shows *Streaming to Wispr*.
+   Wireless Wispr mic** (or **Components → Wireless Wispr mic → Install**). Firmware 1.7.1+.
+3. **Rank it once:** hold **A** once (or dashboard → Settings → *Show “stick-mic-bluetooth”
+   for 60 s*); in **Wispr Flow → Settings → Microphone**, drag **stick-mic-bluetooth
+   (Aggregate)** to the top of the ranking. Put **stick-mic-usb** wherever you like — Wispr
+   only sees it while the stick is plugged in. (Coming from the old setup? Pick your usual
+   mic again instead of BlackHole 2ch. Renamed mics are new devices to Wispr: rank again.)
+4. Hold **A** and talk. The stick's screen says *Wispr hears the stick (BT)* (or *(USB)*
+   on the cable); the dashboard shows the last hold's timings.
 
-While A is held away from USB (and the agent is connected), the stick streams its mic
-over Bluetooth; the agent plays it into BlackHole with ~80 ms of buffering. The key goes
-down at once and the stream starts with it; the key-up waits 250 ms so the last words
-reach Wispr. Plugged in by USB with Wispr using the stick's USB mic, the stick doesn't
-stream. The stick also has its own switch (menu → *Wireless mic*), on by default.
-With BlackHole picked in Wispr, Wispr hears nothing when the agent isn't running —
-switch Wispr back to the Mac's or the stick's USB mic then.
-Remove: `stick-agent setup --uninstall wireless_mic` (turns it off; BlackHole stays —
-`brew uninstall --cask blackhole-2ch` removes it).
+How a hold goes (away from USB, agent connected): A down → the stick starts streaming and
+sends `prepare`; the agent creates the device (~100–170 ms), waits `wispr_switch_ms`
+(250 ms) for Wispr to switch, and answers `ready`; only then does the stick press Wispr's
+shortcut (it presses anyway after 800 ms). Let go before that = no key at all (a quick tap
+does nothing). On release the key-up waits 250 ms for the audio on its way, the agent keeps
+the device `wispr_tail_ms` (800 ms) — and as long as Wispr still reads it, up to 4 s more,
+so Wispr never stops with *MicDisconnected* — then removes it. A new hold in that time
+reuses it at once. Both times are sliders under dashboard → Settings → *Advanced timings*.
+
+The device exists only while the stick is connected by Bluetooth and **not** plugged into a
+computer: on USB the stick is its USB mic exactly as before (the key at once, no device, no
+Bluetooth audio), and the agent removes the device at once if the stick is plugged in or
+disconnects. It is also removed when the agent quits or is stopped (a leftover from a crash
+is removed at the next start). The stick has its own switch (menu → *Wireless mic*, on by
+default). Remove: `stick-agent setup --uninstall wireless_mic` (turns it off; BlackHole
+stays — `brew uninstall --cask blackhole-2ch` removes it).
+
+`wispr_mic_name` (config) renames the device if “bluetooth” in its name ever causes
+trouble in Wispr (e.g. `"stick-mic-bt"`); Wispr then needs the ranking again.
 
 ## Using it
 - **Menu bar** icon: state at a glance, stick volume, sounds on/off, pause, restart, dashboard.
@@ -158,6 +174,7 @@ Files: everything lives in `~/.stick-agent/` — `config.json`, `commands.json`,
 | `brain.py` | Claude Code headless (`claude -p`, stream-json), follow-ups, cancel |
 | `core.py` | the agent: talk → text → command or Claude → reply; approvals; sounds; speech |
 | `wispr_mic.py` | the wireless Wispr mic: stick audio → jitter buffer → BlackHole 2ch (sounddevice) |
+| `stick_mic_device.py` | the "stick-mic-bluetooth" device around each A hold: a CoreAudio aggregate on BlackHole (ctypes), the prepare → ready → tail flow |
 | `events.py`, `github.py`, `claude_hooks.py` | alerts: GitHub (via `gh`), Claude finished |
 | `home.py`, `feed.py`, `weather.py` | the stick's home screen card, facts/news, weather (Open-Meteo) |
 | `server.py`, `dashboard.html`, `menubar.py` | dashboard API (localhost + token) and menu bar |
