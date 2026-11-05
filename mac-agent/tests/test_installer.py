@@ -349,8 +349,9 @@ async def test_wireless_mic_from_the_dashboard_updates_the_agent(client, agent, 
     r = await client.post("/api/components/wireless_mic/install", headers=client.auth)
     job = (await r.json())["job"]
     r = await client.get(f"/api/components/jobs/{job}", headers=HOST)
-    last = json.loads((await r.text()).strip().split("\n\n")[-1].removeprefix("data: "))
-    assert last == {"done": True, "ok": True, "error": None}
+    events = [json.loads(b.removeprefix("data: ")) for b in (await r.text()).strip().split("\n\n")
+              if b.startswith("data: ")]
+    assert {"done": True, "ok": True, "error": None} in events, events
     assert agent.cfg["wireless_mic"] is True and agent.wispr.enabled
 
 

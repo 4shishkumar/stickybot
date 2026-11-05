@@ -12,6 +12,12 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+The first published release (the v1.8.0 build stopped on a test). Firmware 1.8.0.
+
+### Fixed
+- A component change from the dashboard always reports when it's done, even if applying
+  the new setting fails.
+
 ## [1.8.0] - 2026-11-05
 
 The first tagged release: everything on `main` so far. Firmware 1.8.0.

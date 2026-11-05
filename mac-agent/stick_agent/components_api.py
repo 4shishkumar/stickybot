@@ -62,10 +62,15 @@ def routes(agent):
         async def run():
             ok, err = await loop.run_in_executor(None, work)
             log.info("component %s %s: %s", cid, action, "ok" if ok else err)
-            if cid in CONFIG_KEYS:  # pick up the change (wireless_mic: also when only BlackHole is missing)
-                agent.update_config({CONFIG_KEYS[cid]: config.load().get(CONFIG_KEYS[cid])})
-            job.emit({"done": True, "ok": ok, "error": err})
-            job.done = True
+            try:
+                if cid in CONFIG_KEYS:  # pick up the change (wireless_mic: also when only BlackHole is missing)
+                    agent.update_config({CONFIG_KEYS[cid]: config.load().get(CONFIG_KEYS[cid])})
+            except Exception as e:  # noqa: BLE001 — the page still needs its "done"
+                log.exception("applying %s failed", cid)
+                ok, err = False, err or str(e)
+            finally:
+                job.emit({"done": True, "ok": ok, "error": err})
+                job.done = True
 
         asyncio.ensure_future(run())
         return web.json_response({"job": job.id})
