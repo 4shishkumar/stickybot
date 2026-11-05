@@ -61,7 +61,7 @@ bool   sendAudio(const uint8_t* data, size_t len);  // safe from any task
 void   eventShown(const String& id);  // ack: {"src":"agent","evt":"event_shown","id":...}
 void   fastLink();                 // ask the Mac for a quick connection interval (audio coming)
 void   fastData();                 // ... plus long packets + the 2M PHY (firmware update coming)
-void   sendLine(const String& json);  // one JSON line to the Mac (TX notify, split as needed)
+void   sendLine(const String& json, bool log = true);  // one JSON line to the Mac (TX notify, split as needed)
 String linkInfo();                 // "MTU 256, 15 ms" (for logs)
 String clock();                    // local 12-hour time "3:25" from the agent's clock, "" until it has sent it
 String ampm();                     // "AM" / "PM"

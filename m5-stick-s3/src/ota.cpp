@@ -114,7 +114,10 @@ void onPacket(const uint8_t* data, size_t len) {
   if (!ok) dropped = dropped + 1;
 }
 
-static void send(const String& body) { buddy::sendLine("{\"src\":\"agent\",\"evt\":\"ota\"," + body + "}"); }
+// acks are quiet (~8 a second); everything else is logged
+static void send(const String& body, bool log = true) {
+  buddy::sendLine("{\"src\":\"agent\",\"evt\":\"ota\"," + body + "}", log);
+}
 
 static void reply(const otarx::Reply& r, const char* by = nullptr, const char* why = nullptr) {
   using K = otarx::Reply::Kind;
@@ -130,7 +133,7 @@ static void reply(const otarx::Reply& r, const char* by = nullptr, const char* w
       send(String("\"state\":\"refused\",\"error\":\"") + otarx::errorName(r.error) + "\"" +
            (why ? String(",\"why\":\"") + why + "\"" : String()));
       return;
-    case K::ACK:  send(String("\"state\":\"ack\"") + off); return;
+    case K::ACK:  send(String("\"state\":\"ack\"") + off, false); return;
     case K::GAP:  send(String("\"state\":\"ack\"") + off + ",\"gap\":true"); return;
     case K::DONE: send(String("\"state\":\"done\"") + off); return;
     case K::ERROR:

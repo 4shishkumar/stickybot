@@ -70,7 +70,7 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
-static void send(const String& json) {
+static void send(const String& json, bool log = true) {
   if (!tx) return;
   String s = json + "\n";
   for (size_t i = 0; i < s.length(); i += CHUNK) {
@@ -78,7 +78,7 @@ static void send(const String& json) {
     // A burst of notifications can run out of Bluetooth buffers: retry briefly
     for (int tries = 0; tries < 25 && !tx->notify((const uint8_t*)part.c_str(), part.length()); tries++) delay(4);
   }
-  Log.printf("buddy> %s\n", json.c_str());
+  if (log) Log.printf("buddy> %s\n", json.c_str());
 }
 
 static void ack(const char* what, bool ok = true) {
@@ -429,7 +429,7 @@ void fastLink() {
   if (h != BLE_HS_CONN_HANDLE_NONE) NimBLEDevice::getServer()->updateConnParams(h, 12, 24, 0, 400);
 }
 
-void sendLine(const String& json) { send(json); }
+void sendLine(const String& json, bool log) { send(json, log); }
 
 void fastData() {
   fastLink();
