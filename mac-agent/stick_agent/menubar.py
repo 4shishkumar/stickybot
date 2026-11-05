@@ -36,29 +36,12 @@ LABELS = {"ready": "Ready — hold B on the stick", "listening": "Listening…",
           "starting": "Starting…"}
 
 
-def wispr_line(w):
-    """The menu's smart Wispr mic line, or None when there's nothing to say."""
-    if not w.get("enabled"):
-        return None
-    if w.get("mic_error") and "Microphone" in w["mic_error"]:
-        return "Wispr mic: allow Microphone access for stick-agent"
-    if w.get("streaming") or w.get("hears") == "stick":
-        return "Wispr hears: the stick"
-    if w.get("hears"):
-        return f"Wispr hears: {w['hears']}"
-    if w.get("wispr_recording"):
-        return "Wispr hears: nothing"
-    return None
-
-
 class Menu(rumps.App):
     def __init__(self, agent):
         super().__init__("stick-agent", title="", quit_button=None)
         self.shown = None
         self.agent = agent
         self.status_item = rumps.MenuItem("Starting…")
-        self.wispr_item = rumps.MenuItem("")  # "Wispr hears: …" while Wispr records through BlackHole
-        self.wispr_shown = None
         self.pause_item = rumps.MenuItem("Pause", callback=self.toggle_pause)
         # Stick speaker: volume levels + sounds on/off (saved on the stick)
         self.volume_menu = rumps.MenuItem("Stick volume")
@@ -68,7 +51,7 @@ class Menu(rumps.App):
             self.volume_items[pct] = item
             self.volume_menu.add(item)
         self.sounds_item = rumps.MenuItem("Sounds on the stick", callback=self.toggle_sounds)
-        self.menu = [self.status_item, self.wispr_item, None,
+        self.menu = [self.status_item, None,
                      rumps.MenuItem("Open dashboard", callback=lambda _: webbrowser.open(f"http://localhost:{config.PORT}")),
                      self.volume_menu, self.sounds_item, None,
                      self.pause_item, rumps.MenuItem("Restart", callback=self.restart), None,
@@ -98,24 +81,12 @@ class Menu(rumps.App):
             text += f" — {self.agent.detail[:50]}"
         self.status_item.title = text
         self.pause_item.title = "Resume" if self.agent.link.paused else "Pause"
-        self.show_wispr()
         snd = self.agent.sounds or {}
         if "volume" in snd:
             vol = round(snd["volume"] / 2.55)
             for pct, item in self.volume_items.items():
                 item.state = 1 if abs(vol - pct) < 13 and (pct > 0 or vol == 0) else 0
         self.sounds_item.state = 1 if snd.get("on") else 0
-
-    def show_wispr(self):
-        w = self.agent.wispr.status()
-        text = wispr_line(w)
-        if text != self.wispr_shown:
-            self.wispr_shown = text
-            self.wispr_item.title = text or ""
-            try:
-                self.wispr_item._menuitem.setHidden_(not text)
-            except Exception:  # noqa: BLE001 — older rumps: leave it showing
-                pass
 
     def _stick(self, payload):
         """Runs a sound command on the agent's loop (we're on the menu-bar thread)."""

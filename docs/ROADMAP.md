@@ -62,11 +62,7 @@ API key? Install the companion app"* — it uses your Claude Code login instead.
 
 ### Later
 Signed `.app` (if the command-line install is a hurdle), wake word, calendar on the home screen, local model.
-(Done: the wireless Wispr mic — firmware 1.7.0 + the `wireless_mic` component; the smart Wispr mic —
-Wispr stays on BlackHole and hears the stick or the Mac's default input, whichever is dictating.)
-- **Smart Wispr mic, next:** test with AirPods (HFP switch delay) and other virtual-audio users of
-  BlackHole; maybe only follow Wispr's process; a signed `.app` would give the Microphone permission
-  a proper name instead of "Python".
+(Done: the wireless Wispr mic — firmware 1.7.0 + the `wireless_mic` component.)
 
 ## Risks and notes
 - **Web Bluetooth:** Chrome-family only; the user may need to pick the stick once per session; macOS Bluetooth quirks (re-pair as a fix).

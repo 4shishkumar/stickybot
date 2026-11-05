@@ -10,10 +10,7 @@ Wispr starts recording on key-down, so latency matters: frames are decoded as
 they arrive, put in order by seq (a lost frame becomes 20 ms of silence),
 resampled to the device's rate and played from a small jitter buffer (~80 ms)
 by a PortAudio output stream (sounddevice) that stays open while the feature
-is on and the stick is connected (with the smart mic, while the feature is on).
-
-The smart mic (mic_router.py) shares this output: while no stick stream is
-playing, the output callback plays its real-mic buffer (`self.fallback`) instead.
+is on and the stick is connected.
 """
 import collections
 import logging
@@ -225,10 +222,6 @@ class WisprMic:
         self._looked_at = 0.0
         self.last = None             # stats of the last stream, for the dashboard
         self._started = 0.0
-        self.fallback = None         # mic_router.FallbackMic to play while the stick isn't streaming
-        self.smart = None            # mic_router.SmartMic, for status()
-        self.on_stream = lambda active: None  # told when a stick stream starts / stops
-        self._lock = threading.RLock()  # open / close / PortAudio restarts come from two threads
 
     # --- device ------------------------------------------------------------------
 
@@ -292,21 +285,11 @@ class WisprMic:
     # --- output stream -------------------------------------------------------------
 
     def _callback(self, outdata, frames, _time, _status):
-        jb, fallback = self.jb, self.fallback
-        if jb is not None and (self.active or (jb.draining and jb.queued)):  # the stick (and its tail) wins
-            data = jb.pull(frames)
-        elif fallback is not None:
-            data = fallback.pull(frames)
-        else:
-            data = np.zeros(frames, dtype=np.float32)
+        data = self.jb.pull(frames) if self.jb else np.zeros(frames, dtype=np.float32)
         outdata[:] = data[:, None]  # mono to every channel
 
     def open(self):
         """Opens the output stream (silence until a stream starts). Returns True if open."""
-        with self._lock:
-            return self._open()
-
-    def _open(self):
         if self.stream is not None:
             return True
         dev = self.device()
@@ -327,39 +310,14 @@ class WisprMic:
         return True
 
     def close(self):
-        with self._lock:
-            self.active = False
-            if self.stream is not None:
-                try:
-                    self.stream.stop()
-                    self.stream.close()
-                except Exception as e:  # noqa: BLE001
-                    log.info("wireless mic: closing: %s", e)
-                self.stream = None
-
-    def refresh_devices(self):
-        """PortAudio only knows the devices that existed when it started: restart it so new
-        ones (AirPods, a USB mic) can be opened. Closes and reopens our output; never while a
-        stick stream plays (and the caller has closed any input stream)."""
-        with self._lock:
-            sd = self._module()
-            if self.active or sd is None or not hasattr(sd, "_terminate"):
-                return False
-            was_open = self.stream is not None
-            self.close()
-            t = time.monotonic()
+        self.active = False
+        if self.stream is not None:
             try:
-                sd._terminate()
-                sd._initialize()
+                self.stream.stop()
+                self.stream.close()
             except Exception as e:  # noqa: BLE001
-                log.warning("wireless mic: restarting PortAudio: %s", e)
-            self.dev = None
-            self._looked_at = 0.0  # a fresh look (device() would restart PortAudio again otherwise)
-            self.device(force=True)
-            if was_open:
-                self._open()
-            log.info("wireless mic: audio devices reloaded in %d ms", int((time.monotonic() - t) * 1000))
-            return True
+                log.info("wireless mic: closing: %s", e)
+            self.stream = None
 
     def warm(self):
         """The stick connected: have the stream ready before the first key-down."""
@@ -378,7 +336,6 @@ class WisprMic:
         self.seqr = Sequencer()
         self.active = True
         self._started = time.time()
-        self.on_stream(True)
         self._emit("wispr_mic", **self.status())
         return True
 
@@ -403,12 +360,8 @@ class WisprMic:
         log.info("wispr stream: %.1fs, %d frames, %d lost, %d late, %d underruns, %d ms dropped", self.last["secs"],
                  self.last["frames"], self.last["lost"], self.last["late"], self.last["underruns"],
                  self.last["dropped_ms"])
-        self.on_stream(False)
         self._emit("wispr_mic", **self.status())
 
     def status(self):
-        st = {"enabled": self.enabled, "device": self.dev["name"] if self.dev else None,
-              "open": self.stream is not None, "streaming": self.active, "error": self.error, "last": self.last}
-        if self.smart is not None:
-            st.update(self.smart.status())
-        return st
+        return {"enabled": self.enabled, "device": self.dev["name"] if self.dev else None,
+                "open": self.stream is not None, "streaming": self.active, "error": self.error, "last": self.last}

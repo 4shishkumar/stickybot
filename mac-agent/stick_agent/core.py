@@ -7,7 +7,7 @@ import os
 import time
 import uuid
 
-from . import brain, clips, commands, config, events, feed, github, home, link, mic_router, stt, weather, wispr_mic
+from . import brain, clips, commands, config, events, feed, github, home, link, stt, weather, wispr_mic
 from .adpcm import Recording
 
 log = logging.getLogger("agent")
@@ -57,12 +57,8 @@ class Agent:
         self.stats = {"requests": 0, "quick": 0, "claude": 0, "started": time.time()}
         self.listeners = []  # extra callbacks for every message from the stick
         self.voice = None  # the `say` process while speaking
-        self.wispr = wispr_mic.WisprMic(emit=self.emit_soon)  # A held away from USB: the stick's mic into BlackHole
+        self.wispr = wispr_mic.WisprMic(emit=self.emit)  # A held away from USB: the stick's mic into BlackHole
         self.wispr.set_enabled(self.cfg.get("wireless_mic"))
-        # Smart Wispr mic: no stick stream but Wispr records (its own shortcut) -> a real mic into BlackHole
-        self.smart = mic_router.SmartMic(self.wispr, emit=self.emit_soon, stick_ready=lambda: bool(
-            self.link.connected and self.wispr.enabled and self.wispr.dev))
-        self.smart.configure(self.cfg.get("wireless_mic"), self.cfg.get("wispr_fallback_mic"))
 
     # --- events for the dashboard / menu bar --------------------------------
 
@@ -72,17 +68,6 @@ class Agent:
         for q in list(self.subscribers):
             q.put_nowait(ev)
         return ev
-
-    def emit_soon(self, kind, **data):
-        """emit() from any thread (the smart mic reports from its own threads)."""
-        try:
-            running = asyncio.get_running_loop()
-        except RuntimeError:
-            running = None
-        if self.loop is not None and running is not self.loop and self.loop.is_running():
-            self.loop.call_soon_threadsafe(lambda: self.emit(kind, **data))
-        else:
-            self.emit(kind, **data)
 
     def set_state(self, state, detail=""):
         self.state, self.detail = state, detail
@@ -109,8 +94,7 @@ class Agent:
             self.wispr.warm()  # ready before the first key-down
         else:
             self.wispr.stop()
-            if not self.smart.on:  # the smart mic keeps BlackHole's output for keyboard dictation
-                self.wispr.close()
+            self.wispr.close()
         if self.state in ("starting", "ready", "no-stick", "searching", "paused") and self.stt_ready:
             self.set_state("ready" if state == "connected" else state)
 
@@ -360,9 +344,8 @@ class Agent:
         config.save(self.cfg)
         if "stick" in changes:
             self.link.set_target(self.cfg["stick"])
-        if "wireless_mic" in changes or "wispr_fallback_mic" in changes:
+        if "wireless_mic" in changes:
             self.wispr.set_enabled(self.cfg.get("wireless_mic"))
-            self.smart.configure(self.cfg.get("wireless_mic"), self.cfg.get("wispr_fallback_mic"))
             if self.link.connected:
                 self.wispr.warm()
                 asyncio.ensure_future(self.link.send({"src": "agent", "wmic": self.wispr.ready}))
@@ -386,7 +369,6 @@ class Agent:
                 await asyncio.sleep(60)
         asyncio.create_task(weather_loop())
         asyncio.create_task(self.github.run())
-        self.smart.start()  # watch who records from BlackHole (threads)
         self.set_state("starting", "loading speech model")
         try:
             await self.loop.run_in_executor(self.stt.thread, self.stt.load,

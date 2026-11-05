@@ -190,10 +190,6 @@ def make_app(agent):
                                          str(body.get("prompt", "")))
         return web.json_response({"ok": True, "shown": bool(ev)})
 
-    async def audio_inputs(_):
-        """Microphones the smart Wispr mic can fall back to (BlackHole left out) + the Mac's default."""
-        return web.json_response(await asyncio.get_running_loop().run_in_executor(None, agent.smart.inputs))
-
     async def new_chat(_):
         agent.brain.forget()
         agent.emit("info", text="Next request starts a new conversation")
@@ -221,7 +217,6 @@ def make_app(agent):
         web.get("/api/events/kinds", event_kinds), web.post("/api/claude-event", claude_event),
         web.get("/api/clips", clip_list), web.post("/api/clips/play", clip_play),
         web.get("/api/voices", voices), web.post("/api/voice/test", test_voice),
-        web.get("/api/audio/inputs", audio_inputs),
         web.post("/api/pause", pause), web.post("/api/new-chat", new_chat), web.post("/api/restart", restart),
     ])
     return app
