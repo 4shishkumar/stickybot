@@ -210,11 +210,38 @@ def test_github_not_logged_in(monkeypatch):
         g.install(installer.UI())
 
 
-def test_wireless_mic_is_reserved():
+def test_wireless_mic_without_blackhole(home, monkeypatch):
+    monkeypatch.setattr(installer, "blackhole_installed", lambda: False)
     w = installer.BY_ID["wireless_mic"]
-    assert w.status()[0] == "n/a"
-    with pytest.raises(installer.NotAvailable):
-        w.install(installer.UI())
+    assert w.status()[0] == "missing" and "brew install --cask blackhole-2ch" in w.status()[1]
+    lines = []
+    with pytest.raises(installer.NotAvailable) as e:
+        w.install(installer.UI(emit=lines.append))
+    assert "brew install --cask blackhole-2ch" in str(e.value)  # says what to run; never runs it (sudo)
+    assert config.load()["wireless_mic"] is True                 # on: works as soon as BlackHole appears
+    assert w.status()[0] == "partial"
+
+
+def test_wireless_mic_install_and_uninstall(home, monkeypatch):
+    monkeypatch.setattr(installer, "blackhole_installed", lambda: True)
+    w = installer.BY_ID["wireless_mic"]
+    assert w.status() == ("missing", "off · BlackHole 2ch found")
+    lines = []
+    w.install(installer.UI(emit=lines.append))
+    assert config.load()["wireless_mic"] is True
+    assert w.status()[0] == "installed"
+    assert any("BlackHole 2ch" in x.get("line", "") for x in lines)
+    w.uninstall(installer.UI(emit=lines.append))
+    assert config.load()["wireless_mic"] is False
+    assert w.status()[0] == "missing"
+
+
+def test_blackhole_is_found_by_its_driver(tmp_path, monkeypatch):
+    driver = tmp_path / "BlackHole2ch.driver"
+    monkeypatch.setattr(installer, "BLACKHOLE_DRIVERS", [driver])
+    assert not installer.blackhole_installed()
+    driver.mkdir()
+    assert installer.blackhole_installed()
 
 
 # --- selection, flags, main ----------------------------------------------------------------
@@ -315,6 +342,16 @@ async def test_component_errors(client):
     assert r.status == 404
     r = await client.get("/api/components/jobs/nope", headers=HOST)
     assert r.status == 404
+
+
+async def test_wireless_mic_from_the_dashboard_updates_the_agent(client, agent, monkeypatch):
+    monkeypatch.setattr(installer, "blackhole_installed", lambda: True)
+    r = await client.post("/api/components/wireless_mic/install", headers=client.auth)
+    job = (await r.json())["job"]
+    r = await client.get(f"/api/components/jobs/{job}", headers=HOST)
+    last = json.loads((await r.text()).strip().split("\n\n")[-1].removeprefix("data: "))
+    assert last == {"done": True, "ok": True, "error": None}
+    assert agent.cfg["wireless_mic"] is True and agent.wispr.enabled
 
 
 async def test_component_not_available_is_reported(client, monkeypatch):

@@ -19,6 +19,8 @@ from .firmware_api import Job
 
 log = logging.getLogger("components")
 
+CONFIG_KEYS = {"github": "github", "wireless_mic": "wireless_mic"}  # component -> the config it changes
+
 
 def routes(agent):
     jobs = {}
@@ -60,8 +62,8 @@ def routes(agent):
         async def run():
             ok, err = await loop.run_in_executor(None, work)
             log.info("component %s %s: %s", cid, action, "ok" if ok else err)
-            if ok and cid == "github":
-                agent.update_config({"github": config.load().get("github")})  # pick up the change
+            if cid in CONFIG_KEYS:  # pick up the change (wireless_mic: also when only BlackHole is missing)
+                agent.update_config({CONFIG_KEYS[cid]: config.load().get(CONFIG_KEYS[cid])})
             job.emit({"done": True, "ok": ok, "error": err})
             job.done = True
 

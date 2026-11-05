@@ -545,28 +545,54 @@ class Firmware(Component):
         raise NotAvailable("nothing to remove")
 
 
-# --- reserved: wireless mic for Wispr -------------------------------------------------------
+# --- wireless mic for Wispr ------------------------------------------------------------------
+
+BLACKHOLE_CASK = "brew install --cask blackhole-2ch"
+BLACKHOLE_DRIVERS = [Path("/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver"),
+                     Path.home() / "Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver"]
+
+
+def blackhole_installed():
+    """BlackHole 2ch's Core Audio driver is installed (what the Homebrew cask puts in place).
+    Checked on disk, so it needs no audio library and doesn't disturb a running agent's stream."""
+    return any(p.exists() for p in BLACKHOLE_DRIVERS)
+
 
 class WirelessMic(Component):
     id = "wireless_mic"
     title = "Wireless Wispr mic"
-    description = "coming later: the stick's mic for Wispr without a cable (via the BlackHole virtual mic)"
+    description = "the stick's mic for Wispr without a cable: the agent plays it into the BlackHole 2ch virtual mic"
     default = False
-    needs = {"admin": True}
-    from_dashboard = False
-    removable = False
+    needs = {"admin": True, "terminal": f"BlackHole 2ch: `{BLACKHOLE_CASK}` in a terminal"}
 
     def status(self):
-        return "n/a", "coming later"
+        bh = blackhole_installed()
+        on = bool(config.load().get("wireless_mic"))
+        if bh and on:
+            return "installed", "on · BlackHole 2ch found — set Wispr's microphone to BlackHole 2ch"
+        if on:
+            return "partial", f"on, but BlackHole 2ch isn't installed — run: {BLACKHOLE_CASK}"
+        return "missing", "off · BlackHole 2ch found" if bh else f"off · needs BlackHole 2ch ({BLACKHOLE_CASK})"
 
     def plan(self):
-        return "not available yet"
+        return "check for BlackHole 2ch (or say how to install it), turn the wireless mic on"
 
     def install(self, ui):
-        raise NotAvailable("the wireless Wispr mic isn't available yet")
+        cfg = config.load()
+        cfg["wireless_mic"] = True
+        config.save(cfg)
+        ui.say("wireless Wispr mic on (from a terminal: restart the agent to apply)")
+        if not blackhole_installed():
+            # Never run it ourselves: the cask installs a system audio driver and asks for the admin password
+            raise NotAvailable(f"BlackHole 2ch isn't installed yet — in a terminal run: {BLACKHOLE_CASK} "
+                               "(it asks for your Mac password), then set Wispr's microphone to BlackHole 2ch")
+        ui.say("BlackHole 2ch found — in Wispr Flow's settings, set the microphone to BlackHole 2ch")
 
     def uninstall(self, ui):
-        raise NotAvailable("nothing to remove")
+        cfg = config.load()
+        cfg["wireless_mic"] = False
+        config.save(cfg)
+        ui.say("wireless Wispr mic off (BlackHole stays installed: brew uninstall --cask blackhole-2ch removes it)")
 
 
 COMPONENTS = [Core(), Model(), Claude(), GitHub(), Firmware(), WirelessMic()]
@@ -662,7 +688,7 @@ def menu(picked):
                 note.append("stick on USB")
             if c.needs.get("terminal"):
                 note.append(c.needs["terminal"])
-            locked = " (always)" if c.id == "core" else " (coming later)" if c.id == "wireless_mic" else ""
+            locked = " (always)" if c.id == "core" else ""
             print(f"  {n}. [{mark}] {c.title}{locked} — {c.description}"
                   f"{'  · ' + '; '.join(note) if note else ''}  [{state}]")
         try:
@@ -674,7 +700,7 @@ def menu(picked):
         for tok in answer.replace(",", " ").split():
             if tok.isdigit() and 1 <= int(tok) <= len(COMPONENTS):
                 cid = COMPONENTS[int(tok) - 1].id
-                if cid in ("core", "wireless_mic"):
+                if cid == "core":
                     continue
                 chosen.symmetric_difference_update({cid})
 
@@ -743,7 +769,6 @@ def main(argv):
     picked = selection(opts["with"], opts["without"])
     if interactive:
         picked = menu(picked)
-    picked = [c for c in picked if c.id != "wireless_mic"]
     print("\nPlan:")
     for c in picked:
         print(f"  • {c.title}: {c.plan()}")
