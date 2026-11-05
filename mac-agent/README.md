@@ -90,20 +90,13 @@ needs the agent's token). Claude can use it to reach you on the stick:
 
 ## Install
 
-One command, from a clone of the repo (it's private, so for now you need access to
-`ashish-kumar-noon/stick-key`):
+One command (no GitHub login needed):
 
 ```sh
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stick-key/main/install.sh | sh
 ```
 
-or, without cloning first (uses your `gh` login):
-
-```sh
-gh api repos/ashish-kumar-noon/stick-key/contents/install.sh -H "Accept: application/vnd.github.raw" | sh
-```
-
-Once the setup site is up this becomes `curl -fsSL https://<site>/install.sh | sh`.
+or, from a clone of the repo, `./install.sh`.
 
 What it does: checks for an Apple Silicon Mac, installs [uv](https://docs.astral.sh/uv/)
 (a standalone Python manager — no Homebrew or system Python needed) if it's

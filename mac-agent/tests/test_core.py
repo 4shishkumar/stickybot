@@ -138,7 +138,7 @@ async def test_cancel_from_the_stick(agent):
 
 
 async def test_permission_answered_on_the_stick(agent):
-    task = asyncio.create_task(agent.ask_permission("Bash", "rm -rf build/", "loom", wait=5))
+    task = asyncio.create_task(agent.ask_permission("Bash", "rm -rf build/", "web", wait=5))
     await asyncio.sleep(0.05)
     prompt = next(m for m in agent.link.sent if m.get("src") == "cli" and m.get("prompt"))
     pid = prompt["prompt"]["id"]
@@ -150,7 +150,7 @@ async def test_permission_answered_on_the_stick(agent):
 
 
 async def test_permission_denied_from_the_dashboard(agent):
-    task = asyncio.create_task(agent.ask_permission("Edit", "/etc/hosts", "loom", wait=5))
+    task = asyncio.create_task(agent.ask_permission("Edit", "/etc/hosts", "web", wait=5))
     await asyncio.sleep(0.05)
     agent.decide(next(iter(agent.prompts)), allow=False)
     assert await task == "deny"
@@ -158,12 +158,12 @@ async def test_permission_denied_from_the_dashboard(agent):
 
 async def test_permission_nobody_answers(agent, monkeypatch):
     monkeypatch.setattr(core, "PROMPT_RESEND_S", 0.05)
-    assert await agent.ask_permission("Bash", "ls", "loom", wait=0.2) is None
+    assert await agent.ask_permission("Bash", "ls", "web", wait=0.2) is None
 
 
 async def test_permission_turned_off(agent):
     agent.cfg["stick_approvals"] = False
-    assert await agent.ask_permission("Bash", "ls", "loom") is None
+    assert await agent.ask_permission("Bash", "ls", "web") is None
     assert agent.link.sent == []
 
 

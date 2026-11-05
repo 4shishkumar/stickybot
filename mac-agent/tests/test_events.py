@@ -34,11 +34,11 @@ def test_rules_default_and_override():
 
 async def test_notify_sends_logs_and_emits(agent, monkeypatch):
     at(monkeypatch, 12)
-    ev = await agent.notifier.notify("pr_merged", "PR #12 merged!", "loom - Café ✨ fix")
+    ev = await agent.notifier.notify("pr_merged", "PR #12 merged!", "web - Café ✨ fix")
     assert ev["level"] == "celebrate" and ev["icon"] == "merge" and ev["id"] == "e1"
     msg = agent.link.sent[-1]
     assert msg == {"src": "agent", "event": ev}
-    assert ev["sub"] == "loom - Cafe  fix"          # sanitised for the stick's fonts
+    assert ev["sub"] == "web - Cafe  fix"          # sanitised for the stick's fonts
     logged = [json.loads(line) for line in events.EVENTS_LOG.read_text().splitlines()]
     assert logged[-1]["kind"] == "pr_merged" and logged[-1]["sent"] is True
     assert any(e["kind"] == "event" for e in agent.events)
@@ -47,7 +47,7 @@ async def test_notify_sends_logs_and_emits(agent, monkeypatch):
 
 async def test_notify_off_sends_nothing(agent):
     agent.cfg["event_rules"] = {"release": "off"}
-    assert await agent.notifier.notify("release", "Release v1", "loom") is None
+    assert await agent.notifier.notify("release", "Release v1", "web") is None
     assert agent.link.sent == []
 
 
@@ -72,6 +72,6 @@ async def test_test_kind_and_ack(agent):
 
 async def test_claude_finished_threshold(agent):
     agent.cfg["claude_done_min_s"] = 120
-    assert await agent.claude_finished(30, "/Users/me/loom", "fix it") is None
-    ev = await agent.claude_finished(245, "/Users/me/loom/", "fix the build please")
-    assert ev["title"] == "Claude finished in loom" and ev["sub"].startswith("took 4 min - fix the build")
+    assert await agent.claude_finished(30, "/Users/me/web", "fix it") is None
+    ev = await agent.claude_finished(245, "/Users/me/web/", "fix the build please")
+    assert ev["title"] == "Claude finished in web" and ev["sub"].startswith("took 4 min - fix the build")

@@ -1,12 +1,10 @@
 #!/bin/sh
 # stick-agent installer — the companion app for the M5StickS3 "stick-key".
 #
-# One line (once the setup site is up):
-#   curl -fsSL https://<site>/install.sh | sh
-# Today (private repo), from a clone:
+# One line:
+#   curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stick-key/main/install.sh | sh
+# or from a clone:
 #   ./install.sh
-# or without cloning first:
-#   gh api repos/ashish-kumar-noon/stick-key/contents/install.sh -H "Accept: application/vnd.github.raw" | sh
 #
 # What it does: checks this is an Apple Silicon Mac, installs uv (a standalone
 # Python manager — no Homebrew or system Python needed) if it's missing, makes
@@ -55,7 +53,7 @@ for arg in "$@"; do
       cat <<'USAGE'
 install.sh — install (or update) the stick-agent companion app on this Mac
 
-Usage: ./install.sh [options]          (or: curl -fsSL <url>/install.sh | sh -s -- [options])
+Usage: ./install.sh [options]          (or: curl -fsSL <raw install.sh url> | sh -s -- [options])
 
   --yes                 no questions: install the default components
   --with a,b            also install these components (model, claude, github, firmware)
@@ -159,7 +157,7 @@ if [ -z "$SRC" ]; then
     run gh repo clone "$REPO" "$SRC"
     fresh=1
   else
-    say "cloning $REPO over HTTPS (a private repo needs gh logged in instead)…"
+    say "cloning $REPO over HTTPS…"
     run git clone "https://github.com/$REPO.git" "$SRC"
     fresh=1
   fi

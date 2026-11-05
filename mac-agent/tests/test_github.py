@@ -14,7 +14,7 @@ BASE = json.loads((Path(__file__).parent / "fixtures" / "github_base.json").read
 def gh(agent, monkeypatch):
     """A GitHub watcher whose `gh` query returns whatever the test puts in .data."""
     monkeypatch.setattr(github.shutil, "which", lambda name: "/usr/bin/gh")
-    agent.cfg["github"] = {"on": True, "interval_s": 120, "primary_repo": "wvrdz/loom"}
+    agent.cfg["github"] = {"on": True, "interval_s": 120, "primary_repo": "acme/web"}
     agent.cfg["event_rules"] = {"release": "nice"}  # so release events are visible here
     w = github.GitHub(agent)
     w.data = copy.deepcopy(BASE)
@@ -37,8 +37,8 @@ def pr(data, number):
 async def test_first_look_only_seeds(gh, agent):
     await gh.poll()
     assert fired(agent) == []
-    assert gh.state["prs"]["wvrdz/loom#5507"]["ci"] == "FAILURE"
-    assert json.loads(github.STATE.read_text())["primary"] == "wvrdz/loom"
+    assert gh.state["prs"]["acme/web#5507"]["ci"] == "FAILURE"
+    assert json.loads(github.STATE.read_text())["primary"] == "acme/web"
 
 
 async def test_no_change_no_events(gh, agent):
@@ -58,7 +58,7 @@ async def test_no_change_no_events(gh, agent):
     (lambda d: pr(d, 5507)["reviews"]["nodes"].append(
         {"id": "R1", "author": {"login": "devin-ai-integration"}, "state": "COMMENTED"}), "Devin reviewed #5507"),
     (lambda d: d["asks"]["nodes"].append({"number": 5510, "title": "Update deps",
-                                          "repository": {"nameWithOwner": "wvrdz/loom"}}), "Review requested"),
+                                          "repository": {"nameWithOwner": "acme/web"}}), "Review requested"),
     (lambda d: d["primary"]["releases"]["nodes"][0].update(tagName="v0.1.498"), "Release v0.1.498"),
 ])
 async def test_transitions(gh, agent, change, title):
@@ -74,7 +74,7 @@ async def test_primary_repo_short_name_in_sub(gh, agent):
     pr(gh.data, 88)["commits"]["nodes"][0]["commit"]["statusCheckRollup"].update(state="FAILURE")
     await gh.poll()
     subs = dict(fired(agent))
-    assert subs["PR #5507 merged!"] == "loom #5507 - Add stick agent"
+    assert subs["PR #5507 merged!"] == "web #5507 - Add stick agent"
     assert subs["CI failed"] == "acme/other #88 - Docs tweak"
     assert [t for t, _ in fired(agent)][0] == "PR #5507 merged!"   # primary repo first
 
@@ -124,6 +124,6 @@ async def test_gh_missing(gh, agent, monkeypatch):
 def test_helpers():
     assert github._epoch("2026-10-20T10:12:00Z") == 1792491120
     assert github._epoch(None) == 0
-    assert github._short("wvrdz/loom", "wvrdz/loom") == "loom"
-    assert github._short("acme/x", "wvrdz/loom") == "acme/x"
-    assert github.settings({"github": {"interval_s": 60}})["primary_repo"] == "wvrdz/loom"
+    assert github._short("acme/web", "acme/web") == "web"
+    assert github._short("acme/x", "acme/web") == "acme/x"
+    assert github.settings({"github": {"interval_s": 60}})["primary_repo"] == ""   # no repo until the user sets one

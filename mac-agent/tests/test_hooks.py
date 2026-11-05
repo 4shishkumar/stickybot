@@ -26,7 +26,7 @@ async def run_hook(script, payload, home):
     return p.returncode, out.decode(), err.decode()
 
 
-PERMISSION = {"tool_name": "Bash", "tool_input": {"command": "rm -rf build/"}, "cwd": "/Users/me/loom"}
+PERMISSION = {"tool_name": "Bash", "tool_input": {"command": "rm -rf build/"}, "cwd": "/Users/me/web"}
 
 
 async def test_permission_hook_agent_not_running(home):
@@ -59,7 +59,7 @@ async def test_permission_hook_round_trip(home, live_agent, allow, behavior):
             break
         await asyncio.sleep(0.02)
     pid, p = next(iter(live_agent.prompts.items()))
-    assert p["tool"] == "Bash" and p["hint"] == "rm -rf build/" and p["from"] == "loom"
+    assert p["tool"] == "Bash" and p["hint"] == "rm -rf build/" and p["from"] == "web"
     live_agent.decide(pid, allow)
     code, out, _ = await task
     decision = json.loads(out)["hookSpecificOutput"]["decision"]
@@ -68,17 +68,17 @@ async def test_permission_hook_round_trip(home, live_agent, allow, behavior):
 
 async def test_claude_hooks_record_and_report(home, live_agent):
     live_agent.cfg["claude_done_min_s"] = 0
-    start = {"hook_event_name": "UserPromptSubmit", "session_id": "s1", "cwd": "/Users/me/loom", "prompt": "fix CI"}
+    start = {"hook_event_name": "UserPromptSubmit", "session_id": "s1", "cwd": "/Users/me/web", "prompt": "fix CI"}
     code, out, _ = await run_hook("claude_hooks.py", start, home)
     assert code == 0 and out == ""
     sessions = json.loads((home / "claude_sessions.json").read_text())
     assert sessions["s1"]["prompt"] == "fix CI"
     code, out, _ = await run_hook("claude_hooks.py", {"hook_event_name": "Stop", "session_id": "s1",
-                                                      "cwd": "/Users/me/loom"}, home)
+                                                      "cwd": "/Users/me/web"}, home)
     assert code == 0 and out == ""
     assert "s1" not in json.loads((home / "claude_sessions.json").read_text())
     titles = [m["event"]["title"] for m in live_agent.link.sent if "event" in m]
-    assert titles == ["Claude finished in loom"]
+    assert titles == ["Claude finished in web"]
 
 
 async def test_claude_hooks_ignore_the_agents_own_claude(home):

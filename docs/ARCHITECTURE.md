@@ -137,7 +137,7 @@ Nothing runs in the cloud: Claude Code on this Mac calls it.
   (2025-03-26 … 2025-11-25). No sessions, no GET stream (405). Replies are JSON; `ask()` answers as a short
   SSE stream with keep-alives while you decide, and the client closing it cancels the question.
 - **Who's asking:** the voice session's config sends `X-Stick-Client: voice` ("Agent"); the terminal install
-  sends `X-Stick-Cwd: ${PWD}`, which Claude Code expands, so the stick says "loom asks".
+  sends `X-Stick-Cwd: ${PWD}`, which Claude Code expands, so the stick says "web asks".
 - **Voice requests:** `brain.py` adds `--mcp-config ~/.stick-agent/mcp-voice.json` (0600, has the token) and
   `mcp__stick__{notify,ask,celebrate,progress,pin_home,stick_status,speak}` to `--allowedTools`; turning the
   server off (config `mcp_server`) restarts the session without them.

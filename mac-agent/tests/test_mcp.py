@@ -256,12 +256,12 @@ async def test_notify_levels_and_sound(client):
 
 
 async def test_caller_names(client):
-    await client.call("notify", {"text": "a"}, headers={"X-Stick-Cwd": "/Users/me/src/loom"})
+    await client.call("notify", {"text": "a"}, headers={"X-Stick-Cwd": "/Users/me/src/web"})
     await client.call("notify", {"text": "b"}, headers={"X-Stick-Cwd": "${PWD}"})  # not expanded
     await client.call("notify", {"text": "c"}, headers={"X-Stick-Client": "voice"})
-    assert [e["sub"] for e in sent_events(client.agent)] == ["from loom", "from Claude Code", "from Agent"]
+    assert [e["sub"] for e in sent_events(client.agent)] == ["from web", "from Claude Code", "from Agent"]
     log = [e for e in client.agent.events if e["kind"] == "mcp"]
-    assert [e["origin"] for e in log] == ["loom", "Claude Code", "Agent"]
+    assert [e["origin"] for e in log] == ["web", "Claude Code", "Agent"]
     assert log[0]["tool"] == "notify" and log[0]["args"] == "text='a'" and log[0]["ok"]
 
 
@@ -297,10 +297,10 @@ def test_rate_limit_window():
 async def test_progress_and_pin_on_the_home_card(client):
     a = client.agent
     text, err, _ = await client.call("progress", {"text": "Running tests", "done": 40, "total": 120},
-                                     headers={"X-Stick-Cwd": "/x/loom"})
+                                     headers={"X-Stick-Cwd": "/x/web"})
     assert not err
     homes = [m["home"] for m in a.link.sent if "home" in m]
-    assert homes[-1] == {"k": "claude", "a": "loom: 40/120 (33%)", "b": "Running tests"}
+    assert homes[-1] == {"k": "claude", "a": "web: 40/120 (33%)", "b": "Running tests"}
     assert a.home_card() == homes[-1]
     text, err, _ = await client.call("progress", {"text": "x", "done": 5, "total": 2})
     assert err and "more than total" in text
@@ -388,13 +388,13 @@ async def answer_when_shown(agent, decision, n=1):
 async def test_ask_answered_on_the_stick(client, decision, options, want):
     a = client.agent
     args = {"question": "Deploy where?"} | ({"options": options} if options else {})
-    task = asyncio.create_task(client.call("ask", args, headers={"X-Stick-Cwd": "/w/loom"}))
+    task = asyncio.create_task(client.call("ask", args, headers={"X-Stick-Cwd": "/w/web"}))
     await answer_when_shown(a, decision)
     text, err, res = await task
     assert not err and text == want and res["structuredContent"] == {"answer": want}
     p = asks_on_stick(a)[0]
     labels = options or ["Yes", "No"]
-    assert p["kind"] == "ask" and p["q"] == "Deploy where?" and p["from"] == "loom"
+    assert p["kind"] == "ask" and p["q"] == "Deploy where?" and p["from"] == "web"
     assert p["a"] == labels[0] and p["b"] == (labels[1] if len(labels) > 1 else "")
     assert p["hint"].startswith("Deploy where? - A: ")  # older firmware shows this
     assert a.link.sent[-1] == {"src": "cli"} and not a.asks  # cleared on the stick
@@ -422,7 +422,7 @@ async def test_ask_from_the_dashboard(client):
 
 
 async def test_ask_timeout(agent):
-    answer = await agent.ask_user("still there?", ["Yes", "No"], 0.2, "loom")
+    answer = await agent.ask_user("still there?", ["Yes", "No"], 0.2, "web")
     assert answer == "timeout" and not agent.asks and agent.link.sent[-1] == {"src": "cli"}
     assert [e["answer"] for e in agent.events if e["kind"] == "ask_done"] == ["timeout"]
 
@@ -453,7 +453,7 @@ async def test_an_approval_goes_in_front_of_a_question(agent, monkeypatch):
     monkeypatch.setattr(core, "PROMPT_RESEND_S", 0.05)
     task = asyncio.create_task(agent.ask_user("ok?", ["Yes", "No"], 5, "x"))
     await until(lambda: asks_on_stick(agent))
-    approval = asyncio.create_task(agent.ask_permission("Bash", "ls", "loom", wait=5))
+    approval = asyncio.create_task(agent.ask_permission("Bash", "ls", "web", wait=5))
     await until(lambda: agent.prompts)
     shown = len(asks_on_stick(agent))
     await asyncio.sleep(0.2)
@@ -469,9 +469,9 @@ async def test_an_approval_goes_in_front_of_a_question(agent, monkeypatch):
 
 
 async def test_ask_card_on_the_home_screen(agent):
-    task = asyncio.create_task(agent.ask_user("Ship it?", ["Yes", "No"], 5, "loom"))
+    task = asyncio.create_task(agent.ask_user("Ship it?", ["Yes", "No"], 5, "web"))
     await until(lambda: agent.asks)
-    assert agent.home_card() == {"k": "approval", "a": "loom asks", "b": "Ship it?", "u": True}
+    assert agent.home_card() == {"k": "approval", "a": "web asks", "b": "Ship it?", "u": True}
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -510,8 +510,8 @@ def ran(monkeypatch):
 
 
 async def test_open_url(client, ran):
-    text, err, _ = await client.call("open_url", {"url": "https://github.com/wvrdz/loom/pull/1"})
-    assert not err and text == "opened github.com" and ran == [["open", "https://github.com/wvrdz/loom/pull/1"]]
+    text, err, _ = await client.call("open_url", {"url": "https://github.com/acme/web/pull/1"})
+    assert not err and text == "opened github.com" and ran == [["open", "https://github.com/acme/web/pull/1"]]
     for bad in ("file:///etc/passwd", "javascript:alert(1)", "https://a b.com", "x-apple.systempreferences:foo",
                 "https://", "https://ok.com/\n--args"):
         text, err, _ = await client.call("open_url", {"url": bad})

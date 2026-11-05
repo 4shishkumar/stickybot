@@ -19,7 +19,7 @@ from . import config
 log = logging.getLogger("github")
 STATE = config.HOME / "github_state.json"
 MAX_BACKOFF_S = 30 * 60
-DEFAULT = {"on": True, "interval_s": 120, "primary_repo": "wvrdz/loom"}
+DEFAULT = {"on": True, "interval_s": 120, "primary_repo": ""}
 
 QUERY = """
 query($mine: String!, $asks: String!, $owner: String!, $name: String!, $withRepo: Boolean!) {
@@ -54,7 +54,7 @@ def _epoch(iso):
 
 
 def _short(repo, primary):
-    """'wvrdz/loom' -> 'loom' (primary repo by its name; others in full)."""
+    """'acme/web' -> 'web' (primary repo by its name; others in full)."""
     return repo.split("/")[-1] if repo == primary else repo
 
 

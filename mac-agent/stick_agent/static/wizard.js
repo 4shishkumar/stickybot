@@ -147,7 +147,7 @@ async function repoStep(body) {
   body.appendChild(h("p", {class: "small faint"}, "Updates the GitHub PR and Devin review commands, and the primary repo for alerts."));
   foot(body, {primary: async () => {
     const v = repo.value.trim();
-    if (!/^[\w.-]+\/[\w.-]+$/.test(v)) { toast("Use the form owner/repo, e.g. wvrdz/loom.", "err"); return; }
+    if (!/^[\w.-]+\/[\w.-]+$/.test(v)) { toast("Use the form owner/repo, e.g. acme/web.", "err"); return; }
     const doc = await get("/api/commands");
     if (!doc.error && Array.isArray(doc.commands)) {
       for (const c of doc.commands) {

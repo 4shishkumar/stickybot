@@ -169,7 +169,7 @@ Buddy messages with `"src":"cli"`; the board answers
 
 **Questions from a Claude session** (the agent's stick tools, `ask()`; firmware 1.7.2 draws them)
 use the same message with extra fields:
-`{"src":"cli","prompt":{"id":"ask-…","tool":"Question","hint":"<question> - A: <a> / B: <b>","from":"loom","kind":"ask","q":"<question>","a":"<label A>","b":"<label B or empty>"}}`.
+`{"src":"cli","prompt":{"id":"ask-…","tool":"Question","hint":"<question> - A: <a> / B: <b>","from":"web","kind":"ask","q":"<question>","a":"<label A>","b":"<label B or empty>"}}`.
 1.7.2 shows `q` with the labels on two button rows; A answers `once` (the first option), B `deny`
 (the second; with no `b`, B dismisses) and a **shake** answers `"decision":"dismiss"`. Older firmware
 ignores the extra fields and shows it as an approval (A yes / B no, the options in `hint`; a shake
@@ -261,7 +261,7 @@ session's `progress()` / `pin_home()` changes it (at most every 0.5 s); boards s
 
 | Direction | Message |
 |---|---|
-| Mac → board | `{"src":"agent","event":{"id":"e123","level":"celebrate"\|"nice"\|"headsup","title":"PR #5507 merged","sub":"wvrdz/loom · feat: dark mode","icon":"merge"\|"pr"\|"check"\|"x"\|"review"\|"claude"\|"star"\|"bell","sound":""}}` |
+| Mac → board | `{"src":"agent","event":{"id":"e123","level":"celebrate"\|"nice"\|"headsup","title":"PR #5507 merged","sub":"acme/web · feat: dark mode","icon":"merge"\|"pr"\|"check"\|"x"\|"review"\|"claude"\|"star"\|"bell","sound":""}}` |
 | board → Mac | `{"src":"agent","evt":"event_shown","id":"e123"}` when it appears on screen |
 
 - `celebrate`: confetti, a colour pulse, the happy face and the big icon, ~6 s; default sound `jingle_win` (Kenney Music Jingles, CC0).

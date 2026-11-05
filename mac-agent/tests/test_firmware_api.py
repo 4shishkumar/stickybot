@@ -188,7 +188,7 @@ async def test_onboarding_auto_steps(client, home):
     s = d["steps"]
     assert s["firmware"] and s["paired"] and s["picked"]
     assert not s["named"]           # still the default name
-    assert s["repo"]                # the shipped default repo (wvrdz/loom) counts as set
+    assert not s["repo"]            # the shipped commands still have <org>/<repo> placeholders
     assert not s["tested"] and not d["done"]
     config.COMMANDS.write_text(json.dumps({"commands": [{"open_url": "https://github.com/<org>/<repo>/pull/{n}"}]}))
     s = (await (await client.get("/api/onboarding", headers=HOST)).json())["steps"]

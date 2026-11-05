@@ -493,7 +493,7 @@ static void screenDemo() {
   hold(3000, [] { ui::drawAgent("working", "how much disk space do I have", "Running: df -h /"); });
   hold(4000, [] { ui::drawAgent("done", "what's the weather in Bangalore", "It's 28°C in Bangalore with patchy rain nearby and 54% humidity."); });
   hold(2500, [] { ui::drawAgent("error", "open the thing", "Didn't catch that."); });
-  hold(4000, [] { ui::drawPrompt("Bash", "rm -rf build/ && npm run build", "loom"); });
+  hold(4000, [] { ui::drawPrompt("Bash", "rm -rf build/ && npm run build", "web"); });
   {
     static const char* MOODS[] = {"Idle", "Listening", "Thinking", "Working", "Done", "Error", "Needs you", "Offline", "Party"};
     for (int m = 0; m < ui::MOOD_COUNT; m++) hold(1800, [&] { ui::drawMood(m, MOODS[m]); });
@@ -521,7 +521,7 @@ static void screenDemo() {
   }
   {
     uint32_t t0 = millis();
-    hold(6000, [&] { ui::drawEvent(0, "PR #5507 merged!", "wvrdz/loom - feat: dark mode", "merge", millis() - t0); });
+    hold(6000, [&] { ui::drawEvent(0, "PR #5507 merged!", "acme/web - feat: dark mode", "merge", millis() - t0); });
     t0 = millis();
     hold(4000, [&] { ui::drawEvent(1, "PR approved", "#5510 by teammate - ready to merge", "check", millis() - t0); });
     t0 = millis();

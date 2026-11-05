@@ -261,7 +261,7 @@ def split_title(text, width=40):
 
 
 def caller(request):
-    """Who's calling, for the stick ("loom asks") and the activity log: the voice session sends
+    """Who's calling, for the stick ("web asks") and the activity log: the voice session sends
     X-Stick-Client: voice; terminal installs send X-Stick-Cwd: ${PWD} (expanded by Claude Code)."""
     if request.headers.get("X-Stick-Client") == "voice":
         return "Agent"

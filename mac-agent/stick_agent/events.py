@@ -23,19 +23,19 @@ LEVELS = ("celebrate", "nice", "headsup", "off")
 
 # kind -> (default level, icon, sample title, sample sub) — samples are for the Test buttons
 KINDS = {
-    "pr_merged":         ("celebrate", "merge",  "PR #5507 merged!",          "loom - Add stick agent"),
-    "release":           ("celebrate", "star",   "Release v2.4.0",            "loom"),
-    "ci_fixed":          ("celebrate", "check",  "CI is green again",         "loom #5507"),
-    "pr_created":        ("nice",      "pr",     "PR #5508 opened",           "loom - Fix weather chip"),
-    "pr_approved":       ("nice",      "check",  "PR #5507 approved",         "loom - by a teammate"),
-    "claude_done":       ("nice",      "claude", "Claude finished in loom",   "took 4 min"),
-    "devin_review":      ("nice",      "review", "Devin reviewed #5507",      "loom - 3 comments"),
-    "review_requested":  ("headsup",   "review", "Review requested",          "loom #5510 - Update deps"),
-    "changes_requested": ("headsup",   "x",      "Changes requested",         "loom #5507"),
-    "ci_failed":         ("headsup",   "x",      "CI failed",                 "loom #5507 - build"),
+    "pr_merged":         ("celebrate", "merge",  "PR #5507 merged!",          "web - Add stick agent"),
+    "release":           ("celebrate", "star",   "Release v2.4.0",            "web"),
+    "ci_fixed":          ("celebrate", "check",  "CI is green again",         "web #5507"),
+    "pr_created":        ("nice",      "pr",     "PR #5508 opened",           "web - Fix weather chip"),
+    "pr_approved":       ("nice",      "check",  "PR #5507 approved",         "web - by a teammate"),
+    "claude_done":       ("nice",      "claude", "Claude finished in web",   "took 4 min"),
+    "devin_review":      ("nice",      "review", "Devin reviewed #5507",      "web - 3 comments"),
+    "review_requested":  ("headsup",   "review", "Review requested",          "web #5510 - Update deps"),
+    "changes_requested": ("headsup",   "x",      "Changes requested",         "web #5507"),
+    "ci_failed":         ("headsup",   "x",      "CI failed",                 "web #5507 - build"),
     # notify() / celebrate() from a Claude session (the stick tools, mcp_server.py): the session picks
     # the level; "off" here silences them all
-    "claude_tool":       ("nice",      "claude", "Tests passed",              "from loom"),
+    "claude_tool":       ("nice",      "claude", "Tests passed",              "from web"),
     "update":            ("nice",      "star",   "Update v1.8.0 ready",       "see the dashboard"),  # updates.py
     "test":              ("nice",      "bell",   "Test event",                "from the dashboard"),
 }

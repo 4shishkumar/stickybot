@@ -1,9 +1,9 @@
 """Releases of stick-key on GitHub: versions, picking the latest per channel, and
 downloading a release's firmware into ~/.stick-agent/firmware/<firmware version>/.
 
-Releases are listed with the `gh` CLI when it's installed and logged in (works for a
-private repo, with your own login), else over plain HTTPS from api.github.com (a
-public repo, no login). Assets come the same way: `gh release download`, or the
+Releases are listed with the `gh` CLI when it's installed and logged in (higher rate
+limits; also works for a private fork), else over plain HTTPS from api.github.com (no
+login). Assets come the same way: `gh release download`, or the
 asset's download URL. Every firmware part is checked against the sha256 in the
 release's manifest.json (and GitHub's own asset digest, when it gives one) before
 it lands in place; a download goes to a temporary folder first, so a half-finished
@@ -96,7 +96,7 @@ def gh_path():
 
 
 class Gh:
-    """The GitHub CLI with the user's own login (needed while the repo is private)."""
+    """The GitHub CLI with the user's own login (higher rate limits; works for private forks)."""
     name = "gh"
 
     def __init__(self, gh, repo=REPO):

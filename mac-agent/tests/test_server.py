@@ -70,7 +70,7 @@ async def test_config_put_ignores_unknown_keys(client):
 async def test_permission_long_poll(client):
     async def ask():
         r = await client.post("/api/permission", headers=client.auth,
-                              json={"tool": "Bash", "hint": "ls", "from": "loom", "wait": 5})
+                              json={"tool": "Bash", "hint": "ls", "from": "web", "wait": 5})
         return await r.json()
     task = asyncio.create_task(ask())
     for _ in range(100):
@@ -101,9 +101,9 @@ async def test_ask_runs_typed_requests(client, monkeypatch):
 async def test_claude_event(client):
     client.agent.cfg["claude_done_min_s"] = 60
     r = await client.post("/api/claude-event", headers=client.auth,
-                          json={"elapsed_s": 300, "cwd": "/Users/me/loom", "prompt": "fix"})
+                          json={"elapsed_s": 300, "cwd": "/Users/me/web", "prompt": "fix"})
     assert (await r.json())["shown"]
-    assert client.agent.link.sent[-1]["event"]["title"] == "Claude finished in loom"
+    assert client.agent.link.sent[-1]["event"]["title"] == "Claude finished in web"
 
 
 async def test_events_test_endpoint(client):

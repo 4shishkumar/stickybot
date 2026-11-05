@@ -32,17 +32,15 @@ Two parts: **you** flash and name their stick on your Mac (about 3 minutes), the
 That also gives them B click = Enter and the stick's own screens, sounds and menu.
 
 ### The voice agent (hold B)
-1. **Access:** add them as a collaborator on the private repo
-   (github.com/ashish-kumar-noon/stick-key → Settings → Collaborators).
-2. **Install** — one command (with `gh` logged in):
+1. **Install** — one command (no GitHub account needed):
    ```sh
-   gh api repos/ashish-kumar-noon/stick-key/contents/install.sh -H "Accept: application/vnd.github.raw" | sh
+   curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stick-key/main/install.sh | sh
    ```
    or clone the repo and run `./install.sh`. It installs everything into
    `~/.stick-agent` and asks about the optional parts (speech model ~2.5 GB, Claude
    Code hooks, GitHub alerts). Claude Code with **their own** login is needed for
    Claude requests (the installer points to Anthropic's installer if it's missing).
-3. **Setup wizard:** the dashboard (http://localhost:8660) opens it — pick **their**
+2. **Setup wizard:** the dashboard (http://localhost:8660) opens it — pick **their**
    stick, set their repo for the PR / Devin quick commands, then hold B and say
    "what time is it".
 
