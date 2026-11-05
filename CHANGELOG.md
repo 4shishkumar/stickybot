@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to stick-key — the Mac companion app (`stick-agent`) and the
+All notable changes to StickyBot (formerly stick-key) — the Mac app (`stickybot`) and the
 M5StickS3 firmware — are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/): `vX.Y.Z` is a stable release,
@@ -12,7 +12,25 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+**stick-key is now StickyBot.** After updating, macOS asks once more for Bluetooth (and
+System Audio Recording, with the wireless mic on the Apple audio tap) — now for
+*StickyBot* — and the mics have new names: **rank them in Wispr Flow → Settings →
+Microphone once** (hold A away from USB for the Bluetooth one; plug the stick in for the
+USB one).
+
 ### Added
+- **StickyBot.app.** The installer builds `~/Applications/StickyBot.app` on this Mac and the
+  login item runs it, so permission prompts, Privacy & Security, Activity Monitor and Force
+  Quit say *StickyBot* (with its icon), not *Python*. Its executable is a copy of the venv's
+  own Python, signed ad hoc (no Developer ID; built locally, so Gatekeeper doesn't ask). It is
+  rebuilt only when Python itself changes, so code updates keep the permissions.
+  `stickybot app` shows its state, `stickybot app rebuild` builds it again. If it can't be
+  built the agent runs as Python as before and says so. `stickybot uninstall` removes it.
+- **The dashboard in its own window:** menu bar → **Open StickyBot** (a Dock icon while it's
+  open; closing it doesn't quit), or **Open in browser**. Opening StickyBot.app from Finder or
+  Spotlight shows it too, and the installer's setup page opens there. New dependency:
+  `pyobjc-framework-WebKit`.
+- **`stickybot` command**, next to `stick-agent` (which keeps working).
 - **Landscape screens (firmware 1.9.0).** Held sideways, the screens with text to read turn
   landscape: Claude approvals, questions, event alerts, the agent's listening / thinking /
   reply screens, dictation, messages, pairing, Web settings and the Home / Agent / Status
@@ -25,14 +43,32 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   and the dashboard's Stick page. The serial `screens` demo now shows the landscape
   layouts too (`screens landscape` for just those).
 - **The wireless Wispr mic needs no driver on macOS 14.2+.** An Apple audio tap of the agent's own
-  sound now carries the stick's audio into the same “<stick>-mic-bluetooth” mic (same name, so Wispr's
+  sound now carries the stick's audio into the same Bluetooth mic (same name, so Wispr's
   ranking stays) — no BlackHole download, no Mac password. macOS asks once to allow *System Audio
-  Recording* for Python (the helper app; it only taps its own sound). The agent checks the tap with an
+  Recording* for StickyBot (it only taps its own sound). The agent checks the tap with an
   inaudible test before using it (at start, when turned on, and with **Check again**) and never lets the
   stick's audio reach the speakers. BlackHole 2ch stays for older macOS, or by choice: Settings →
   Wireless Wispr mic → **Carried by** (Automatic / Apple audio tap / BlackHole 2ch; config
   `wireless_mic_carrier`), or *Use BlackHole instead* on the setup page. The setup page's wireless mic
   step is now **Turn on** + the permission, and Settings shows which carrier is in use.
+
+### Changed
+- **Renamed to StickyBot** everywhere you see it: the menu bar, dashboard, setup page,
+  notifications, installer and command output, the stick's screens and its settings page
+  (*StickyBot Settings*), and releases (*StickyBot vX.Y.Z*). Internal names stay, so nothing
+  needs moving: `~/.stick-agent`, the `stick_agent` package, `STICK_AGENT_*` variables, the
+  login item `com.stickkey.agent`, the Keychain entry and the Bluetooth protocol.
+- **New mic names:** the USB mic is `<stick>-usb-mic` and the Bluetooth one `<stick>-bt-mic`
+  (were `<stick>-mic-usb` / `<stick>-mic-bluetooth`); a stick with the default name gives
+  `stickybot-usb-mic` / `stickybot-bt-mic`. Wispr sees new devices: rank them once. An old
+  automatic name saved as *Mic name* counts as automatic; a name you typed still wins.
+- **Firmware:** new or reset sticks are called **StickyBot** (a saved name stays). With Web
+  settings on, the stick is at `stickybot.local` and its hotspot is `stickybot-setup`
+  (were `stick-key.local` / `stick-key-setup`); the USB device is *StickyBot*.
+- **The repo is now `ashish-kumar-noon/stickybot`**:
+  `curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stickybot/main/install.sh | sh`.
+  An existing install's clone is switched to the new address by itself (install.sh and the
+  dashboard's update).
 
 ## [1.8.6] - 2026-11-05
 
@@ -150,15 +186,15 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
   `make -C m5-stick-s3 release` (now written to `~/.stick-agent/firmware/local/`).
 - `install.sh` checks out the latest stable release (main before the first one) and
   clones over HTTPS when `gh` isn't logged in. The repo is public: install with
-  `curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stick-key/main/install.sh | sh`.
+  `curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stickybot/main/install.sh | sh`.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/ashish-kumar-noon/stick-key/compare/v1.8.6...HEAD
-[1.8.6]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.6
-[1.8.5]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.5
-[1.8.4]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.4
-[1.8.3]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.3
-[1.8.2]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.2
-[1.8.1]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.1
-[1.8.0]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.0
+[Unreleased]: https://github.com/ashish-kumar-noon/stickybot/compare/v1.8.6...HEAD
+[1.8.6]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.6
+[1.8.5]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.5
+[1.8.4]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.4
+[1.8.3]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.3
+[1.8.2]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.2
+[1.8.1]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.1
+[1.8.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.0

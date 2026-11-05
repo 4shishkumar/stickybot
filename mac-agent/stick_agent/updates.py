@@ -1,4 +1,4 @@
-"""Update checks: is there a stick-key release newer than this agent, or with newer
+"""Update checks: is there a StickyBot release newer than this agent, or with newer
 firmware than the connected stick's?
 
 Checked once at start-up and then every 24 h (config "update_check", default on), on
@@ -301,7 +301,7 @@ def routes(agent):
             return web.json_response({"error": info["why"], "install": info}, status=409)
 
         async def work(emit):
-            emit({"line": f"updating stick-agent {__version__} -> {tag} in {info['path']}"})
+            emit({"line": f"updating StickyBot {__version__} -> {tag} in {info['path']}"})
             await selfupdate.update(tag, emit, restart=lambda: agent.restart_soon(1.0))
         job = start(work)
         if job is None:

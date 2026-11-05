@@ -6,12 +6,16 @@ edits. There it runs:
     git -C ~/.stick-agent/src fetch --tags --force origin
     git -C ~/.stick-agent/src checkout <tag>          (a release tag: detached HEAD)
     uv pip install --python <the agent's python> -e ~/.stick-agent/src/mac-agent
-then restarts the agent the usual way (Agent.restart_soon: execv, like Restart in the
-menu bar). If a step fails the checkout goes back to where it was.
+then builds StickyBot.app if the Python changed (`stickybot app build`, app.py; never
+fatal) and restarts the agent the usual way (Agent.restart_soon: execv, like Restart in
+the menu bar). If a step fails the checkout goes back to where it was.
+
+The repo was renamed (stick-key -> stickybot): a clone whose origin still has the old
+name gets the new one first (GitHub redirects the old name, but not forever).
 
 Anything else is left alone, with instructions instead:
   - a developer's checkout (the agent runs from a clone somewhere else): your branch,
-    your call — `git pull` / `git checkout vX.Y.Z` yourself, then `stick-agent restart`
+    your call — `git pull` / `git checkout vX.Y.Z` yourself, then `stickybot restart`
   - the install clone with local changes (tracked files edited)
   - not a git checkout at all (installed from a package): re-run install.sh
 """
@@ -27,6 +31,8 @@ from . import config
 
 log = logging.getLogger("selfupdate")
 PKG = Path(__file__).resolve().parent
+OLD_ORIGIN = re.compile(r"^(?P<head>(?:https://|ssh://git@|git@)github\.com[:/])ashish-kumar-noon/stick-key"
+                        r"(?P<tail>\.git)?/?$", re.IGNORECASE)
 
 
 class UpdateError(Exception):
@@ -50,6 +56,24 @@ def git_out(root, *args, timeout=20):
         return r.returncode, (r.stdout or r.stderr).strip()
     except (OSError, subprocess.TimeoutExpired) as e:
         return 127, str(e)
+
+
+def renamed_origin(url):
+    """The origin URL under the repo's new name, or None if it doesn't need changing."""
+    m = OLD_ORIGIN.match((url or "").strip())
+    return f"{m['head']}ashish-kumar-noon/stickybot{m['tail'] or ''}" if m else None
+
+
+def fix_origin(root, emit=None):
+    """Points origin at ashish-kumar-noon/stickybot if it still has the old name. -> the new URL or None."""
+    code, url = git_out(root, "remote", "get-url", "origin")
+    new = renamed_origin(url) if code == 0 else None
+    if new and git_out(root, "remote", "set-url", "origin", new)[0] == 0:
+        log.info("origin: %s -> %s (the repo was renamed)", url, new)
+        if emit:
+            emit({"line": f"origin is now {new} (the repo was renamed)"})
+        return new
+    return None
 
 
 def find_uv():
@@ -79,7 +103,7 @@ def install_info(root=None):
                 "instructions": [f"cd {root}",
                                  "git pull --ff-only            (or: git fetch --tags && git checkout vX.Y.Z)",
                                  f"{sys.executable} -m pip install -e mac-agent   (only if its dependencies changed)",
-                                 "stick-agent restart"]}
+                                 "stickybot restart"]}
     code, dirty = git_out(root, "status", "--porcelain", "--untracked-files=no")
     if code != 0:
         return {**info, "kind": "release", "can_update": False, "why": f"git status failed: {dirty}",
@@ -136,6 +160,7 @@ async def update(tag, emit, restart, root=None):
     code, prev = git_out(root, "rev-parse", "HEAD")
     if code != 0:
         raise UpdateError(f"git rev-parse failed: {prev}")
+    fix_origin(root, emit)
     steps = plan(tag, root, uv=find_uv())
     for i, (what, cmd) in enumerate(steps):
         emit({"progress": int(100 * i / len(steps)), "stage": what})
@@ -155,8 +180,12 @@ async def update(tag, emit, restart, root=None):
                 await run_cmd(["git", "-C", str(root), "-c", "advice.detachedHead=false", "checkout", "--quiet", prev],
                               emit)
                 raise UpdateError(f"{tag} has version {have}, not {tag[1:]}")
+    emit({"progress": 95, "stage": "StickyBot.app"})
+    app_step = [str(sys.executable), "-m", "stick_agent", "app", "build"]  # the new code's builder
+    emit({"line": "$ " + " ".join(app_step)})
+    await run_cmd(app_step, emit)  # never fatal: without it the agent runs as Python
     emit({"progress": 100, "stage": "restart"})
-    emit({"line": f"stick-agent {tag[1:]} installed — restarting the agent (the page reloads by itself)"})
+    emit({"line": f"StickyBot {tag[1:]} installed — restarting the agent (the page reloads by itself)"})
     log.info("updated to %s (from %s); restarting", tag, prev[:10])
     restart()
 

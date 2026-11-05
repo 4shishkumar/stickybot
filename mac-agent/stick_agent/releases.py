@@ -1,4 +1,4 @@
-"""Releases of stick-key on GitHub: versions, picking the latest per channel, and
+"""Releases of StickyBot on GitHub: versions, picking the latest per channel, and
 downloading a release's firmware into ~/.stick-agent/firmware/<firmware version>/.
 
 Releases are listed with the `gh` CLI when it's installed and logged in (higher rate
@@ -23,7 +23,7 @@ import urllib.request
 from pathlib import Path
 
 SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
-REPO = os.environ.get("STICK_AGENT_REPO", "ashish-kumar-noon/stick-key")
+REPO = os.environ.get("STICK_AGENT_REPO", "ashish-kumar-noon/stickybot")
 API = "https://api.github.com"
 CHANNELS = ("stable", "beta")
 MANIFEST = "manifest.json"
@@ -128,7 +128,7 @@ class Https:
         self.repo = repo
 
     def _get(self, url, accept):
-        req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "stick-agent",
+        req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "StickyBot",
                                                    "X-GitHub-Api-Version": "2022-11-28"})
         try:
             return urlopen(req)

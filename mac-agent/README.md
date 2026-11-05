@@ -1,4 +1,4 @@
-# stick-agent — a voice assistant for your Mac, on an M5StickS3
+# StickyBot — a voice assistant for your Mac, on an M5StickS3
 
 Hold **B** on the stick and speak. The Mac turns your speech into text (locally,
 nothing leaves the machine), runs a quick command if one matches ("PR 1234"),
@@ -85,11 +85,11 @@ needs the agent's token). Claude can use it to reach you on the stick:
 | `open_url(url)`, `open_app(name)`, `quick_command(phrase)` | change the Mac (http(s) only / installed apps / your quick commands) | **yes** — Claude Code's permission prompt, on the stick |
 
 - **Voice requests** have them already (the agent's session gets `--mcp-config`, the feedback tools pre-allowed).
-- **Terminal sessions:** run `stick-agent mcp install` once (or dashboard → Settings → *Stick tools for Claude
+- **Terminal sessions:** run `stickybot mcp install` once (or dashboard → Settings → *Stick tools for Claude
   Code* → Install). It shows and then runs Claude Code's own command —
   `claude mcp add --transport http --scope user stick http://127.0.0.1:8660/mcp --header "Authorization: Bearer <token>" --header "X-Stick-Cwd: ${PWD}"` —
   so every new Claude Code session has `mcp__stick__*`. Then ask e.g. *"run the tests and notify me on the stick when
-  done"*. `stick-agent mcp status` / `stick-agent mcp uninstall` (`--yes` skips the question). Nothing of ours edits
+  done"*. `stickybot mcp status` / `stickybot mcp uninstall` (`--yes` skips the question). Nothing of ours edits
   `~/.claude.json`.
 - Alerts are limited to one a second (20 a minute); without the stick every tool answers `stick not connected`.
   Turn the server off in Settings, or only the alerts in **Events** (*claude_tool* → off). Every call is in **Activity**.
@@ -108,15 +108,16 @@ needs the agent's token). Claude can use it to reach you on the stick:
 One command (no GitHub login needed):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stick-key/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stickybot/main/install.sh | sh
 ```
 
 or, from a clone of the repo, `./install.sh`.
 
 What it does: checks for an Apple Silicon Mac, installs [uv](https://docs.astral.sh/uv/)
 (a standalone Python manager — no Homebrew or system Python needed) if it's
-missing, makes `~/.stick-agent/venv` with Python 3.14, installs stick-agent, starts it
-(login item), and opens the **setup page** in your browser:
+missing, makes `~/.stick-agent/venv` with Python 3.14, installs StickyBot, builds
+**StickyBot.app** (below), starts it (login item), and opens the **setup page** — in the
+StickyBot window, or your browser if the app couldn't be built:
 **http://localhost:8660/#install**.
 
 The setup page does the rest, one step per screen, each with a button and live progress:
@@ -134,36 +135,61 @@ The setup page does the rest, one step per screen, each with a button and live p
 
 Skip any optional step; skipped steps can be done later from the last screen or
 **Settings → Components → Open the setup page**. Reopen the page with
-**`stick-agent install-page`** or the menu bar's **Finish setup…** (shown while the model or
+**`stickybot install-page`** or the menu bar's **Finish setup…** (shown while the model or
 the stick isn't set up).
 
 **In the terminal instead** (scripts, AI agents, SSH): any of `--yes`, `--with`,
 `--without`, `--dry-run`, `--uninstall` or `--no-browser` — and an SSH session, or nobody
-logged in at the screen — runs **`stick-agent setup`** as before, which installs these
+logged in at the screen — runs **`stickybot setup`** as before, which installs these
 components:
 
 | Component | Default | What it does |
 |---|---|---|
-| `core` | always | the agent, the `stick-agent` command (`~/.local/bin`), its login item, the dashboard |
+| `core` | always | the agent, StickyBot.app (`~/Applications`), the `stickybot` command (`~/.local/bin`; `stick-agent` too), its login item, the dashboard |
 | `model` | on | downloads the speech model (~2.5 GB, once) |
 | `claude` | on | checks Claude Code is installed and logged in; adds our 3 hooks to `~/.claude/settings.json` (backup first, other hooks kept) |
 | `github` | off | checks `gh`, logs in if needed, sets your main repo, turns on GitHub alerts |
 | `firmware` | off | downloads the latest release's firmware (sha256-checked) and flashes it to a stick plugged in by USB (keeps its settings) |
-| `wireless_mic` | off | the stick's mic for Wispr without a cable: turns `wireless_mic` on (macOS 14.2+: carried by the Apple audio tap, no driver; older macOS: checks for BlackHole 2ch and tells you the `brew` command if it's missing — it needs your password, so it never runs it); then rank “<stick>-mic-bluetooth” first in Wispr once |
+| `wireless_mic` | off | the stick's mic for Wispr without a cable: turns `wireless_mic` on (macOS 14.2+: carried by the Apple audio tap, no driver; older macOS: checks for BlackHole 2ch and tells you the `brew` command if it's missing — it needs your password, so it never runs it); then rank “<stick>-bt-mic” first in Wispr once |
 
-Options (for `install.sh` and `stick-agent setup`): `--yes` (defaults, no
+Options (for `install.sh` and `stickybot setup`): `--yes` (defaults, no
 questions), `--with github,firmware`, `--without model`, `--dry-run`,
 `--uninstall [all | a,b]` (`--purge` also deletes `~/.stick-agent`).
-Anytime later: `stick-agent setup --status`, `stick-agent setup --with github`,
-`stick-agent uninstall`. The dashboard's **Settings → Components** shows the same
+Anytime later: `stickybot setup --status`, `stickybot setup --with github`,
+`stickybot uninstall`. The dashboard's **Settings → Components** shows the same
 list with Install / Remove buttons.
 
-macOS asks once for Bluetooth access — allow it. If the login item can't be written, fix it once with
-`sudo chown $(whoami) ~/Library/LaunchAgents` and run `stick-agent setup` again.
+macOS asks once for Bluetooth access for StickyBot — allow it. If the login item can't be written, fix it once with
+`sudo chown $(whoami) ~/Library/LaunchAgents` and run `stickybot setup` again.
 
 Requirements: a Mac with Apple Silicon, [Claude Code](https://claude.com/claude-code)
 with your own login (the installer helps), the stick paired with the Mac
 (System Settings → Bluetooth), and `gh` for GitHub alerts (optional).
+
+### StickyBot.app
+The agent runs as **StickyBot.app** in `~/Applications`, so macOS shows *StickyBot* (with
+its icon) in permission prompts, Privacy & Security, Activity Monitor and Force Quit —
+not *Python*. The installer builds it on this Mac: the bundle's executable is a copy of
+the venv's own Python interpreter, signed ad hoc (no Apple Developer ID needed; built
+locally, so Gatekeeper doesn't ask), and the login item starts it directly. Opening the
+app from Finder or Spotlight shows the StickyBot window (and starts the agent if it isn't
+running).
+
+- **Rebuilt only when Python itself changes** (a new interpreter, e.g. after
+  `brew upgrade python@3.14`): code updates don't touch it, so macOS keeps its permissions.
+  After a rebuild macOS asks once more for Bluetooth and System Audio Recording.
+- `stickybot app` says whether it's built and up to date; `stickybot app rebuild` builds it
+  again and restarts the login item.
+- If it can't be built, the agent keeps running as plain Python (as before) and the
+  installer says why. `STICK_AGENT_NO_APP=1` skips it on purpose.
+- `stickybot uninstall` removes it. How it works: [ARCHITECTURE.md](../docs/ARCHITECTURE.md#stickybotapp-why-the-agent-has-its-own-app-bundle).
+
+**Coming from stick-agent** (before the rename): re-run the installer (or update from the
+dashboard — the new version builds the app and switches the login item when it starts).
+macOS then asks again: **Bluetooth** (*“StickyBot” would like to use Bluetooth* — Allow) and,
+with the wireless mic on the Apple audio tap, **System Audio Recording** for StickyBot.
+The old *Python* entries in Privacy & Security can be removed. The mics have new names
+(below): rank them again in Wispr once. `stick-agent` still works as a command.
 
 ### Claude Code hooks (in `~/.claude/settings.json`)
 | Hook | Script | What for |
@@ -177,20 +203,20 @@ block Claude Code: if the agent isn't running they do nothing.
 ---
 
 ### Wireless Wispr mic
-Plugged in by USB the stick is a USB microphone, **<stick>-mic-usb** — named after the stick, e.g. *stick-key-mic-usb* (firmware 1.8.1+; 1.7.1–1.8.0: *stick-mic-usb*;
+Plugged in by USB the stick is a USB microphone, **<stick>-usb-mic** — named after the stick, e.g. *stickybot-usb-mic* (firmware 1.9.0+; 1.8.1–1.8.x: *<stick>-mic-usb*; 1.7.1–1.8.0: *stick-mic-usb*;
 older firmware: *TinyUSB UAC1*). Without the cable, the agent makes a microphone called
-**<stick>-mic-bluetooth** appear on the Mac **only while you hold A**, and Wispr — which always
+**<stick>-bt-mic** (e.g. *stickybot-bt-mic*; before the rename *<stick>-mic-bluetooth*) appear on the Mac **only while you hold A**, and Wispr — which always
 uses the highest-ranked mic that is present — switches to it for that dictation. The rest
 of the time it isn't there and Wispr uses your usual mic (keyboard shortcut included).
 
-1. **Turn it on:** the setup page (`stick-agent install-page` → *Wireless Wispr mic* →
-   **Turn on**), `stick-agent setup --with wireless_mic`, or dashboard → **Settings →
+1. **Turn it on:** the setup page (`stickybot install-page` → *Wireless Wispr mic* →
+   **Turn on**), `stickybot setup --with wireless_mic`, or dashboard → **Settings →
    Wireless Wispr mic** (or **Components → Wireless Wispr mic → Install**). Firmware 1.7.1+.
 2. **macOS 14.2 or newer: no driver.** The audio is carried by an *Apple audio tap* of the
-   agent's own sound. macOS asks once to allow **System Audio Recording** for **Python** —
-   that's the helper app (it only taps its own sound, muted; never other apps). Press
+   agent's own sound. macOS asks once to allow **System Audio Recording** for **StickyBot**
+   (it only taps its own sound, muted; never other apps). Press
    *Allow*; if you missed it: System Settings → Privacy & Security → Screen & System Audio
-   Recording → *System Audio Recording Only* → turn on Python, then *Check again*
+   Recording → *System Audio Recording Only* → turn on StickyBot, then *Check again*
    (Settings → Wireless Wispr mic, or the setup page). The agent checks the tap with an
    inaudible test before using it, and never plays the stick through the speakers.
    **Older macOS, or by choice** (Settings → *Carried by* → BlackHole 2ch, or *Use BlackHole
@@ -198,11 +224,11 @@ of the time it isn't there and Wispr uses your usual mic (keyboard shortcut incl
    one click on the setup page, or `brew install --cask blackhole-2ch`; the hidden carrier of
    the audio; Wispr is never set to it. *Automatic* (the default) uses the tap once it's
    allowed, else BlackHole if it's installed.
-3. **Rank it once:** hold **A** once (or dashboard → Settings → *Show “<stick>-mic-bluetooth”
-   for 60 s*); in **Wispr Flow → Settings → Microphone**, drag **<stick>-mic-bluetooth
-   (Aggregate)** to the top of the ranking. Put **<stick>-mic-usb** wherever you like — Wispr
+3. **Rank it once:** hold **A** once (or dashboard → Settings → *Show “<stick>-bt-mic”
+   for 60 s*); in **Wispr Flow → Settings → Microphone**, drag **<stick>-bt-mic
+   (Aggregate)** to the top of the ranking. Put **<stick>-usb-mic** wherever you like — Wispr
    only sees it while the stick is plugged in. (Coming from the old setup? Pick your usual
-   mic again instead of BlackHole 2ch. Renamed mics are new devices to Wispr: rank again.)
+   mic again instead of BlackHole 2ch. Renamed mics — including the StickyBot rename — are new devices to Wispr: rank again.)
 4. Hold **A** and talk. The stick's screen says *Wispr hears the stick (BT)* (or *(USB)*
    on the cable); the dashboard shows the last hold's timings.
 
@@ -220,20 +246,23 @@ computer: on USB the stick is its USB mic exactly as before (the key at once, no
 Bluetooth audio), and the agent removes the device at once if the stick is plugged in or
 disconnects. It is also removed when the agent quits or is stopped (a leftover from a crash
 is removed at the next start). The stick has its own switch (menu → *Wireless mic*, on by
-default). Remove: `stick-agent setup --uninstall wireless_mic` (turns it off; BlackHole, if
+default). Remove: `stickybot setup --uninstall wireless_mic` (turns it off; BlackHole, if
 you installed it, stays — `brew uninstall --cask blackhole-2ch` removes it). Switching the
 carrier keeps the device's name and UID, so Wispr's ranking stays.
 
 `wispr_mic_name` (config) renames the device if “bluetooth” in its name ever causes
-trouble in Wispr (e.g. `"stick-mic-bt"`); Wispr then needs the ranking again.
+trouble in Wispr (e.g. `"my-stick-mic"`); Wispr then needs the ranking again. Empty means automatic, and so do
+the old automatic names (`stick-mic-bluetooth`, `<stick>-mic-bluetooth`); a name you typed wins.
 
 ## Using it
-- **Menu bar** icon: state at a glance, stick volume, sounds on/off, pause, restart, dashboard.
+- **Menu bar** icon: state at a glance, stick volume, sounds on/off, pause, restart, **Open StickyBot** (the dashboard
+  in its own window; a Dock icon while it's open, closing it doesn't quit) and **Open in browser**.
 - **Dashboard:** http://localhost:8660 — activity, history, quick commands, sounds, events, settings, logs. Only reachable from this Mac; every change needs the token in `~/.stick-agent/token` (built into the page).
-- **Terminal:** `stick-agent status | start | stop | restart | logs | open`, `stick-agent mcp install | status | uninstall`.
+- **Terminal:** `stickybot status | start | stop | restart | logs | open [--browser]`, `stickybot app [rebuild]`,
+  `stickybot mcp install | status | uninstall` (`stick-agent …` works the same).
 - **Firmware:** dashboard → Stick → Firmware. **Update over Bluetooth** (stick 1.8.0+, connected; no cable, ~1–2 min,
   the stick shows the progress and B cancels) or **Update via USB** (any firmware; also the recovery path).
-  Terminal: `stick-agent flash --ble [--force]` (through the running agent) or `stick-agent flash [--port P] [--backup]`.
+  Terminal: `stickybot flash --ble [--force]` (through the running agent) or `stickybot flash [--port P] [--backup]`.
   Both use the bundle in `stick_agent/firmware/` and keep the stick's settings; see
   [PROTOCOL.md](../PROTOCOL.md#firmware-update-over-bluetooth-sticks3-180) and [BUILDING.md](../docs/BUILDING.md#over-bluetooth-no-cable-stick-firmware-180).
 
@@ -254,11 +283,12 @@ Files: everything lives in `~/.stick-agent/` — `config.json`, `commands.json`,
 | `speech.py` | replies read aloud: sentence splitting, `say` per sentence, a queue to the stick speaker or the Mac |
 | `core.py` | the agent: talk → text → command or Claude → reply; approvals; sounds; speech |
 | `wispr_mic.py` | the wireless Wispr mic: stick audio → jitter buffer → the default output (Apple audio tap) or BlackHole 2ch (sounddevice) |
-| `stick_mic_device.py` | the "<stick>-mic-bluetooth" device around each A hold: a CoreAudio aggregate with the agent's process tap or on BlackHole (ctypes), the tap check, the carrier choice, the prepare → ready → tail flow |
+| `stick_mic_device.py` | the "<stick>-bt-mic" device around each A hold: a CoreAudio aggregate with the agent's process tap or on BlackHole (ctypes), the tap check, the carrier choice, the prepare → ready → tail flow |
 | `events.py`, `github.py`, `claude_hooks.py` | alerts: GitHub (via `gh`), Claude finished |
 | `home.py`, `feed.py`, `weather.py` | the stick's home screen card, facts/news, weather (Open-Meteo) |
 | `server.py`, `dashboard.html`, `menubar.py` | dashboard API (localhost + token) and menu bar |
-| `mcp_server.py`, `mcp_setup.py` | the stick tools: the MCP endpoint (`/mcp`) and `stick-agent mcp install` (`claude mcp add`) |
+| `app.py`, `window.py` | StickyBot.app (build, sign, rebuild rules, Finder launch) and the dashboard window (WKWebView) |
+| `mcp_server.py`, `mcp_setup.py` | the stick tools: the MCP endpoint (`/mcp`) and `stickybot mcp install` (`claude mcp add`) |
 
 ## Not built yet
 Next meeting on the home screen (calendar), wake word, Mac-control tools for

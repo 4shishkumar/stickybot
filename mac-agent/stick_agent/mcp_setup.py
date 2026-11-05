@@ -1,21 +1,21 @@
 """Giving Claude Code the stick tools (mcp_server.py).
 
 - Voice requests: brain.py passes `--mcp-config <brain_config()>` (a file in ~/.stick-agent, 0600).
-- Terminal sessions: `stick-agent mcp install` runs Claude Code's own command
+- Terminal sessions: `stickybot mcp install` runs Claude Code's own command
       claude mcp add --transport http --scope user stick http://127.0.0.1:8660/mcp \
           --header "Authorization: Bearer <token>" --header "X-Stick-Cwd: ${PWD}"
   so Claude Code writes its own config; we never edit ~/.claude.json or ~/.claude/settings.json.
   `${PWD}` is left for Claude Code to expand when it starts (env var expansion in MCP headers:
   https://code.claude.com/docs/en/mcp), so the stick can say which project is asking.
-  `stick-agent mcp uninstall` = `claude mcp remove --scope user stick`; `status` = `claude mcp get stick`.
+  `stickybot mcp uninstall` = `claude mcp remove --scope user stick`; `status` = `claude mcp get stick`.
 
 Command forms from `claude mcp add --help` (Claude Code 2.1.317) and https://code.claude.com/docs/en/mcp
 ("Option 1: Add a remote HTTP server", "MCP installation scopes"). --header is variadic, so it goes
 after the name and URL.
 
-  stick-agent mcp install [--yes]     add the stick tools to Claude Code (user scope, all projects)
-  stick-agent mcp uninstall [--yes]   remove them again
-  stick-agent mcp status              installed? (and the command that would run)
+  stickybot mcp install [--yes]     add the stick tools to Claude Code (user scope, all projects)
+  stickybot mcp uninstall [--yes]   remove them again
+  stickybot mcp status              installed? (and the command that would run)
 """
 import json
 import subprocess
@@ -138,7 +138,7 @@ def uninstall(confirm=None, say=print):
 
 
 def cli(argv):
-    """stick-agent mcp install|uninstall|status [--yes]"""
+    """stickybot mcp install|uninstall|status [--yes]"""
     what = argv[0] if argv else "status"
     yes = "--yes" in argv or "-y" in argv
 
@@ -156,7 +156,7 @@ def cli(argv):
         print(f"stick tools for Claude Code: {state} — {st['detail']}")
         print(f"server: {url()} ({'on' if config.load().get('mcp_server', True) else 'off in the dashboard'})")
         if not st["installed"]:
-            print(f"install: stick-agent mcp install   (runs: {st['command']})")
+            print(f"install: stickybot mcp install   (runs: {st['command']})")
         return 0
     if what in ("install", "uninstall"):
         print(f"Will run (Claude Code's own command; the token comes from {config.TOKEN}):")

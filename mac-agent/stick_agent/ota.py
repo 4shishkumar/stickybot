@@ -360,7 +360,7 @@ async def update(agent, query_state, emit=None, force=False, sender=None, reboot
     return result
 
 
-# --- `stick-agent flash --ble`: asks the running agent (it owns the Bluetooth link) ---
+# --- `stickybot flash --ble`: asks the running agent (it owns the Bluetooth link) ---
 
 def _api(path, body=None, timeout=10):
     import json
@@ -374,7 +374,7 @@ def _api(path, body=None, timeout=10):
 
 
 def cli(force=False, out=print):
-    """`stick-agent flash --ble [--force]`: the update runs in the agent; this follows its progress."""
+    """`stickybot flash --ble [--force]`: the update runs in the agent; this follows its progress."""
     import json
     import urllib.error
     try:
@@ -388,7 +388,7 @@ def cli(force=False, out=print):
         out(f"failed: {msg}")
         return 1
     except OSError as e:
-        out(f"the agent isn't running ({e}) — start it with: stick-agent start")
+        out(f"the agent isn't running ({e}) — start it with: stickybot start")
         return 1
     result = None
     try:

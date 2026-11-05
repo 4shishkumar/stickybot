@@ -26,7 +26,7 @@ void slug(const char* name, char* out, size_t n) {
 void usb(const char* stickName, char* out, size_t n) {
   char s[32];
   slug(stickName, s, sizeof s);
-  snprintf(out, n, "%s-mic-usb", *s ? s : "stick");
+  snprintf(out, n, "%s-usb-mic", *s ? s : "stickybot");
 }
 
 }  // namespace micname

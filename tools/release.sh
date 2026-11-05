@@ -1,5 +1,5 @@
 #!/bin/sh
-# Cut a stick-key release LOCALLY: bump the version, date its CHANGELOG entry,
+# Cut a StickyBot release LOCALLY: bump the version, date its CHANGELOG entry,
 # commit and tag. It never pushes — it prints the push command, and pushing the
 # tag is what starts the release workflow (.github/workflows/release.yml).
 #
@@ -61,7 +61,7 @@ else
   git commit -q -m "Release $TAG" -m "Firmware $FW."
   echo "committed: $(git log -1 --format='%h %s')"
 fi
-git tag -a "$TAG" -m "stick-key $TAG (firmware $FW)"
+git tag -a "$TAG" -m "StickyBot $TAG (firmware $FW)"
 echo "tagged $TAG — nothing is pushed yet. Check it, then publish with:"
 echo
 echo "  git push origin $BRANCH $TAG"

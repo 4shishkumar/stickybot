@@ -1,15 +1,17 @@
 [project]
 name = "stick-agent"
 version = "1.8.6"
-description = "Voice assistant for your Mac, driven by an M5StickS3"
+description = "StickyBot: a voice assistant for your Mac, driven by an M5StickS3"
 requires-python = ">=3.11"
-dependencies = ["bleak", "aiohttp", "rumps", "parakeet-mlx", "numpy", "soundfile", "soxr", "esptool", "pyserial", "sounddevice"]
+dependencies = ["bleak", "aiohttp", "rumps", "parakeet-mlx", "numpy", "soundfile", "soxr", "esptool", "pyserial", "sounddevice",
+                "pyobjc-framework-WebKit"]  # WebKit: the dashboard in its own window (window.py)
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-aiohttp>=1.0", "ruff>=0.5", "pre-commit>=3"]
 
 [project.scripts]
-stick-agent = "stick_agent.__main__:main"
+stickybot = "stick_agent.__main__:main"
+stick-agent = "stick_agent.__main__:main"  # the older name, kept working
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -19,7 +21,7 @@ build-backend = "setuptools.build_meta"
 packages = ["stick_agent"]
 
 [tool.setuptools.package-data]
-stick_agent = ["dashboard.html", "defaults/*", "static/*", "static/**/*", "firmware/*"]
+stick_agent = ["dashboard.html", "defaults/*", "static/*", "static/**/*", "firmware/*", "icon/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

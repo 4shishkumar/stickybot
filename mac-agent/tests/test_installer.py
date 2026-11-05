@@ -1,7 +1,9 @@
-"""The installer's components (`stick-agent setup`), the Claude Code hook merge,
+"""The installer's components (`stickybot setup`), the Claude Code hook merge,
 flags, dry-run, and the dashboard's /api/components. Everything happens in
 throwaway folders: no real login item, no real ~/.claude/settings.json."""
 import json
+import os
+import pathlib
 import subprocess
 
 import pytest
@@ -149,15 +151,53 @@ def test_claude_status_with_a_working_claude(sandbox, tmp_path, monkeypatch):
 
 # --- core / model / github ------------------------------------------------------------------
 
-def test_core_install_links_the_command_and_uninstall_removes_it(sandbox):
+@pytest.fixture
+def venv(sandbox, monkeypatch):
+    """A venv with both entry points (`stickybot` and the older `stick-agent`)."""
+    bin_ = sandbox / "venv" / "bin"
+    bin_.mkdir(parents=True)
+    for name in ("python", "stickybot", "stick-agent"):
+        (bin_ / name).write_text("#!/bin/sh\n")
+    monkeypatch.setattr(installer, "venv_python", lambda: bin_ / "python")
+    return bin_
+
+
+def test_core_install_links_both_commands_and_uninstall_removes_them(sandbox, venv):
     core = installer.Core()
     core.install(installer.UI())
-    link = sandbox / "bin" / "stick-agent"
-    assert link.is_symlink() and link.resolve() == core._target().resolve()
+    for name in ("stickybot", "stick-agent"):
+        link = sandbox / "bin" / name
+        assert link.is_symlink() and link.resolve() == (venv / name).resolve()
     assert core.status()[0] == "installed"  # login item skipped in tests
     core.install(installer.UI())  # again: fine
-    core.uninstall(installer.UI())
-    assert not link.exists()
+    app = pathlib.Path(os.environ["STICK_AGENT_APP"])
+    (app / "Contents" / "MacOS").mkdir(parents=True)  # as if the login item's install had built it
+    lines = []
+    core.uninstall(installer.UI(emit=lines.append))
+    assert not (sandbox / "bin" / "stickybot").exists() and not (sandbox / "bin" / "stick-agent").exists()
+    assert not app.exists() and any(str(app) in x.get("line", "") for x in lines)  # the app goes too
+
+
+def test_core_links_only_the_commands_the_venv_has(sandbox, venv):
+    (venv / "stickybot").unlink()  # a venv from before the alias (reinstalled by install.sh)
+    installer.Core().install(installer.UI())
+    assert (sandbox / "bin" / "stick-agent").is_symlink() and not (sandbox / "bin" / "stickybot").exists()
+
+
+def test_core_with_a_login_item_builds_the_app_first(sandbox, venv, monkeypatch):
+    from stick_agent import __main__ as cli
+    from stick_agent import app
+    monkeypatch.delenv("STICK_AGENT_NO_LOGIN_ITEM")
+    order = []
+    monkeypatch.setattr(app, "ensure", lambda say=None: order.append("app") or (True, "StickyBot.app: built"))
+    monkeypatch.setattr(cli, "write_plist", lambda: order.append("plist") or cli.LOCAL_PLIST)
+    monkeypatch.setattr(cli, "launchctl", lambda *a: order.append(a[0]) or subprocess.CompletedProcess(a, 0, "", ""))
+    core = installer.Core()
+    monkeypatch.setattr(core, "_dashboard_up", lambda: True)
+    lines = []
+    core.install(installer.UI(emit=lines.append))
+    assert order == ["app", "plist", "bootout", "bootstrap"]
+    assert any("StickyBot.app: built" in x.get("line", "") for x in lines)
 
 
 def test_model_skips_the_download_when_cached(monkeypatch):

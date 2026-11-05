@@ -284,7 +284,7 @@ static const char* pathName(wispr::Path p) {
   switch (p) {
     case wispr::Path::USB:        return " (USB mic)";
     case wispr::Path::BT_DIRECT:  return " (mic to Wispr by Bluetooth)";
-    case wispr::Path::BT_PREPARE: return " (mic to Wispr by Bluetooth, stick-mic-bluetooth)";
+    case wispr::Path::BT_PREPARE: return " (mic to Wispr by Bluetooth, <stick>-bt-mic)";
     default:                      return "";
   }
 }
@@ -325,7 +325,7 @@ static void comboPress() {
   dirty = true;
   if (aPath == wispr::Path::BT_PREPARE) {  // the stream runs already; the key waits for the agent's mic
     wisprGate.begin(millis(), holdId);
-    Log.printf("-> %s: waiting for stick-mic-bluetooth (hold %u)\n", comboToString(settings::combo()).c_str(), holdId);
+    Log.printf("-> %s: waiting for the Bluetooth mic (hold %u)\n", comboToString(settings::combo()).c_str(), holdId);
   } else {
     comboKeyDown();  // USB / no stick mic / older agent: the key never waits
   }
@@ -549,7 +549,7 @@ static void screenDemo(bool portrait = true) {
     hold(3000, [] { ui::drawPairing(482913); });
     hold(2500, [] { ui::drawMessage("Saved", "Option+Cmd", 0x03E0); });
     {
-      static const String WEB[] = {"Join Wi-Fi:", "stick-key-setup", "Password:", "macro-setup", "Then open:", "stick-key.local"};
+      static const String WEB[] = {"Join Wi-Fi:", AP_SSID, "Password:", DEFAULT_PASSWORD, "Then open:", HOSTNAME ".local"};
       hold(2500, [] { ui::drawInfo("Web settings", WEB, 6, "Triple-B: close"); });
     }
   };

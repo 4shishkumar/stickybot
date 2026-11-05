@@ -54,10 +54,10 @@ pio run -e sticks3 -t upload           # build + flash over USB
 - **No port at all / the stick is stuck** — **manual download mode**: hold the **side
   power/reset button** until the green LED flashes, then flash. The power chip keeps it in
   download mode afterwards: press the side button once to start normally.
-- Then pair it with the Mac: System Settings → Bluetooth → **stick-key** → Connect, and
+- Then pair it with the Mac: System Settings → Bluetooth → **StickyBot** → Connect, and
   accept the code on the stick (button A).
 
-### A firmware build for the agent (dashboard / `stick-agent flash`)
+### A firmware build for the agent (dashboard / `stickybot flash`)
 ```sh
 make -C m5-stick-s3 release    # build + ~/.stick-agent/firmware/local/ (manifest + 4 parts)
 ```
@@ -67,7 +67,7 @@ binaries aren't committed; releases carry them ([RELEASING.md](RELEASING.md)).
 
 ### Over Bluetooth (no cable; stick firmware 1.8.0+)
 Once the stick runs 1.8.0 or newer, the agent can update it over the Bluetooth link it already has:
-dashboard → Stick → Firmware → **Update over Bluetooth**, or `stick-agent flash --ble [--force]`
+dashboard → Stick → Firmware → **Update over Bluetooth**, or `stickybot flash --ble [--force]`
 (the agent must be running; `--force` for the same or an older version). It sends the bundled
 `app.bin` (`make -C m5-stick-s3 release`) — about 2 MB, roughly 1–2 minutes depending on what
 the Mac grants the link — and the stick shows "Updating NN %" (B cancels). The stick has to be
@@ -83,7 +83,7 @@ on USB power or ≥ 30 % battery, and not dictating / talking / showing an appro
   shows `"otaPending":true` until then; the dashboard waits for it.
 - **Interrupted?** The stick keeps the transfer 3 minutes; the agent resumes where it got to
   when the link comes back. Cancel or a failed check changes nothing.
-- **Recovery is always USB:** `Update via USB` / `stick-agent flash` / `pio run -t upload`
+- **Recovery is always USB:** `Update via USB` / `stickybot flash` / `pio run -t upload`
   write the app at 0x10000 and reset the boot selection (boot_app0), whichever slot the stick
   was running. If the stick doesn't start at all: manual download mode (below) and flash by USB.
 - Firmware **before 1.8.0** has no Bluetooth update: flash 1.8.0 by USB once.
@@ -92,7 +92,7 @@ on USB power or ≥ 30 % battery, and not dictating / talking / showing an appro
 1. Copy `secrets.example.ini` to `secrets.ini` (git-ignored) and put your **device
    password** in it (`upload_flags = --auth=<password>`; set the password on the settings page).
 2. Turn on the stick's Wi-Fi: menu → Web settings, or Dev mode while on USB power.
-3. `pio run -e sticks3_ota -t upload` (uploads to `stick-key.local`).
+3. `pio run -e sticks3_ota -t upload` (uploads to `stickybot.local`).
 
 ### The XIAO ESP32-C3 (optional)
 `cd xiao-esp32-c3 && pio run -e xiao_c3 -t upload`. If the port doesn't appear: unplug, hold
@@ -105,16 +105,16 @@ on USB power or ≥ 30 % battery, and not dictating / talking / showing an appro
 ```
 
 This installs uv if needed, creates `~/.stick-agent/venv` (Python 3.14), installs
-`mac-agent/` into it **editable** (so code changes apply after `stick-agent restart`;
+`mac-agent/` into it **editable** (so code changes apply after `stickybot restart`;
 run from a clone, the dashboard's one-click update leaves your checkout alone and shows
 the commands instead),
-and runs `stick-agent setup` to pick the components (speech model, Claude Code
+and runs `stickybot setup` to pick the components (speech model, Claude Code
 hooks, GitHub alerts, flashing a stick). See [mac-agent/README.md](../mac-agent/README.md#install)
 for the components and options. Re-run it any time; it only changes what's missing.
 
 Testing the installer without touching your own setup: `make install-e2e` runs it
 for real into a throwaway HOME (namespaced login item and port, its own Claude
-settings file), checks `stick-agent setup --status`, re-runs it and uninstalls.
+settings file), checks `stickybot setup --status`, re-runs it and uninstalls.
 These variables move everything it touches: `STICK_AGENT_HOME`, `STICK_AGENT_PORT`,
 `STICK_AGENT_LABEL`, `STICK_AGENT_BIN`, `STICK_AGENT_CLAUDE_SETTINGS`, and
 `STICK_AGENT_NO_LOGIN_ITEM=1` (or `--no-login-item`).
@@ -124,7 +124,7 @@ The manual way, if you need it:
 ```sh
 /opt/homebrew/bin/python3.14 -m venv ~/.stick-agent/venv
 ~/.stick-agent/venv/bin/pip install -e mac-agent
-~/.stick-agent/venv/bin/stick-agent setup
+~/.stick-agent/venv/bin/stickybot setup
 ```
 
 ## 4. Regenerating fonts and sounds (only when changing them)
@@ -142,17 +142,17 @@ Edit the `FONTS` / `CLIPS` tables at the top of each script. Rebuild and flash a
 |---|---|
 | Port busy / "resource busy" | close serial monitors, the dev portal log, the USB settings page tab; retry |
 | Flash "failed to connect" | retry once; then manual download mode (side button until the green LED flashes) |
-| Stick not found by the agent | is it paired in Bluetooth settings and awake? Dashboard → Settings → Find sticks nearby; `stick-agent restart` |
-| Agent stuck on "Thinking…" | `stick-agent logs` for a traceback; click **B** on the stick to cancel; `stick-agent restart` |
+| Stick not found by the agent | is it paired in Bluetooth settings and awake? Dashboard → Settings → Find sticks nearby; `stickybot restart` |
+| Agent stuck on "Thinking…" | `stickybot logs` for a traceback; click **B** on the stick to cancel; `stickybot restart` |
 | Speech misheard as another language | the default speech model is English-only (`stt_model` in `~/.stick-agent/config.json`) |
-| `stick-agent: command not found` | the `ln -sf` step above, or use `~/.stick-agent/venv/bin/stick-agent` |
+| `stickybot: command not found` | the `ln -sf` step above, or use `~/.stick-agent/venv/bin/stickybot` |
 | No sound from the stick | menu → Sounds ON and Volume; the menu-bar icon → Stick volume |
 
 ## Flashing keeps your settings — don't use a merged image
 
 The stick keeps its settings (Mac pairings, combo, Mac password, Wi-Fi, sounds…)
 in the flash's NVS area (0x9000–0xDFFF). Normal flashing — `pio run -t upload`,
-`make -C m5-stick-s3 flash`, the dashboard's **Update via USB**, `stick-agent flash`
+`make -C m5-stick-s3 flash`, the dashboard's **Update via USB**, `stickybot flash`
 — writes only the bootloader (0x0), partition table (0x8000), boot_app0 (0xE000)
 and the app (0x10000), so settings survive. **Update over Bluetooth** writes only
 the app image, into the other OTA slot.

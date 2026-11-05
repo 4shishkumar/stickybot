@@ -28,7 +28,8 @@ PROTO_TIMEOUT_S = 5
 USB_CACHE_S = 10
 BLE_CACHE_S = 30
 STEPS = ("firmware", "paired", "picked", "named", "repo", "tested")
-DEFAULT_NAME = "stick-key"
+DEFAULT_NAME = "StickyBot"  # a new or reset stick's name (firmware 1.9.0+)
+DEFAULT_NAMES = {DEFAULT_NAME, "stick-key"}  # "still the default": older firmware's name counts too
 
 
 # --- talking to the stick: "@..." protocol lines -----------------------------------
@@ -212,7 +213,7 @@ async def onboarding_state(agent, stick):
         "firmware": fw_ok,
         "paired": linked,
         "picked": linked,
-        "named": bool(conn and conn.get("name") and conn["name"] != DEFAULT_NAME),
+        "named": bool(conn and conn.get("name") and conn["name"] not in DEFAULT_NAMES),
         "repo": _repo_set(),
         "tested": _history_has_voice(),
     }

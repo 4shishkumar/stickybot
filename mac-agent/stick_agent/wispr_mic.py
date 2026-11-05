@@ -1,9 +1,9 @@
-"""Wireless Wispr mic: the stick's mic, played where the "stick-mic-bluetooth" device hears it.
+"""Wireless Wispr mic: the stick's mic, played where the "<stick>-bt-mic" device hears it.
 
 While A holds the Wispr shortcut away from USB, the stick streams its mic as
 the same ADPCM frames as a B talk, between {"evt":"wispr","state":"prepare"} and
 {"evt":"wispr","state":"stop"} (PROTOCOL.md, "Mac link"). It becomes the input of
-the "stick-mic-bluetooth" device that stick_mic_device.py shows around each hold,
+the "<stick>-bt-mic" device that stick_mic_device.py shows around each hold,
 which Wispr ranks first — no cable. Two carriers (stick_mic_device.py):
 
 - "tap": we play into the default output device; the agent's own process tap

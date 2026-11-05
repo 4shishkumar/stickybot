@@ -36,7 +36,7 @@ log = logging.getLogger("install")
 
 STEPS = [
     {"id": "welcome", "title": "Welcome", "kind": "required",
-     "why": "A quick check that this Mac can run Stick Agent."},
+     "why": "A quick check that this Mac can run StickyBot."},
     {"id": "model", "title": "Speech model", "kind": "recommended",
      "why": "Turns what you say into text, on this Mac (nothing is sent anywhere). Needed for hold B.",
      "needs": {"download": "2.5 GB"}},
@@ -207,7 +207,7 @@ def check_wispr(agent):
     version = installer.blackhole_version() if bh else None
     cfg = config.load()
     on = bool(cfg.get("wireless_mic"))
-    mic = getattr(getattr(agent, "mic_dev", None), "name", None) or "<stick>-mic-bluetooth"
+    mic = getattr(getattr(agent, "mic_dev", None), "name", None) or "<stick>-bt-mic"
     supported = stick_mic_device.macos_supports_tap()
     pref = cfg.get("wireless_mic_carrier") or "auto"
     data = {"blackhole": bh, "version": version, "pinned": installer.BLACKHOLE_PIN["version"],
@@ -226,7 +226,7 @@ def check_wispr(agent):
         if tap["carrier"] == "blackhole":  # auto, and the tap isn't allowed: BlackHole carries it meanwhile
             return "done", "on · carried by BlackHole 2ch (the Apple audio tap isn't allowed)", data
         if tap["state"] == "failed":
-            return "todo", "on · allow System Audio Recording for the helper app", data
+            return "todo", "on · allow System Audio Recording for StickyBot", data
         return "todo", f"on · the Apple audio tap doesn't work here ({tap['detail']}) — use BlackHole instead", data
     pin = installer.BLACKHOLE_PIN["version"]
     found = f"BlackHole {version} found" + ("" if version in (pin, None) else f" (tested with {pin})") if bh else ""
@@ -588,15 +588,19 @@ def page_url(step=""):
 
 
 def open_page():
-    """`stick-agent install-page`: opens the setup page (the agent must be running). -> exit code"""
+    """`stickybot install-page`: opens the setup page (the agent must be running). -> exit code"""
     import json
     import urllib.request
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{config.PORT}/api/status", timeout=3) as r:
             json.load(r)
     except (OSError, ValueError):
-        print("the agent isn't running — start it with: stick-agent start   (then run this again)")
+        print("the agent isn't running — start it with: stickybot start   (then run this again)")
         return 1
+    from . import app
+    if app.request_window("install"):  # StickyBot's own window when it has one
+        print("opened the setup page in the StickyBot window")
+        return 0
     url = page_url()
     r = subprocess.run(["open", url], capture_output=True, text=True)
     if r.returncode != 0:

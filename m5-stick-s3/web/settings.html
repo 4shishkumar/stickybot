@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Macro Settings</title>
+<title>StickyBot Settings</title>
 <style>
 :root{--bg:#f4f4f6;--card:#fff;--fg:#1c1c1e;--dim:#6e6e73;--line:#d9d9de;--acc:#7a3cff;--ok:#1f9d55;--warn:#d97706;--bad:#d64545}
 @media (prefers-color-scheme:dark){:root{--bg:#111113;--card:#1c1c1f;--fg:#f2f2f4;--dim:#9a9aa1;--line:#333338;--acc:#9b6bff}}
@@ -42,7 +42,7 @@ progress{width:100%;margin-top:8px}
 </style></head><body><main>
 
 <header>
-  <div><h1 id="title">Macro Settings</h1><div class="sub" id="sub">&nbsp;</div></div>
+  <div><h1 id="title">StickyBot Settings</h1><div class="sub" id="sub">&nbsp;</div></div>
   <span id="status" class="pill off"><i></i><span>Not connected</span></span>
 </header>
 
@@ -247,7 +247,7 @@ function render(s, full) {
   $('title').textContent = s.name;
   $('sub').textContent = `${s.board} · firmware ${s.fw} · via ${T.name}` +
     (s.battery >= 0 ? ` · battery ${s.battery}%` + (s.batteryEta ? ` (${s.batteryEta})` : '') : '');
-  document.querySelectorAll('.host').forEach(e => e.textContent = s.board === 'xiao-esp32-c3' ? 'xiao-key' : 'stick-key');
+  document.querySelectorAll('.host').forEach(e => e.textContent = s.board === 'xiao-esp32-c3' ? 'xiao-key' : 'stickybot');
 
   const p = $('status');
   p.className = 'pill' + (s.bt === 'connected' ? ' on' : s.bt === 'off' ? ' off' : '');

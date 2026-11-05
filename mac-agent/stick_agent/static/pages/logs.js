@@ -2,7 +2,7 @@
 import {h, get, report, store} from "../lib.js";
 
 export const title = "Logs";
-export const subtitle = "The agent's log, from ~/.stick-agent/agent.log. Also: stick-agent logs in a terminal.";
+export const subtitle = "The agent's log, from ~/.stick-agent/agent.log. Also: stickybot logs in a terminal.";
 
 let pre = null, off = null, follow = true;
 

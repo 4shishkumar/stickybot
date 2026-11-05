@@ -939,7 +939,7 @@ static void drawStatus(const Dash& d) {
 
 static void drawAgentPage(const Dash& d) {
   if (!d.agentLinked) {
-    moodScreen(Mood::OFFLINE, "Agent offline", "start it on the Mac: stick-agent start", "", true, "Agent", &d, 10);
+    moodScreen(Mood::OFFLINE, "Agent offline", "start it on the Mac: stickybot start", "", true, "Agent", &d, 10);
   } else if (!d.agentHeard.length() && !d.agentText.length()) {
     moodScreen(Mood::IDLE, "Hold B and speak", "\"open PR 1234\"  -  \"what's on my calendar?\"", "", true, "Agent", &d,
                10);

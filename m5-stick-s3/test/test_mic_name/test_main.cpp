@@ -12,19 +12,20 @@ static const char* usb(const char* name) {
 }
 
 void test_named_after_the_stick() {
-  TEST_ASSERT_EQUAL_STRING("stick-key-mic-usb", usb("stick-key"));
-  TEST_ASSERT_EQUAL_STRING("arbaaz-sticks3-mic-usb", usb("Arbaaz StickS3"));
-  TEST_ASSERT_EQUAL_STRING("ana-s-key-mic-usb", usb("  Ana's  key! "));
+  TEST_ASSERT_EQUAL_STRING("stickybot-usb-mic", usb("StickyBot"));
+  TEST_ASSERT_EQUAL_STRING("stick-key-usb-mic", usb("stick-key"));
+  TEST_ASSERT_EQUAL_STRING("arbaaz-sticks3-usb-mic", usb("Arbaaz StickS3"));
+  TEST_ASSERT_EQUAL_STRING("ana-s-key-usb-mic", usb("  Ana's  key! "));
 }
 
 void test_nothing_usable_falls_back() {
-  TEST_ASSERT_EQUAL_STRING("stick-mic-usb", usb(""));
-  TEST_ASSERT_EQUAL_STRING("stick-mic-usb", usb("!!"));
-  TEST_ASSERT_EQUAL_STRING("stick-mic-usb", usb(nullptr));
+  TEST_ASSERT_EQUAL_STRING("stickybot-usb-mic", usb(""));
+  TEST_ASSERT_EQUAL_STRING("stickybot-usb-mic", usb("!!"));
+  TEST_ASSERT_EQUAL_STRING("stickybot-usb-mic", usb(nullptr));
 }
 
 void test_a_20_character_name_fits() {
-  TEST_ASSERT_EQUAL_STRING("abcdefghijklmnopqrst-mic-usb", usb("ABCDEFGHIJKLMNOPQRST"));
+  TEST_ASSERT_EQUAL_STRING("abcdefghijklmnopqrst-usb-mic", usb("ABCDEFGHIJKLMNOPQRST"));
 }
 
 int main() {

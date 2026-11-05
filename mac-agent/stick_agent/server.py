@@ -135,7 +135,7 @@ def make_app(agent):
         return web.json_response(agent.cfg)
 
     async def show_mic(request):
-        """The stick-mic-bluetooth device for a minute, so it can be ranked in Wispr's settings."""
+        """The Bluetooth mic device ("<stick>-bt-mic") for a minute, so it can be ranked in Wispr's settings."""
         try:
             body = await request.json()
         except ValueError:
@@ -276,6 +276,19 @@ def make_app(agent):
         agent.emit("info", text="Next request starts a new conversation")
         return web.json_response({"ok": True})
 
+    async def window(request):
+        """Shows the dashboard (at #page) in the StickyBot window: opening the app from Finder,
+        `stickybot open`, the installer. {"ok": false} when there's no window here (the caller
+        opens a browser instead)."""
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        page = str(body.get("page") or "")
+        if not agent.window or (page and not page.replace("-", "").isalnum()):
+            return web.json_response({"ok": False})
+        return web.json_response({"ok": bool(agent.window(page))})
+
     async def restart(_):
         log.info("restart requested from the dashboard")
         agent.restart_soon()
@@ -309,6 +322,7 @@ def make_app(agent):
         web.post("/api/wireless-mic/show", show_mic),
         web.post("/api/wireless-mic/check", check_mic),
         web.post("/api/pause", pause), web.post("/api/new-chat", new_chat), web.post("/api/restart", restart),
+        web.post("/api/window", window),
     ])
     return app
 

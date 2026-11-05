@@ -1,17 +1,17 @@
-"""`stick-agent setup`: install / check / remove the companion app's parts.
+"""`stickybot setup`: install / check / remove StickyBot's parts.
 
 Each part is a Component with a status(), install(ui) and uninstall(ui). The
 command-line (interactive menu or flags), the dashboard's Components card and
 install.sh all go through this module, so they always agree.
 
-  stick-agent setup                    interactive: pick components, confirm, install
-  stick-agent setup --yes              defaults, no questions
-  stick-agent setup --with github --without model
-  stick-agent setup --status [--json]  what's installed
-  stick-agent setup --only core        just these components (not the defaults)
-  stick-agent setup --dry-run          say what would happen, change nothing
-  stick-agent setup --uninstall all    (or a list) remove them again
-  stick-agent uninstall [--purge]      = setup --uninstall all (+ delete ~/.stick-agent)
+  stickybot setup                    interactive: pick components, confirm, install
+  stickybot setup --yes              defaults, no questions
+  stickybot setup --with github --without model
+  stickybot setup --status [--json]  what's installed
+  stickybot setup --only core        just these components (not the defaults)
+  stickybot setup --dry-run          say what would happen, change nothing
+  stickybot setup --uninstall all    (or a list) remove them again
+  stickybot uninstall [--purge]      = setup --uninstall all (+ delete ~/.stick-agent)
 
 Test-friendly: STICK_AGENT_HOME, STICK_AGENT_PORT, STICK_AGENT_LABEL,
 STICK_AGENT_BIN, STICK_AGENT_CLAUDE_SETTINGS move everything it touches, and
@@ -138,18 +138,22 @@ class Component:
 
 # --- core: the agent itself -------------------------------------------------------------
 
+COMMANDS = ("stickybot", "stick-agent")  # the command, and its older name (both keep working)
+
+
 class Core(Component):
     id = "core"
-    title = "Companion app"
-    description = "the agent, the `stick-agent` command, its login item and the dashboard"
+    title = "StickyBot app"
+    description = ("the agent, StickyBot.app (how macOS names it), the `stickybot` command, its login item "
+                   "and the dashboard")
     default = True
     from_dashboard = False  # it's what runs the dashboard
 
-    def _link(self):
-        return bin_dir() / "stick-agent"
+    def _link(self, name=COMMANDS[0]):
+        return bin_dir() / name
 
-    def _target(self):
-        return venv_python().parent / "stick-agent"
+    def _target(self, name=COMMANDS[0]):
+        return venv_python().parent / name
 
     def _login_loaded(self):
         from . import __main__ as cli
@@ -165,8 +169,12 @@ class Core(Component):
     def status(self):
         bits = []
         link = self._link()
-        cmd_ok = link.exists() or shutil.which("stick-agent") is not None
-        bits.append("command ✓" if cmd_ok else "no `stick-agent` command")
+        cmd_ok = link.exists() or shutil.which("stickybot") is not None
+        bits.append("command ✓" if cmd_ok else "no `stickybot` command")
+        from . import app
+        if os.environ.get("STICK_AGENT_NO_APP") != "1":
+            bits.append("StickyBot.app ✓" if app.executable().exists() and not app.needs_build()
+                        else "StickyBot.app not built (runs as Python)")
         if no_login_item():
             login_ok = True
             bits.append("login item skipped")
@@ -179,27 +187,41 @@ class Core(Component):
         return state, ", ".join(bits)
 
     def plan(self):
-        extra = "" if no_login_item() else ", start it now and at every login"
+        extra = "" if no_login_item() else f", build {self._app()} and start it now and at every login"
         return f"link {self._link()} → {self._target()}{extra}"
+
+    def _app(self):
+        from . import app
+        return app.bundle()
+
+    def _link_commands(self, ui):
+        for name in COMMANDS:
+            link, target = self._link(name), self._target(name)
+            if not target.exists():
+                continue  # an older install's venv without this entry point
+            link.parent.mkdir(parents=True, exist_ok=True)
+            if link.is_symlink() and link.resolve() != target.resolve():
+                link.unlink()  # ours from an older install (or broken): point it here
+            if not link.is_symlink() and not link.exists():
+                link.symlink_to(target)
+            if link.is_symlink():
+                ui.say(f"`{name}` command: {link}")
+            else:
+                ui.say(f"left {link} alone (it's not a link we made)")
+        link = self._link()
+        if str(link.parent) not in os.environ.get("PATH", "").split(":"):
+            ui.say(f"note: add {link.parent} to your PATH to use `stickybot` from any terminal")
 
     def install(self, ui):
         from . import __main__ as cli
+        from . import app
         config.ensure_home()
-        link, target = self._link(), self._target()
-        link.parent.mkdir(parents=True, exist_ok=True)
-        if link.is_symlink() and link.resolve() != target.resolve():
-            link.unlink()  # ours from an older install (or broken): point it here
-        if not link.is_symlink() and not link.exists():
-            link.symlink_to(target)
-        if link.is_symlink():
-            ui.say(f"`stick-agent` command: {link}")
-        else:
-            ui.say(f"left {link} alone (it's not a link we made)")
-        if str(link.parent) not in os.environ.get("PATH", "").split(":"):
-            ui.say(f"note: add {link.parent} to your PATH to use `stick-agent` from any terminal")
+        self._link_commands(ui)
         if no_login_item():
             ui.say("login item skipped (--no-login-item)")
             return
+        ok, msg = app.ensure(say=ui.say)  # the login item runs it; plain python if it can't be built
+        ui.say(msg)
         path = cli.write_plist()
         cli.launchctl("bootout", f"{cli.domain()}/{cli.LABEL}")
         r = cli.launchctl("bootstrap", cli.domain(), str(path))
@@ -223,10 +245,13 @@ class Core(Component):
                 if p.exists():
                     p.unlink()
                     ui.say(f"removed {p}")
-        link = self._link()
-        if link.is_symlink():
-            link.unlink()
-            ui.say(f"removed {link}")
+        for name in COMMANDS:
+            link = self._link(name)
+            if link.is_symlink():
+                link.unlink()
+                ui.say(f"removed {link}")
+        from . import app
+        app.remove(say=ui.say)
 
 
 # --- model: speech to text ----------------------------------------------------------------
@@ -803,7 +828,7 @@ def admin_install_args(pkg):
     password) and restarts Core Audio in the same call, so BlackHole shows up without a reboot and
     with a single prompt (its installer only says "restart" — its scripts don't reload Core Audio)."""
     sh = f"/usr/sbin/installer -pkg {shlex.quote(str(pkg))} -target / && (/usr/bin/killall coreaudiod || true)"
-    prompt = "Stick Agent wants to install BlackHole 2ch, the audio driver for the wireless Wispr mic."
+    prompt = "StickyBot wants to install BlackHole 2ch, the audio driver for the wireless Wispr mic."
     script = (f"do shell script {applescript_quote(sh)} with administrator privileges "
               f"with prompt {applescript_quote(prompt)}")
     return ["/usr/bin/osascript", "-e", script]
@@ -834,7 +859,7 @@ def install_blackhole(ui, runner=None, opener=None, workdir=None):
             raise NotAvailable(f"not installing BlackHole: {why or 'pkgutil could not check it'}")
         ui.say("signed by Existential Audio and notarized by Apple ✓")
         ui.progress(60, "Waiting for your Mac password (a macOS dialog)…")
-        ui.say("macOS asks for your password now (its own dialog — Stick Agent never sees it)")
+        ui.say("macOS asks for your password now (its own dialog — StickyBot never sees it)")
         r = runner(admin_install_args(pkg), timeout=600)
         if r.returncode != 0:
             err = (r.stderr or r.stdout or "").strip()
@@ -853,12 +878,13 @@ def install_blackhole(ui, runner=None, opener=None, workdir=None):
         shutil.rmtree(folder, ignore_errors=True)
 
 
-RANK_HINT = ("once: hold A, then in Wispr Flow → Settings → Microphone drag \"<stick>-mic-bluetooth\" "
-             "(e.g. stick-key-mic-bluetooth) to the top "
+RANK_HINT = ("once: hold A, then in Wispr Flow → Settings → Microphone drag \"<stick>-bt-mic\" "
+             "(e.g. stickybot-bt-mic) to the top "
              "(don't pick BlackHole 2ch itself)")
 
 
-TAP_NOTE = ("macOS asks once to allow \"System Audio Recording\" for Python — that's the helper app; "
+TAP_NOTE = ("macOS asks once to allow \"System Audio Recording\" for StickyBot "
+            "(\"Python\" before StickyBot.app is set up); "
             "it only taps its own sound")
 
 
@@ -872,7 +898,7 @@ def tap_wanted(cfg=None):
 class WirelessMic(Component):
     id = "wireless_mic"
     title = "Wireless Wispr mic"
-    description = ("the stick's mic for Wispr without a cable: while A is held a \"<stick>-mic-bluetooth\" mic appears "
+    description = ("the stick's mic for Wispr without a cable: while A is held a \"<stick>-bt-mic\" mic appears "
                    "(an Apple audio tap of the agent's own sound carries it on macOS 14.2+, else BlackHole 2ch; "
                    "Wispr is never set to either)")
     default = False
@@ -914,7 +940,7 @@ class WirelessMic(Component):
         if not blackhole_installed():
             # Never run it ourselves: the cask installs a system audio driver and asks for the admin password
             raise NotAvailable(f"BlackHole 2ch isn't installed yet — install it from the setup page "
-                               f"(stick-agent install-page), or in a terminal run: {BLACKHOLE_CASK} "
+                               f"(stickybot install-page), or in a terminal run: {BLACKHOLE_CASK} "
                                "(it asks for your Mac password)")
         ui.say(f"BlackHole 2ch found — {RANK_HINT}")
 
@@ -1027,7 +1053,7 @@ def parse(argv):
             print(__doc__)
             raise SystemExit(0)
         else:
-            raise SystemExit(f"unknown option {a} (see stick-agent setup --help)")
+            raise SystemExit(f"unknown option {a} (see stickybot setup --help)")
         i += 1
     return opts
 
@@ -1164,4 +1190,4 @@ def print_results(results, opts):
     for cid, r in results.items():
         print(f"  {'✓' if r == 'ok' else '·' if r.startswith('skipped') or r == 'dry-run' else '✗'} "
               f"{BY_ID[cid].title}: {r}")
-    print(f"\nDashboard: http://localhost:{config.PORT}   ·   status: stick-agent setup --status")
+    print(f"\nDashboard: http://localhost:{config.PORT}   ·   status: stickybot setup --status")

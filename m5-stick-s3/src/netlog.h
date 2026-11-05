@@ -2,8 +2,8 @@
 // USB serial AND to TCP clients on port 23 while Wi-Fi is up. Lines typed by a
 // TCP client run as serial commands (show, imulog, chglog, ...).
 //
-//   pio device monitor --port socket://stick-key.local:23
-//   nc stick-key.local 23
+//   pio device monitor --port socket://stickybot.local:23
+//   nc stickybot.local 23
 #pragma once
 #include <Arduino.h>
 

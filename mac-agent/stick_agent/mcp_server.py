@@ -3,7 +3,7 @@
     POST http://127.0.0.1:8660/mcp      (MCP "Streamable HTTP", JSON-RPC 2.0, one message per POST)
 
 Who uses it: the agent's own voice session (brain.py passes `--mcp-config`) and, once you run
-`stick-agent mcp install`, every Claude Code session in a terminal (`claude mcp add --scope user`).
+`stickybot mcp install`, every Claude Code session in a terminal (`claude mcp add --scope user`).
 In Claude Code the tools are called mcp__stick__<tool>.
 
 Guarded like the rest of the local API (server.py): Host must be localhost / 127.0.0.1, an Origin
@@ -571,7 +571,7 @@ def routes(agent):
         if not ok_origin(request):
             return _rpc_error(None, INVALID_REQUEST, "bad origin", 403)
         if not agent.cfg.get("mcp_server", True):
-            return _rpc_error(None, INTERNAL, "the stick tools are turned off in the stick-agent dashboard", 503)
+            return _rpc_error(None, INTERNAL, "the stick tools are turned off in the StickyBot dashboard", 503)
         try:
             msg = await request.json()
         except ValueError:

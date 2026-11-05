@@ -27,7 +27,7 @@ constexpr size_t   RING         = 48;    // ~1 s of frames: pre-roll + slack
 constexpr int      SEND_PER_CHUNK = 2;   // drain up to 2 frames per 10 ms (catch up 2x; 3x lost frames)
 constexpr uint32_t END_TIMEOUT_MS = 1500;
 
-// The mic's name follows the stick's ("stick-key-mic-usb"). USB starts before setup() and
+// The mic's name follows the stick's ("stickybot-usb-mic", or "<name>-usb-mic"). USB starts before setup() and
 // before the core opens NVS, so this reads the saved name itself (renaming restarts the stick).
 static const char* usbMicName() {
   static char name[48];
@@ -46,7 +46,7 @@ static const char* usbMicName() {
 // A global so it registers its USB interface before the USB stack starts
 // (the core starts USB before setup(), like the serial port).
 [[maybe_unused]] static const bool namedUac = (StickUSBAudio::setNameProvider(usbMicName), true);
-static StickUSBAudio uac(RATE, UAC_BPS_16, UAC_SPK_NONE, UAC_MIC_MONO, "stick-mic-usb");
+static StickUSBAudio uac(RATE, UAC_BPS_16, UAC_SPK_NONE, UAC_MIC_MONO, "stickybot-usb-mic");
 
 struct Frame { uint8_t len; uint8_t data[HEADER + MAX_SAMPLES / 2]; };
 

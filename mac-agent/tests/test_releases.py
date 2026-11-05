@@ -33,7 +33,7 @@ def build(fw="1.8.0", tag="v1.8.0", fill=b"\xe9"):
 
 def api_release(tag, files=None, prerelease=False, draft=False, digests=True):
     files = files if files is not None else build(tag=tag)
-    return {"tag_name": tag, "name": f"stick-key {tag}", "draft": draft, "prerelease": prerelease,
+    return {"tag_name": tag, "name": f"StickyBot {tag}", "draft": draft, "prerelease": prerelease,
             "body": f"notes for {tag}", "html_url": f"https://github.com/{REPO}/releases/tag/{tag}",
             "published_at": "2026-11-05T10:00:00Z",
             "assets": [{"name": n, "size": len(b), "url": f"https://api.github.com/repos/{REPO}/releases/assets/{i}",

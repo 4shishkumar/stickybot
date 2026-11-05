@@ -75,7 +75,7 @@ export async function render(el) {
         h("div", {class: "small dim", style: "margin-top:4px"}, `You can put “${usbMicName(c)}” wherever you like in that list — Wispr only sees it while the stick is plugged in. Renamed the mic (here or after an update)? Wispr sees a new device: rank it again.`))),
       field("Carried by", h("select", {id: "wisprCarrier"}, [["auto", "Automatic (the Apple audio tap if allowed, else BlackHole)"], ["tap", "Apple audio tap (macOS 14.2+, no driver)"], ["blackhole", "BlackHole 2ch (audio driver)"]]
         .map(([v, l]) => h("option", {value: v, selected: (c.wireless_mic_carrier || "auto") === v}, l))),
-        "What gets the stick's audio into that mic. The Apple audio tap needs no driver: macOS asks once to allow “System Audio Recording” for Python (the helper app; it only taps its own sound). The mic's name stays the same, so Wispr's ranking survives a switch."),
+        "What gets the stick's audio into that mic. The Apple audio tap needs no driver: macOS asks once to allow “System Audio Recording” for StickyBot (it only taps its own sound). The mic's name stays the same, so Wispr's ranking survives a switch."),
       field("Ranking step", showMicButton(c), "Makes the mic appear for 60 s so you can drag it to the top in Wispr's settings. Needs the stick connected by Bluetooth and not plugged in by USB."),
       wirelessMicStatus(),
       h("details", {style: "margin-top:8px"}, h("summary", {class: "small dim"}, "Advanced timings"),
@@ -136,10 +136,12 @@ function brainStatus() {
 // Named after the stick, so two sticks' mics differ (same rule as stick_mic_device.slug / the firmware)
 const slug = s => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 const stickSlug = c => slug(c.stick && c.stick.name);
-const autoMicName = c => stickSlug(c) ? `${stickSlug(c)}-mic-bluetooth` : "stick-mic-bluetooth";
-const customMicName = c => { const n = (c.wispr_mic_name || "").trim(); return n === "stick-mic-bluetooth" ? "" : n; };
+const autoMicName = c => `${stickSlug(c) || "stickybot"}-bt-mic`;
+// older automatic names ("stick-mic-bluetooth", "<stick>-mic-bluetooth") saved there mean "automatic" too
+const oldAutoName = n => n === "stick-mic-bluetooth" || /^[a-z0-9]+(-[a-z0-9]+)*-mic-bluetooth$/.test(n);
+const customMicName = c => { const n = (c.wispr_mic_name || "").trim(); return oldAutoName(n) ? "" : n; };
 const micName = c => customMicName(c) || autoMicName(c);
-const usbMicName = c => `${stickSlug(c) || "stick"}-mic-usb`;
+const usbMicName = c => `${stickSlug(c) || "stickybot"}-usb-mic`;
 
 function slider(id, label, value, min, max, step, help) {
   const out = h("span", {class: "dim", style: "min-width:64px"}, `${value} ms`);
