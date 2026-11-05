@@ -560,8 +560,9 @@ def blackhole_installed():
 
 class WirelessMic(Component):
     id = "wireless_mic"
-    title = "Wireless Wispr mic"
-    description = "the stick's mic for Wispr without a cable: the agent plays it into the BlackHole 2ch virtual mic"
+    title = "Smart Wispr mic"
+    description = ("Wispr on BlackHole 2ch hears the stick (hold A, no cable) or your Mac's mic (Wispr's own "
+                   "shortcut): the agent chooses")
     default = False
     needs = {"admin": True, "terminal": f"BlackHole 2ch: `{BLACKHOLE_CASK}` in a terminal"}
 

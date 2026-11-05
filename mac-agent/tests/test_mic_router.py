@@ -379,3 +379,13 @@ def test_threads_route_a_dictation(no_real_audio, no_core_audio):
     finally:
         smart.stop()
     assert not smart.monitor._thread
+
+
+def test_menu_bar_line():
+    from stick_agent.menubar import wispr_line
+    assert wispr_line({"enabled": False, "hears": "stick"}) is None
+    assert wispr_line({"enabled": True, "hears": None}) is None
+    assert wispr_line({"enabled": True, "streaming": True}) == "Wispr hears: the stick"
+    assert wispr_line({"enabled": True, "hears": "AirPods Pro"}) == "Wispr hears: AirPods Pro"
+    assert wispr_line({"enabled": True, "hears": "", "wispr_recording": True}) == "Wispr hears: nothing"
+    assert "Microphone access" in wispr_line({"enabled": True, "mic_error": f"No sound. {PERMISSION}"})

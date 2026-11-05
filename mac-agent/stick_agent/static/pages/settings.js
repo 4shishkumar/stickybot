@@ -57,10 +57,17 @@ export async function render(el) {
       field("Facts & news ticker", toggle("tickerOn", "Rotate facts and news when nothing needs you", c.ticker !== false)),
       field("Sources", h("div", {class: "row", style: "gap:16px"}, SOURCES.map(([v, l]) =>
         h("label", {class: "switch"}, h("input", {type: "checkbox", class: "idle", value: v, checked: (c.idle_content || []).includes(v)}), h("span", null, l)))))),
-    card("Wireless Wispr mic",
-      field("Wireless mic", toggle("wirelessMic", "Hold A away from USB: the stick's mic reaches Wispr over Bluetooth", !!c.wireless_mic),
-        "The agent plays it into the BlackHole 2ch virtual mic. Set Wispr Flow's microphone to “BlackHole 2ch”. On USB the stick is a normal USB mic as before."),
-      wirelessMicStatus()),
+    card("Smart Wispr mic",
+      h("div", {class: "notice", style: "margin-bottom:12px"}, h("div", {class: "grow"},
+        h("b", null, "Once: set Wispr Flow's microphone to “BlackHole 2ch”."),
+        h("span", {class: "small"}, "The agent then chooses what Wispr hears: the stick while you hold A, and your Mac's mic when you dictate with Wispr's own shortcut on the keyboard."))),
+      field("Smart Wispr mic", toggle("wirelessMic", "Wispr hears the stick (hold A, no cable) or your Mac's mic (Wispr's shortcut)", !!c.wireless_mic),
+        "Plays into the BlackHole 2ch virtual mic. On USB the stick is a normal USB mic as before."),
+      field("Without the stick", fallbackPicker(c.wispr_fallback_mic || "default"),
+        "The mic Wispr hears when you dictate without holding A. It opens only while Wispr is recording. The first time, macOS asks to allow Microphone access for stick-agent (System Settings → Privacy & Security → Microphone)."),
+      wirelessMicStatus(),
+      h("div", {class: "notice warn", style: "margin-top:12px"}, h("div", {class: "grow"}, h("span", {class: "small"},
+        "When stick-agent isn't running, Wispr hears nothing from BlackHole. Quitting it for a while? Switch Wispr back to your mic, or turn this off.")))),
     card("Approvals",
       field("Stick approvals", toggle("stickApprovals", "Claude Code's permission prompts go to the stick and here first", c.stick_approvals !== false),
         "Off: Claude Code asks in the terminal straight away. On: it waits up to 30 s for A / B.")),
@@ -73,23 +80,52 @@ export async function render(el) {
 
 export function leave() { root = null; if (unsub) unsub(); unsub = null; }
 
-// Device found / streaming, from /api/status (wireless_mic) and live "wispr_mic" events.
+// The mic for dictation without the stick: the Mac's default input, a device, or off.
+function fallbackPicker(current) {
+  const sel = h("select", {id: "fallbackMic"},
+    h("option", {value: "default", selected: current === "default"}, "Mac's default input (recommended)"));
+  const off = h("option", {value: "off", selected: current === "off"}, "Off — Wispr hears only the stick");
+  sel.appendChild(off);
+  get("/api/audio/inputs").then(r => {
+    if (!r || !Array.isArray(r.devices)) return;
+    if (r.default) sel.options[0].textContent = `Mac's default input — now ${r.default} (recommended)`;
+    const names = [...r.devices];
+    if (current !== "default" && current !== "off" && !names.includes(current)) names.push(current);
+    for (const n of names) sel.insertBefore(h("option", {value: n, selected: current === n}, r.devices.includes(n) ? n : `${n} (not connected)`), off);
+  });
+  return sel;
+}
+
+// Who Wispr hears, from /api/status (wireless_mic) and live "wispr_mic" events.
 function wirelessMicStatus() {
-  const line = h("div", {class: "small"});
+  const line = h("div", {class: "small", style: "display:flex;flex-direction:column;gap:6px"});
+  const pill = (cls, text) => h("span", {class: `pill ${cls}`}, h("span", {class: "dot"}), text);
   const paint = w => {
     clear(line);
     if (!w) { line.appendChild(h("span", {class: "dim"}, "This version of the agent doesn't report it.")); return; }
     if (w.error) {
-      line.append(h("span", {class: "pill warn"}, h("span", {class: "dot"}), "Needs attention"), " ", w.error.includes("brew")
+      line.appendChild(h("div", null, pill("warn", "Needs attention"), " ", w.error.includes("brew")
         ? h("span", null, "Install BlackHole 2ch in a terminal: ", h("code", null, "brew install --cask blackhole-2ch"), " (asks for your Mac password).")
-        : w.error);
+        : w.error));
       return;
     }
     if (!w.enabled) { line.appendChild(h("span", {class: "dim"}, "Off.")); return; }
-    const parts = [h("span", {class: "pill ok"}, h("span", {class: "dot"}), w.streaming ? "Streaming to Wispr" : "Ready"),
-      " ", h("span", {class: "dim"}, `Playing into ${w.device || "BlackHole 2ch"}`)];
-    if (w.last) parts.push(h("span", {class: "dim"}, ` · last: ${w.last.secs}s, ${w.last.lost} lost frame${w.last.lost === 1 ? "" : "s"}, ${w.last.underruns} gap${w.last.underruns === 1 ? "" : "s"}`));
-    line.append(...parts);
+    let now;
+    if (w.streaming || w.hears === "stick") now = pill("ok", "Wispr hears: the stick");
+    else if (w.hears) now = pill("ok", `Wispr hears: ${w.hears}`);
+    else if (w.wispr_recording) now = pill("warn", "Wispr is recording — nothing to give it");
+    else now = pill("", "Idle");
+    line.appendChild(h("div", null, now, " ", h("span", {class: "dim"}, `Playing into ${w.device || "BlackHole 2ch"}`)));
+    if (w.smart === "unsupported") line.appendChild(h("div", {class: "dim"}, `Without the stick: not available here (${w.smart_error || "needs macOS 14.2+"}). Wispr hears only the stick.`));
+    else if (w.fallback === "off") line.appendChild(h("div", {class: "dim"}, "Without the stick: off — Wispr hears only the stick."));
+    if (w.mic_error) line.appendChild(h("div", null, pill("warn", "Microphone"), " ", w.mic_error));
+    const s = w.session;
+    if (s) {
+      const src = Object.entries(s.sources || {}).map(([k, v]) => `${k} ${v}s`).join(", ") || "nothing";
+      const ms = s.mic && s.ready_ms != null ? ` · mic ready ${s.ready_ms} ms after Wispr started` : "";
+      line.appendChild(h("div", {class: "dim"}, `Last dictation: ${s.secs}s, heard ${src}${ms}`));
+    }
+    if (w.last) line.appendChild(h("div", {class: "dim"}, `Last stick stream: ${w.last.secs}s, ${w.last.lost} lost frame${w.last.lost === 1 ? "" : "s"}, ${w.last.underruns} gap${w.last.underruns === 1 ? "" : "s"}`));
   };
   paint((store.status || {}).wireless_mic);
   if (unsub) unsub();
@@ -141,6 +177,7 @@ async function save() {
     idle_content: [...document.querySelectorAll(".idle")].filter(c => c.checked).map(c => c.value),
     stick_approvals: v("stickApprovals").checked,
     wireless_mic: v("wirelessMic").checked,
+    wispr_fallback_mic: v("fallbackMic").value,
     safe_tools: v("safeTools").value.split(",").map(s => s.trim()).filter(Boolean),
     claude_path: v("claudePath").value.trim(),
   });
