@@ -82,6 +82,7 @@ constexpr uint32_t PROMPT_GUARD_MS = 600;  // presses this soon after a prompt a
 static bool       comboDown = false, dirty = true, ignoreAUntilRelease = false, ignoreBUntilRelease = false;
 static uint32_t   comboSince = 0, enterAt = 0;
 static bool       showingPairing = false, onUsbPower = true;
+static wispr::Path aPath = wispr::Path::NONE;  // where the mic goes for the current / last A press
 static uint32_t   messageUntil = 0, lastPoll = 0, lastRepeat = 0, lastInput = 0;
 static uint32_t   lastBatteryReport = 0;
 static int        reportedBattery = -1;
@@ -174,7 +175,7 @@ static void render() {
   switch (mode) {
     case Mode::STATUS:
       if (docked)                         ui::drawDock(readDash(), dockSide(), nightTime());
-      else if (comboDown)                 ui::drawHolding(status.combo, mic::usbStreaming(), mic::wisprStreaming());
+      else if (comboDown)                 ui::drawHolding(status.combo, aPath == wispr::Path::USB, wispr::streams(aPath));
       else if (agentTalking)              ui::drawTalk(buddy::agentLinked());
       else if (millis() < agentShowUntil && agentSeenAt < talkEndedAt) ui::drawAgent("thinking", "", "");
       else if (millis() < agentShowUntil) ui::drawAgent(buddy::agent().state, buddy::agent().heard, buddy::agent().text);
@@ -253,8 +254,27 @@ static bool canStandby() {
 
 // Wireless Wispr mic: while streaming, the key-up waits a moment (keyUpAt) for the
 // audio still on its way to the Mac, so Wispr doesn't stop before the last words.
-static bool     wisprMic = false;
-static uint32_t keyUpAt = 0, releasedAt = 0;
+// With a 1.7.1+ agent the key-down waits too (wisprGate): the agent first makes the
+// "stick-mic-bluetooth" device appear, so Wispr has switched to it when it starts.
+// Plugged into a computer by USB, A is the USB mic exactly as before (no waiting).
+static bool        wisprMic = false;
+static uint32_t    keyUpAt = 0, releasedAt = 0;
+static wispr::Gate wisprGate;
+static uint16_t    holdId = 0;
+
+static const char* pathName(wispr::Path p) {
+  switch (p) {
+    case wispr::Path::USB:        return " (USB mic)";
+    case wispr::Path::BT_DIRECT:  return " (mic to Wispr by Bluetooth)";
+    case wispr::Path::BT_PREPARE: return " (mic to Wispr by Bluetooth, stick-mic-bluetooth)";
+    default:                      return "";
+  }
+}
+
+static void comboKeyDown() {
+  hid::down(settings::combo());
+  Log.printf("-> %s down%s\n", comboToString(settings::combo()).c_str(), pathName(aPath));
+}
 
 static void comboUp() {
   keyUpAt = 0;
@@ -275,15 +295,32 @@ static void comboPress() {
   }
   if (keyUpAt) comboUp();  // pressed again during the tail: finish the last press first
   enterAt = 0;  // a new press cancels a pending Enter
-  hid::down(settings::combo());  // first: the key never waits for the mic
+  aPath = wispr::choosePath({settings::wirelessMic(), buddy::agentWirelessMic(), buddy::agentPreparesMic(),
+                             buddy::agentLinked(), mic::usbMounted(), mic::usbStreaming(),
+                             mic::wisprStreaming() || agentTalking});
+  bool prepare = aPath == wispr::Path::BT_PREPARE;
+  if (wispr::streams(aPath) && !mic::wisprStart(prepare, ++holdId)) aPath = wispr::Path::NONE;  // mic busy
+  wisprMic = wispr::streams(aPath);
   comboDown = true;
   mic::usbTalk(true);
   comboSince = millis();
   dirty = true;
-  wisprMic = wispr::shouldStream({settings::wirelessMic(), buddy::agentWirelessMic(), buddy::agentLinked(),
-                                  mic::usbStreaming(), mic::wisprStreaming() || agentTalking}) &&
-             mic::wisprStart();
-  Log.printf("-> %s down%s\n", comboToString(settings::combo()).c_str(), wisprMic ? " (mic to Wispr by Bluetooth)" : "");
+  if (aPath == wispr::Path::BT_PREPARE) {  // the stream runs already; the key waits for the agent's mic
+    wisprGate.begin(millis(), holdId);
+    Log.printf("-> %s: waiting for stick-mic-bluetooth (hold %u)\n", comboToString(settings::combo()).c_str(), holdId);
+  } else {
+    comboKeyDown();  // USB / no stick mic / older agent: the key never waits
+  }
+}
+
+// The agent's "ready" (or the timeout) puts the key down for a waiting press.
+static void wisprGateLoop() {
+  uint16_t id;
+  if (buddy::takeWisprReady(id) && !wisprGate.ready(id)) Log.printf("Agent: late ready (hold %u)\n", id);
+  if (wisprGate.poll(millis()) != wispr::Gate::Step::PRESS) return;
+  if (wisprGate.timedOut()) Log.printf("Agent: no ready in %lu ms, pressing anyway\n", (unsigned long)wisprGate.waitedMs());
+  else Log.printf("Agent: mic ready in %lu ms\n", (unsigned long)wisprGate.waitedMs());
+  comboKeyDown();
 }
 
 static void sendEnter(const char* why) {
@@ -298,6 +335,14 @@ static void comboRelease() {
   mic::usbTalk(false);
   dirty = true;
   releasedAt = millis();
+  if (wisprGate.release() == wispr::Gate::Step::CANCEL) {  // let go before the mic was ready: no key at all
+    if (wisprMic) mic::wisprEnd();
+    wisprMic = false;
+    enterAt = 0;
+    Log.printf("-> %s cancelled (released after %lu ms, before the mic was ready)\n",
+               comboToString(settings::combo()).c_str(), (unsigned long)(releasedAt - comboSince));
+    return;
+  }
   uint32_t tail = wispr::keyUpDelayMs(wisprMic);
   if (tail) keyUpAt = millis() + tail;
   else comboUp();
@@ -552,6 +597,7 @@ void loop() {
   if (millis() - lastPoll > STATUS_POLL_MS) {
     lastPoll = millis();
     onUsbPower = M5.Power.getVBUSVoltage() > USB_POWER_MV;
+    mic::setUsbPower(onUsbPower);
     ui::Status s = readStatus();
     if (s.bt != status.bt) {
       Log.println(s.bt == 0 ? "Mac connected" : "Mac disconnected");
@@ -573,6 +619,8 @@ void loop() {
   }
 
   if (keyUpAt && millis() >= keyUpAt) comboUp();
+  wisprGateLoop();
+  buddy::setUsbMounted(mic::usbMounted());
   if (enterAt && millis() >= enterAt) {
     enterAt = 0;
     sendEnter("after hold");

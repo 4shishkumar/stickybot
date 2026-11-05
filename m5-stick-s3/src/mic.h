@@ -13,7 +13,7 @@
 //
 // Wireless Wispr mic: while A holds the Wispr shortcut away from USB, the same
 // agent frames go to the Mac, marked "wispr" instead of "talk"; the agent plays
-// them into the BlackHole virtual mic that Wispr listens to.
+// them into BlackHole, the hidden carrier of its "stick-mic-bluetooth" device.
 namespace mic {
 
 void begin();
@@ -23,12 +23,14 @@ void usbTalk(bool on);       // button A held
 void preRoll();              // button B went down: start buffering
 void agentTalk();            // the B press is a hold: stream to the agent
 void agentEnd();             // B released (or cancelled): finish and stop
-bool wisprStart();           // A went down: stream to the agent for Wispr right away (false: mic busy)
+bool wisprStart(bool prepare = false, uint16_t id = 0);  // A went down: stream to the agent for Wispr (false: mic busy)
 void wisprEnd();             // A's key went up: finish and stop
 bool wisprStreaming();       // a Wispr stream is running (or finishing)
 
 void suspend(bool on);       // pause the mic hardware (keeps the talk going) so the speaker can use the chip
 bool usbStreaming();         // the Mac has the USB input open
+void setUsbPower(bool on);   // VBUS is there (main loop measures it)
+bool usbMounted();           // plugged into a computer that enumerated us (logic/wispr.h: mounted + VBUS)
 bool live();                 // the mic hardware is running
 int  peak();                 // last chunk's peak level, 0..32767
 

@@ -5,6 +5,7 @@
 #include "netlog.h"
 #include "buddy.h"
 #include "logic/adpcm.h"
+#include "logic/wispr.h"
 
 namespace mic {
 
@@ -218,15 +219,16 @@ void agentEnd() {
   if (!forWispr) finish();
 }
 
-// No pre-roll needed: Wispr starts recording on key-down too, so streaming
-// starts at once (the first ~100 ms are the mic's settle silence).
-bool wisprStart() {
+// Streaming starts at once (the first ~100 ms are the mic's settle silence). With
+// `prepare` the agent first makes its mic device, and the key waits for its "ready".
+bool wisprStart(bool prepare, uint16_t id) {
   if (armed) return false;  // a talk is recording
   forWispr = true;
   drained = ending = false;
   sending = true;
   armed = true;
-  buddy::wisprEvent(true);
+  if (prepare) buddy::wisprPrepare(id);
+  else buddy::wisprEvent(true);
   return true;
 }
 
@@ -237,6 +239,10 @@ void wisprEnd() {
 bool wisprStreaming() { return forWispr && armed; }
 
 bool usbStreaming() { return isStreaming; }
+
+static bool vbus = false;
+void setUsbPower(bool on) { vbus = on; }
+bool usbMounted() { return wispr::usbMounted((bool)USB, vbus); }
 bool live() { return micOn; }
 int  peak() { return lastPeak; }
 

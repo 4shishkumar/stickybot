@@ -8,6 +8,7 @@
 #include <M5Unified.h>
 #include "ui.h"
 #include "motion.h"
+#include "mic.h"
 #include <Preferences.h>
 
 namespace protocol {
@@ -57,6 +58,7 @@ static String stateJson() {
   j += String(",\"autoRotate\":") + (settings::autoRotate() ? "true" : "false");
   j += String(",\"devMode\":") + (settings::devMode() ? "true" : "false");
   j += String(",\"wirelessMic\":") + (settings::wirelessMic() ? "true" : "false");
+  j += String(",\"usbMounted\":") + (mic::usbMounted() ? "true" : "false");
   j += String(",\"macPassSet\":") + (settings::macPassword().length() ? "true" : "false");
   j += ",\"enterDelay\":" + String(settings::enterDelayMs());
   j += ",\"slot\":" + String(hid::slot()) + ",\"slots\":[";

@@ -153,15 +153,38 @@ static void handleSound(JsonObject s) {
   sendSounds();  // reply with the current settings
 }
 
-static bool wmic_ = false;  // the agent's wireless Wispr mic is on and has its output device
+static bool wmic_ = false;    // the agent's wireless Wispr mic is on and has its output device
+static bool wready_ = false;  // ... and it answers "prepare" with "ready" (makes the stick-mic-bluetooth device)
+static volatile bool readyPending_ = false;
+static uint16_t readyId_ = 0;
+
+// Plugged into a computer by USB: the agent must not make the Bluetooth mic then.
+// Sent when it changes, to a new agent, and every 20 s with the hellos.
+static bool usbMounted_ = false;
+static uint32_t usbSentAt_ = 0;
+static bool usbSent_ = false;
+
+static void sendUsb() {
+  send(String("{\"src\":\"agent\",\"evt\":\"usb\",\"mounted\":") + (usbMounted_ ? "true" : "false") + "}");
+  usbSent_ = true;
+  usbSentAt_ = millis();
+}
 
 static void handleAgent(JsonDocument& d) {
+  bool fresh = !agentLinked();  // a new agent (or it was gone): tell it where we are
   agentSeen = millis();
+  if (d["wispr"] == "ready") {  // the mic device is there: the key can go down
+    readyId_ = d["id"] | 0;
+    readyPending_ = true;
+    return;
+  }
+  if (fresh || !usbSent_ || millis() - usbSentAt_ > 20000) sendUsb();
   if (d["wmic"].is<bool>()) {  // in every hello, and on its own when changed in the dashboard
     bool on = d["wmic"].as<bool>();
     if (on != wmic_) Log.printf("Agent: wireless Wispr mic %s\n", on ? "on" : "off");
     wmic_ = on;
   }
+  if (d["hello"].is<int>()) wready_ = d["wready"] | false;  // agents before 1.7.1 don't send it
   if (d["proto"].is<const char*>()) {  // a settings command, same as "@..." over USB
     String line = d["proto"].as<String>();
     line.trim();
@@ -388,11 +411,34 @@ void agentTalkEvent(bool start) {
 }
 
 bool agentWirelessMic() { return wmic_ && agentLinked(); }
+bool agentPreparesMic() { return wready_ && agentWirelessMic(); }
 
 void wisprEvent(bool start) {
   if (start) fastLink();
   send(start ? "{\"src\":\"agent\",\"evt\":\"wispr\",\"state\":\"start\",\"rate\":16000,\"codec\":\"ima-adpcm\"}"
              : "{\"src\":\"agent\",\"evt\":\"wispr\",\"state\":\"stop\"}");
+}
+
+void wisprPrepare(uint16_t id) {
+  fastLink();
+  readyPending_ = false;
+  send(String("{\"src\":\"agent\",\"evt\":\"wispr\",\"state\":\"prepare\",\"id\":") + id +
+       ",\"rate\":16000,\"codec\":\"ima-adpcm\"}");
+}
+
+bool takeWisprReady(uint16_t& id) {
+  if (!readyPending_) return false;
+  readyPending_ = false;
+  id = readyId_;
+  return true;
+}
+
+void setUsbMounted(bool on) {
+  if (on == usbMounted_) return;
+  usbMounted_ = on;
+  Log.printf("USB host %s\n", on ? "connected" : "gone");
+  if (agentLinked()) sendUsb();
+  else usbSent_ = false;
 }
 
 size_t audioPayloadMax() {

@@ -805,7 +805,7 @@ void drawHolding(const Combo& c, bool usbMic, bool wirelessMic) {
   txt(one + " held - " + (stickMic ? "stick mic on" : "Mac's mic"), W / 2, 46, F9, DIM, middle_center);
   orb(W / 2, 112, WISPR);
   meter(186, WISPR);
-  txt(usbMic ? "Wispr hears the stick" : wirelessMic ? "Wispr hears the stick (BT)" : "plug in USB for the stick mic",
+  txt(usbMic ? "Wispr hears the stick (USB)" : wirelessMic ? "Wispr hears the stick (BT)" : "plug in USB for the stick mic",
       W / 2, 216, F9, FAINT, middle_center);
   canvas.pushSprite(0, 0);
 }

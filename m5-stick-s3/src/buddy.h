@@ -46,7 +46,11 @@ uint32_t agentUpdated();           // millis() of the last status, 0 = none
 void   agentTalkEvent(bool start); // tell the agent a talk press started / ended
 void   agentCancel();              // dismissed on the stick: the agent drops the request
 bool   agentWirelessMic();         // the agent can play the mic into Wispr ("wmic" in its hello)
-void   wisprEvent(bool start);     // tell the agent a Wispr stream started / ended
+void   wisprEvent(bool start);     // tell the agent a Wispr stream started (1.7.0 agents) / ended
+bool   agentPreparesMic();         // ... and makes the stick-mic-bluetooth device on "prepare" ("wready")
+void   wisprPrepare(uint16_t id);  // A down: "make the mic device" (the stream follows at once)
+bool   takeWisprReady(uint16_t& id);  // the agent's "ready" arrived since (once per message)
+void   setUsbMounted(bool on);     // plugged into a computer by USB: tell the agent (on change)
 size_t audioPayloadMax();          // largest audio frame one notification can carry
 bool   sendAudio(const uint8_t* data, size_t len);  // safe from any task
 void   eventShown(const String& id);  // ack: {"src":"agent","evt":"event_shown","id":...}
