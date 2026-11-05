@@ -36,6 +36,7 @@
 #include "mic.h"
 #include "logic/clock.h"
 #include "logic/wispr.h"
+#include "logic/prompt.h"
 #include "sound.h"
 #include "events.h"
 #include <HijelHID_BLEKeyboard.h>  // KEY_MOD_* constants
@@ -758,9 +759,14 @@ void loop() {
       promptAt = millis();
       lastPing = 0;
       ui::wake(60000);
-      ui::drawPrompt(p.tool, p.hint, p.from);
-      Log.printf("Claude asks (%s): %s %s — A approve, B deny\n", p.from.length() ? p.from.c_str() : "desktop",
-                    p.tool.c_str(), p.hint.c_str());
+      if (p.ask) {
+        ui::drawAsk(p.q.length() ? p.q : p.hint, p.from, p.a, p.b);
+        Log.printf("Question (%s): %s — A %s, B %s\n", p.from.c_str(), p.q.c_str(), p.a.c_str(), p.b.c_str());
+      } else {
+        ui::drawPrompt(p.tool, p.hint, p.from);
+        Log.printf("Claude asks (%s): %s %s — A approve, B deny\n", p.from.length() ? p.from.c_str() : "desktop",
+                      p.tool.c_str(), p.hint.c_str());
+      }
     }
     ui::keepAwake();
     if (comboDown) comboRelease();
@@ -769,10 +775,15 @@ void loop() {
       lastPing = millis();
       sound::play(sound::Cue::APPROVAL);
     }
-    if (aDown) { buddy::decide(true);  Log.println("Claude: approved"); sound::play(sound::Cue::APPROVED); }
-    if (bDown || (mev == motion::Event::SHAKE && settings::shakeEscapes() && millis() - promptAt >= PROMPT_GUARD_MS)) {
-      buddy::decide(false);
-      Log.println("Claude: denied");
+    bool ask = p.ask;  // (p is gone once answered)
+    bool shake = mev == motion::Event::SHAKE && settings::shakeEscapes() && millis() - promptAt >= PROMPT_GUARD_MS;
+    if (aDown) {
+      buddy::answer(prompt::decision(ask, prompt::Input::A));
+      Log.println(ask ? "Question: A" : "Claude: approved");
+      sound::play(sound::Cue::APPROVED);
+    } else if (bDown || shake) {
+      buddy::answer(prompt::decision(ask, bDown ? prompt::Input::B : prompt::Input::SHAKE));
+      Log.println(ask ? (bDown ? "Question: B" : "Question: dismissed") : "Claude: denied");
       sound::play(sound::Cue::DENIED);
     }
     delay(20);

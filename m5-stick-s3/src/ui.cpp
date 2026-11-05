@@ -3,6 +3,7 @@
 #include "battery.h"
 #include "fonts_vlw.h"
 #include "logic/text.h"
+#include "logic/prompt.h"
 
 namespace ui {
 
@@ -857,6 +858,25 @@ void drawPrompt(const String& tool, const String& hint, const String& from) {
   canvas.drawRoundRect(W - PAD - 54, y - 14, 58, 32, 16, ON_ASK);
   txt("B  no", W - PAD - 25, y + 2, F12, ON_ASK, middle_center);
   txt("no answer: asks on the Mac", W / 2, 232, F9, ON_ASK, middle_center);
+  canvas.pushSprite(0, 0);
+}
+
+// A question from a Claude session (the agent's stick tools): orange like an approval, but the
+// question gets the room and each button its own row with the option's label.
+void drawAsk(const String& question, const String& from, const String& a, const String& b) {
+  dockEnd();  // normal screens are portrait
+  canvas.fillScreen(ASK);
+  txt(from.length() ? from + " asks" : "Claude asks", W / 2, 18, F12, ON_ASK, middle_center);
+  canvas.fillRoundRect(PAD - 4, 34, W - 2 * (PAD - 4), 122, 8, ON_ASK);
+  paragraph(question, F12, PAD + 2, 42, W - 2 * PAD - 4, 6, rgb(0xff, 0xe2, 0xb8), 18);
+  String la = String(prompt::button('A', a.c_str(), "yes", 16).c_str());
+  String lb = String(prompt::button('B', b.c_str(), b.length() || !a.length() ? "no" : "dismiss", 16).c_str());
+  int y = flipped_ ? 168 : 172;
+  canvas.fillRoundRect(PAD - 4, y - 13, W - 2 * (PAD - 4), 26, 13, ON_ASK);
+  txt(la, W / 2, y, fit(la, W - 2 * PAD, {F12, F9}), ASK, middle_center);
+  canvas.drawRoundRect(PAD - 4, y + 17, W - 2 * (PAD - 4), 26, 13, ON_ASK);
+  txt(lb, W / 2, y + 30, fit(lb, W - 2 * PAD, {F12, F9}), ON_ASK, middle_center);
+  txt("shake: dismiss", W / 2, 232, F9, ON_ASK, middle_center);
   canvas.pushSprite(0, 0);
 }
 

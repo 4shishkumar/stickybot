@@ -285,6 +285,12 @@ static void handle(const String& l) {
   if (!p.isNull() && p["id"].as<String>() != answeredId) {
     slot = {p["id"].as<String>(), p["tool"].as<String>(), p["hint"].as<String>(),
             fromCli ? (p["from"] | "terminal") : ""};
+    slot.ask = fromCli && p["kind"] == "ask";
+    if (slot.ask) {
+      slot.q = p["q"] | "";
+      slot.a = p["a"] | "";
+      slot.b = p["b"] | "";
+    }
     has = true;
   } else if (p.isNull()) {
     has = false;  // answered elsewhere (e.g. on the Mac) or withdrawn
@@ -328,13 +334,15 @@ bool hasPrompt() {
 // Terminal prompts first: the desktop app also shows its own on screen.
 const Prompt& prompt() { return hasCli ? cli : desktop; }
 
-void decide(bool approve) {
+void answer(const char* decision) {
   if (!hasPrompt()) return;
   Prompt& p = hasCli ? cli : desktop;
-  send("{\"cmd\":\"permission\",\"id\":\"" + p.id + "\",\"decision\":\"" + (approve ? "once" : "deny") + "\"}");
+  send("{\"cmd\":\"permission\",\"id\":\"" + p.id + "\",\"decision\":\"" + decision + "\"}");
   answeredId = p.id;
   (hasCli ? hasCli : hasDesktop) = false;
 }
+
+void decide(bool approve) { answer(approve ? "once" : "deny"); }
 
 // --- Mac agent ---------------------------------------------------------------
 

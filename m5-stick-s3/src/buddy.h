@@ -19,6 +19,10 @@ namespace buddy {
 struct Prompt {
   String id, tool, hint;
   String from;  // "" = desktop app, otherwise e.g. the terminal project name
+  // A question from a Claude session (the agent's stick tools, "kind":"ask"; 1.7.2+):
+  // the question and the A / B labels. Approvals leave these empty.
+  bool ask = false;
+  String q, a, b;
 };
 
 void attach();          // call after the keyboard has started, before advertising
@@ -32,6 +36,7 @@ String lastMessage();  // latest status line from the desktop app
 bool hasPrompt();
 const Prompt& prompt();
 void decide(bool approve);  // answer the current prompt
+void answer(const char* decision);  // ... with "once" | "deny" | "dismiss" (see logic/prompt.h)
 
 // --- Mac agent ---------------------------------------------------------------
 struct Agent {

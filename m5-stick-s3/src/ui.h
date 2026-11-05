@@ -86,6 +86,8 @@ void drawInfo(const char* title, const String lines[], int count, const char* hi
 void drawMessage(const char* title, const char* sub, uint16_t bg);
 void drawPairing(uint32_t code);
 void drawPrompt(const String& tool, const String& hint, const String& from);
+// A question from a Claude session (1.7.2): the question, then A / B with their labels
+void drawAsk(const String& question, const String& from, const String& a, const String& b);
 void drawTalk(bool linked);  // B held: talking to the Mac agent
 void drawAgent(const String& state, const String& heard, const String& text);
 void drawMood(int mood, const String& label);  // demo: 0 idle, 1 listen, 2 think, 3 work, 4 done, 5 error, 6 ask, 7 offline, 8 party

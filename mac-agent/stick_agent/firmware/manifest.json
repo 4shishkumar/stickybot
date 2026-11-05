@@ -1,9 +1,9 @@
 {
-  "version": "1.7.1",
+  "version": "1.7.2",
   "board": "m5-sticks3",
-  "built": "2026-11-05T13:25:02+05:30",
-  "sha256": "c8f086f2c2a2c4bcae1bc312ae81544c5ecbeaba6670adc881589feaa1471745",
-  "size": 1993344,
+  "built": "2026-11-05T13:53:38+05:30",
+  "sha256": "ece8f9a9519ed82c7fd30b6bdefd1db7ecd4db56553197169134fd1c2e568c1e",
+  "size": 1996144,
   "parts": [
     {
       "offset": "0x0",
@@ -26,8 +26,8 @@
     {
       "offset": "0x10000",
       "file": "app.bin",
-      "size": 1962112,
-      "sha256": "6bc70c1d7a3876cb395a16048e4c16b055cb80431a7d403c2e4cf3021b5f30fc"
+      "size": 1964912,
+      "sha256": "689856999be4da86a660f2c28871fdf9e67058bf885923a989741d83ac19eccf"
     }
   ],
   "flash": {
