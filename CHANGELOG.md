@@ -12,6 +12,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-06
+
 **stick-key is now StickyBot.** After updating, macOS asks once more for Bluetooth (and
 System Audio Recording, with the wireless mic on the Apple audio tap) — now for
 *StickyBot* — and the mics have new names: **rank them in Wispr Flow → Settings →
@@ -190,7 +192,8 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/ashish-kumar-noon/stickybot/compare/v1.8.6...HEAD
+[Unreleased]: https://github.com/ashish-kumar-noon/stickybot/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.0.0
 [1.8.6]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.6
 [1.8.5]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.5
 [1.8.4]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.4
