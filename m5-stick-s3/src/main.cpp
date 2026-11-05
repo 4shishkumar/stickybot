@@ -70,11 +70,16 @@ static uint32_t   agentShowUntil = 0, agentSeenAt = 0, talkEndedAt = 0, lastFram
 constexpr uint32_t PAGE_RETURN_MS = 10000;  // other pages go back to Home after this
 constexpr uint32_t DOCK_IDLE_MS = 30000;    // on USB and untouched this long: the dock clock
 static bool       docked = false;
-// The dock clock is always landscape: turned to whichever side the stick lies on,
-// or the last such side (default +1) when it stands upright or lies flat.
+// The dock clock is always landscape: turned to whichever long side is down, read from the
+// same forgiving tracker as the landscape screens (a tilted stick counts too), or the last such
+// side (default +1) while it stands upright or lies flat.
 static int dockSide() {
   static int last = 1;
-  if (int s = motion::sideways()) last = s;
+  switch (motion::facing().current()) {
+    case orientation::Orient::LANDSCAPE_RIGHT: last = 1; break;   // rotation 1
+    case orientation::Orient::LANDSCAPE_LEFT:  last = -1; break;  // rotation 3
+    default: break;
+  }
   return last;
 }
 constexpr uint32_t NO_ANSWER_MS = 20000;    // "Thinking..." with no word from the agent: give up
@@ -1015,6 +1020,8 @@ void loop() {
     if (docked) {
       if (!ui::awake()) ui::wake(60000);
       ui::keepAwake();
+      static int drawnSide = 0;  // turned over while docked: redraw at once (not just each minute)
+      if (dockSide() != drawnSide) { drawnSide = dockSide(); dirty = true; }
     }
   }
 
