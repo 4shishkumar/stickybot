@@ -694,21 +694,21 @@ static bool     haveCard = false, transActive = false, transPeek = false, forceP
 static uint32_t transAt = 0, lastPeekAt = 0;
 static int      changesSincePeek = 0;
 constexpr uint32_t FADE_MS = 170, PEEK_MS = 1500;
-constexpr int CARD_TOP = 146, CARD_H = 70;           // portrait
-constexpr int CARD_TOP_WIDE = 66, CARD_H_WIDE = 58;  // landscape
-static int cardTop_ = CARD_TOP, cardH_ = CARD_H;
+constexpr int CARD_TOP = 146, CARD_H = 70;           // portrait: under the clock, full width
+constexpr int CARD_X_WIDE = 118;                     // landscape: the right column, full height
+static int cardTop_ = CARD_TOP, cardH_ = CARD_H, cardX_ = 4, cardW_ = 0;
 
 bool homeAnimating() { return transActive; }
 void forceHomePeek() { forcePeek = true; }
 
 static void drawCard(const CardView& v, float alpha, int dip) {
-  const int x = 4, y = cardTop_ + dip, w = W - 8;
-  const bool wide = cardH_ != CARD_H;  // landscape: lower and wider, two lines of text
+  const int x = cardX_, y = cardTop_ + dip, w = cardW_ ? cardW_ : W - 8;
+  const bool wide = cardX_ != 4;  // landscape: a narrow, tall card on the right
   if (v.urgent) {
     canvas.fillRoundRect(x, y, w, cardH_, 12, ASK);
     { const lgfx::IFont* f = fit(v.a, w - 14, {F14, F12});
-      txt(ellipsize(v.a, f, w - 14), PAD + 4, y + (wide ? 13 : 16), f, blend(ON_ASK, ASK, 1 - alpha)); }
-    paragraph(v.b, F12, PAD + 4, y + (wide ? 24 : 30), w - 14, 2, blend(ON_ASK, ASK, 1 - alpha), 15);
+      txt(ellipsize(v.a, f, w - 14), x + 8, y + 16, f, blend(ON_ASK, ASK, 1 - alpha)); }
+    paragraph(v.b, F12, x + 8, y + 30, w - 14, wide ? 5 : 2, blend(ON_ASK, ASK, 1 - alpha), 15);
     return;
   }
   const uint16_t kc = kindColor(v.kind);
@@ -716,17 +716,17 @@ static void drawCard(const CardView& v, float alpha, int dip) {
   const uint16_t bg = blend(blend(GROUND, INK, 0.04f), kc, 0.13f * alpha);
   canvas.fillRoundRect(x, y, w, cardH_, 12, bg);
   if (alpha <= 0.02f) return;
-  const int ty = y + (wide ? 13 : 15);
-  cardIcon(v.kind, PAD + 7, ty, blend(bg, kc, alpha));
+  const int ty = y + 15;
+  cardIcon(v.kind, x + 11, ty, blend(bg, kc, alpha));
   { const lgfx::IFont* f = fit(v.a, w - 28, {F12, F9});
-    txt(ellipsize(v.a, f, w - 28), PAD + 18, ty, f, blend(bg, kc, alpha)); }
-  if (wide) {
-    const lgfx::IFont* f = fitBox(v.b, w - 14, 2 * 15, {F12, F9});
-    paragraph(v.b, f, PAD + 6, y + 24, w - 14, 2, blend(bg, INK, 0.9f * alpha), f == F9 ? 14 : 15);
+    txt(ellipsize(v.a, f, w - 28), x + 22, ty, f, blend(bg, kc, alpha)); }
+  if (wide) {  // up to 5 lines down the tall card
+    const lgfx::IFont* f = fitBox(v.b, w - 14, 5 * 15, {F12, F9});
+    paragraph(v.b, f, x + 8, y + 30, w - 14, f == F9 ? 6 : 5, blend(bg, INK, 0.9f * alpha), f == F9 ? 13 : 15);
     return;
   }
   bool longText = v.b.length() > 44;
-  paragraph(v.b, longText ? F9 : F12, PAD + 18 - 12, y + 27, w - 14, longText ? 3 : 3,
+  paragraph(v.b, longText ? F9 : F12, x + 6, y + 27, w - 14, 3,
             blend(bg, INK, 0.9f * alpha), longText ? 13 : 15);
 }
 
@@ -764,7 +764,8 @@ static void homeCard(const CardView& v) {
     float rise = p < 0.22f ? smooth(p / 0.22f) : p > 0.78f ? 1 - smooth((p - 0.78f) / 0.22f) : 1;
     lookX = p < 0.25f ? 0 : p < 0.5f ? -7 * smooth((p - 0.25f) / 0.1f) : p < 0.75f ? 7 * smooth((p - 0.5f) / 0.12f) : 0;
     int dip = (int)(5 * sinf(PI * p));
-    eyes(Mood::IDLE, W / 2, cardTop_ + 14 - (int)(30 * rise) + dip, 0.42f, AGENT, GROUND);
+    eyes(Mood::IDLE, cardX_ + (cardW_ ? cardW_ : W - 8) / 2, cardTop_ + 14 - (int)(30 * rise) + dip, 0.42f,
+         AGENT, GROUND);
     lookX = NAN;
     drawCard(nextCard, 0, dip);  // empty card in front hides the lower half of the eyes
   } else if (e < 2 * FADE_MS + mid) {  // the new one fades in
@@ -776,38 +777,37 @@ static void homeCard(const CardView& v) {
   }
 }
 
-// Landscape home: the clock on the left, date + weather on the right, the card below.
+// Landscape home: the clock with the date and weather under it on the left, the card on the right.
 static void homeTopWide(const Dash& d) {
-  int right = W - PAD, x0 = PAD;
+  const int colW = CARD_X_WIDE - PAD - 6;  // the left column
   if (d.clock.length()) {
-    canvas.setFont(F44);
-    int cw = canvas.textWidth(d.clock);
-    txt(d.clock, PAD, 44, F44, INK, middle_left);
-    txt(d.ampm, PAD + cw + 3, 58, F12, DIM, baseline_left);
     canvas.setFont(F12);
-    x0 = PAD + cw + 3 + canvas.textWidth(d.ampm) + 10;
+    const int aw = canvas.textWidth(d.ampm);
+    const lgfx::IFont* f = fit(d.clock, colW - aw - 3, {F44, F24});
+    canvas.setFont(f);
+    const int cw = canvas.textWidth(d.clock);
+    txt(d.clock, PAD, 50, f, INK, middle_left);
+    txt(d.ampm, PAD + cw + 3, f == F44 ? 64 : 58, F12, DIM, baseline_left);
   } else {
-    txt(d.name, PAD, 38, fit(d.name, 130, {F24, F12}), INK, middle_left);
-    txt("time comes from the Mac agent", PAD, 58, F9, FAINT, middle_left);
-    x0 = 146;
+    txt(d.name, PAD, 44, fit(d.name, colW, {F24, F12}), INK, middle_left);
+    paragraph("time comes from the Mac agent", F9, PAD, 62, colW, 2, FAINT, 12);
   }
-  const int room = right - x0;
-  if (d.date.length()) txt(ellipsize(d.date, F12, room), right, 32, F12, DIM, middle_right);
+  if (d.date.length()) txt(ellipsize(d.date, F12, colW), PAD, 86, F12, DIM, middle_left);
   if (d.wxValid) {
     String t = String(d.wxTemp) + "°";
-    canvas.setFont(F14);
-    int tw = canvas.textWidth(t);
-    txt(t, right, 50, F14, INK, middle_right);
-    weatherIcon(d.wxIcon, d.wxDay, right - tw - 22, 41, 18);
-    txt(ellipsize(d.wxCond, F9, room), right, 64, F9, DIM, middle_right);
+    weatherIcon(d.wxIcon, d.wxDay, PAD, 99, 18);
+    txt(t, PAD + 24, 108, F14, INK, middle_left);
+    txt(ellipsize(d.wxCond, F9, colW), PAD, 124, F9, DIM, middle_left);
   }
 }
 
 static void drawHome(const Dash& d) {
   statusBar("", &d);
   const bool wide = orient_ != 0;
-  cardTop_ = wide ? CARD_TOP_WIDE : CARD_TOP;
-  cardH_ = wide ? CARD_H_WIDE : CARD_H;
+  cardTop_ = wide ? BAR_H + 4 : CARD_TOP;
+  cardH_ = wide ? H - BAR_H - 8 : CARD_H;
+  cardX_ = wide ? CARD_X_WIDE : 4;
+  cardW_ = wide ? W - CARD_X_WIDE - 4 : 0;
 
   // Clock + date (the agent sends the time; until then just the name)
   if (wide) {
