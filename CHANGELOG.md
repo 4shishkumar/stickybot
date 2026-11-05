@@ -12,6 +12,16 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- **Check for Updates…** in the menu bar (besides the daily check and Settings → Updates →
+  Check now); the item says what it found.
+
+### Fixed
+- `stick-agent <command> --help` only prints the help: `stick-agent flash --help` used to
+  start flashing. `stick-agent flash` refuses options it doesn't know.
+- The dashboard checks for a newer copy of its page on every load, so controls added by an
+  update (like *Update over Bluetooth*) show up without a hard reload.
+
 ## [1.8.1] - 2026-11-05
 
 The first published release (the v1.8.0 build stopped on a test). Firmware 1.8.0.

@@ -62,7 +62,7 @@ git push origin v1.7.2
 ## What users see
 
 - **Update check:** the agent checks at start-up and every 24 h (Settings → Updates:
-  *Check automatically*, *Channel*, *Check now*). It lists releases with `gh` when that's
+  *Check automatically*, *Channel*, *Check now*; or the menu bar's *Check for Updates…*). It lists releases with `gh` when that's
   installed and logged in (higher API rate limits), and otherwise over plain HTTPS, no login.
 - **Firmware download:** when a release has firmware that isn't on this Mac yet, the agent
   downloads it into `~/.stick-agent/firmware/<firmware version>/`. Each part is checked

@@ -1,5 +1,6 @@
-"""Menu-bar icon: state at a glance, dashboard, pause, restart, quit."""
+"""Menu-bar icon: state at a glance, dashboard, update check, pause, restart, quit."""
 import asyncio
+import time
 import webbrowser
 
 import rumps
@@ -28,6 +29,18 @@ def symbol(name):
         except Exception:  # noqa: BLE001 — older macOS: fall back to text
             _images[name] = None
     return _images[name]
+CHECK = "Check for Updates…"
+
+
+def check_result(s):
+    """An update check's status() -> what the menu item says."""
+    if s.get("available"):
+        return f"{s['title']} — see the item above"
+    if s.get("error"):
+        return f"Couldn't check for updates: {str(s['error'])[:60]}"
+    return f"Up to date (v{s.get('current', {}).get('agent', '?')})"
+
+
 LABELS = {"ready": "Ready — hold B on the stick", "listening": "Listening…", "transcribing": "Transcribing…",
           "thinking": "Thinking…", "working": "Working…", "error": "Error", "paused": "Paused",
           "no-stick": "No stick chosen — open the dashboard", "searching": "Looking for the stick…",
@@ -43,6 +56,8 @@ class Menu(rumps.App):
         # "Update available: v1.8.0" (updates.py) — hidden until there is one
         self.update_item = rumps.MenuItem("", callback=lambda _: webbrowser.open(f"http://localhost:{config.PORT}/#settings"))
         self.update_shown = None
+        self.check_item = rumps.MenuItem(CHECK, callback=self.check_updates)  # its title shows the result
+        self.check_said = 0.0
         self.pause_item = rumps.MenuItem("Pause", callback=self.toggle_pause)
         # Stick speaker: volume levels + sounds on/off (saved on the stick)
         self.volume_menu = rumps.MenuItem("Stick volume")
@@ -54,7 +69,7 @@ class Menu(rumps.App):
         self.sounds_item = rumps.MenuItem("Sounds on the stick", callback=self.toggle_sounds)
         self.menu = [self.status_item, self.update_item, None,
                      rumps.MenuItem("Open dashboard", callback=lambda _: webbrowser.open(f"http://localhost:{config.PORT}")),
-                     self.volume_menu, self.sounds_item, None,
+                     self.check_item, self.volume_menu, self.sounds_item, None,
                      self.pause_item, rumps.MenuItem("Restart", callback=self.restart), None,
                      rumps.MenuItem("Quit stick-agent", callback=self.quit)]
         self.timer = rumps.Timer(self.refresh, 0.5)
@@ -89,6 +104,23 @@ class Menu(rumps.App):
                 item.state = 1 if abs(vol - pct) < 13 and (pct > 0 or vol == 0) else 0
         self.sounds_item.state = 1 if snd.get("on") else 0
         self.show_update()
+        if self.check_said and time.monotonic() - self.check_said > 8:
+            self.check_item.title, self.check_said = CHECK, 0.0
+
+    def check_updates(self, _):
+        updates = getattr(self.agent, "updates", None)
+        if not updates or not self.agent.loop:
+            return
+        self.check_item.title, self.check_said = "Checking for updates…", 0.0
+
+        def said(fut):
+            try:
+                self.check_item.title = check_result(fut.result())
+            except Exception as e:  # noqa: BLE001
+                self.check_item.title = f"Couldn't check for updates: {str(e)[:60]}"
+            self.check_said = time.monotonic()  # back to "Check for Updates…" a few seconds later
+
+        asyncio.run_coroutine_threadsafe(updates.check(), self.agent.loop).add_done_callback(said)
 
     def show_update(self):
         updates = getattr(self.agent, "updates", None)

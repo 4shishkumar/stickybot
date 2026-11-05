@@ -12,6 +12,7 @@
   stick-agent setup      install / check / remove parts (see `stick-agent setup --help`)
   stick-agent mcp        the stick tools for terminal Claude Code sessions: install | uninstall | status  [--yes]
   stick-agent uninstall  remove everything it installed  [--purge: also delete ~/.stick-agent]
+  stick-agent --help     this help (also `stick-agent <command> --help`; nothing is run)
 """
 import asyncio
 import json
@@ -182,8 +183,15 @@ def status():
         print("service installed but not responding" if loaded else "not running")
 
 
+FLASH_OPTS = {"--port", "--backup", "--ble", "--force"}
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "run"
+    args = sys.argv[2:]
+    if cmd in ("-h", "--help", "help") or (cmd not in ("setup", "mcp") and ({"-h", "--help"} & set(args))):
+        print(__doc__)  # never "do it anyway": `flash --help` used to start flashing
+        return
     if cmd == "run":
         run(menubar="--no-menubar" not in sys.argv)
     elif cmd == "start":
@@ -209,7 +217,9 @@ def main():
         sys.exit(installer.main(["--uninstall", "all", *sys.argv[2:]]))
     elif cmd == "flash":  # stick-agent flash [--port P] [--backup] | --ble [--force]
         from . import flasher
-        args = sys.argv[2:]
+        unknown = [a for i, a in enumerate(args) if a not in FLASH_OPTS and not (i and args[i - 1] == "--port")]
+        if unknown:
+            sys.exit(f"stick-agent flash: unknown option {unknown[0]} (see stick-agent --help)")
         if "--ble" in args:
             from . import ota
             sys.exit(ota.cli("--force" in args))
