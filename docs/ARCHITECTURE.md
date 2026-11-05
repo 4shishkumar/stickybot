@@ -29,7 +29,7 @@ talks to what, and where every file lives. For the wire formats see
 |---|---|---|---|
 | Stick firmware | Arduino/C++ on the ESP32-S3: a BLE keyboard + the Mac link + screens/sounds | on the stick | `m5-stick-s3/src/` |
 | stick-agent | one Python process: Bluetooth link, speech-to-text, quick commands, Claude runner, events, dashboard server, menu bar | your Mac, started at login by launchd | `mac-agent/stick_agent/` |
-| Claude Code | Anthropic's CLI, run headless (`claude -p`) once per request — the "brain" | your Mac (the model itself runs in the cloud) | installed separately |
+| Claude Code | Anthropic's CLI, run headless — one long-lived `claude -p --input-format stream-json` session (or `claude -p` per request) — the "brain" | your Mac (the model itself runs in the cloud) | installed separately |
 | Hooks | tiny scripts Claude Code runs at certain moments; they forward to the agent | started by Claude Code | `mac-agent/stick_agent/hook.py`, `claude_hooks.py` |
 | Dashboard | a web page served by the agent | your browser → `localhost:8660` | `mac-agent/stick_agent/dashboard.html` |
 
@@ -40,7 +40,7 @@ talks to what, and where every file lives. For the wire formats see
 | `agent` thread → asyncio loop | everything else, cooperatively: Bluetooth (bleak), the web server (aiohttp), the talk pipeline, events, GitHub polling, weather, feed |
 | `wispr-monitor`, `wispr-router` threads | the smart Wispr mic: watching CoreAudio for Wispr recording; opening / closing the real mic (PortAudio's own threads run the audio callbacks) |
 | `stt` thread | Parakeet speech-to-text (MLX keeps its GPU streams per thread, so the model always runs on this one) |
-| subprocesses | `claude -p …` per Claude request, `say` for speech, `open`/`osascript` for quick commands, `gh api` for GitHub |
+| subprocesses | the Claude Code session (`claude -p --input-format stream-json …`, kept running; or one per request), `say` per spoken sentence (+ `afplay` for the Mac's speakers), `open`/`osascript` for quick commands, `gh api` for GitHub |
 
 ## Where things live
 
@@ -68,11 +68,13 @@ talks to what, and where every file lives. For the wire formats see
 3. **Release** — `talk stop`. The stick shows *Thinking…* and waits (gives up after 20 s with no word).
 4. **Agent: speech → text** — frames are decoded to 16 kHz audio; Parakeet transcribes on the `stt` thread (~0.1 s). Quick press with no words → `cancelled` (screen closes quietly).
 5. **Quick command?** — `commands.match()` normalises the text ("PR twelve thirty four" → `pr 1234`) and tries each phrase. A hit runs instantly (`open -a "Brave Browser" https://…/pull/1234`) → `done` to the stick.
-6. **Otherwise Claude** — `brain.ask()` runs `claude -p "<text>" --output-format stream-json --model sonnet --allowedTools WebSearch,WebFetch,Read,Glob,Grep [--resume <session>]` in `~/.stick-agent/workspace`. Each tool call it streams becomes a *Working: …* line on the stick. The final result (kept short by CLAUDE.md) → `done` (or `error`).
-7. **Reply** — shown on the stick (+ chime); short ones optionally spoken (`say` → AIFF → ADPCM → AUDIO_IN → stick speaker).
-8. **Escape** — a click of B (or a shake) on an agent screen sends `cancel`: the agent kills the Claude process and stays quiet.
+6. **Otherwise Claude** — `brain.ask()` writes the text as a stream-json user message to the long-lived session, `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --model sonnet --allowedTools WebSearch,WebFetch,Read,Glob,Grep [--resume <session>]` in `~/.stick-agent/workspace` (started when the stick connects, or on the first request; `brain_mode: "oneshot"` = the old `claude -p "<text>"` per request). Each tool call becomes a *Working: …* line on the stick; "new chat" / "start over" starts a new conversation.
+7. **Reply, as it's written** — text deltas update the stick's screen (*Working* + the answer so far, ≤ 1 update per 300 ms); with speech on, each finished sentence goes to `say` at once and the clips play back to back (stick speaker: `say` → AIFF → ADPCM → AUDIO_IN; or the Mac's speakers). Text before a tool call ("Let me search…") isn't spoken. The final result (kept short by CLAUDE.md) → `done` (+ chime) or `error`.
+8. **Escape** — a click of B (or a shake) on an agent screen sends `cancel`: the agent sends Claude Code an *interrupt* (the session stays warm; killed and resumed if it doesn't stop within 3 s), stops the speech, and stays quiet.
 
-Typical timings: quick command ≈ 1 s after release; Claude ≈ 3–15 s (process start ~2 s + the model + tools).
+The session: stopped after `brain_idle_min` (10) unused — the follow-up window, so the next request is a new chat; restarted with `--resume` after a crash or a settings change (model, tools). One request at a time (a second one gets "Still working on the last request."). Timings per request are logged and shown in Settings.
+
+Typical timings: quick command ≈ 1 s after release; Claude ≈ 2–15 s (the model + tools; the first words show while it's still writing). A new `claude -p` process adds ~0.5 s or more before the model starts — the session skips that.
 
 ### 2. Approvals (any Claude Code session, including the agent's own)
 Claude Code wants to run something not pre-allowed → runs the **PermissionRequest hook** (`hook.py`) → it POSTs to the agent (`/api/permission`, long-poll, 30 s) → the agent sends the prompt to the stick (orange screen) and the dashboard → **A**/**B** or a dashboard click → the hook prints allow/deny → Claude Code continues. No answer, agent not running, or *Stick approvals* off → the hook prints nothing and Claude Code asks in the terminal as usual.
@@ -109,23 +111,24 @@ Every 8 s the agent's *hello* message carries the time (stick clock), the weathe
 
 ## Why Claude Code as the brain — and the alternatives
 
-Today the agent shells out to **Claude Code** (`claude -p`) for every request.
+The agent runs **Claude Code** headless: one long-lived `claude -p --input-format stream-json` session (option A+ below), with `claude -p` per request as the fallback.
 
 **What that gives us for free:** a proven agent loop with tools (shell, web search/fetch, files), permissions + hooks (→ approvals on the stick), MCP for extra tools, sessions (`--resume` for follow-ups), project instructions (`CLAUDE.md`), and it runs on **your own Claude Code login** — no API key, no extra billing, and each teammate uses theirs.
 
 **What it costs:**
-- **Latency:** a new process per request (~2 s before the model even starts).
+- **Latency:** a new process per request (~0.5–2 s before the model even starts) — solved by the persistent session.
 - **Indirect control:** permissions go through the hook script and an HTTP hop; custom tools would need an MCP server; we parse its output stream.
 - **Claude only:** no local or other models.
 
 ### Options
 | | How | Gains | Loses |
 |---|---|---|---|
-| **A. Keep `claude -p`** (today) | spawn per request | simplest; nothing new | the ~2 s start, indirect control |
+| **A. `claude -p`** (the fallback, `brain_mode: "oneshot"`) | spawn per request | simplest | the start-up per request, indirect control |
+| **A+. A persistent `claude -p --input-format stream-json`** (now) | one process, a user message per request, the interrupt control request to cancel | no start-up per request, streaming, interrupt — with no new dependency (the same protocol the Agent SDK speaks) | still indirect control (hooks for approvals, no custom tools yet) |
 | **B. Claude Agent SDK (Python)** — recommended next | `ClaudeSDKClient` kept open inside the agent | same engine and login as Claude Code; **warm session** (no per-request start); **custom tools as Python functions** (open PR, set a stick screen, read the calendar, play a sound) via an in-process MCP server; **`can_use_tool` callback → approvals straight to the stick** (no hook detour); interrupt/cancel built in | a dependency on the SDK's versioning; still Claude-only |
 | **C. A minimal harness like [Pi](https://pi.dev/)** (or our own loop) | the agent runs the tool loop itself against a model API | any model — 20+ providers incl. **local (Ollama)**; tiny, fully ours; lowest latency | needs an **API key** (pay per token, not your subscription); we'd rebuild tools, permissions, safety and sessions that Claude Code already does well |
 
-**Recommendation:** move from A to **B (Agent SDK)** — the biggest wins (latency, custom stick-aware tools, direct approvals) with the same login. Keep `brain.py` behind a small interface (`ask(text, on_progress) -> reply`, `cancel()`) so a **C-style brain** (Pi or Ollama for private/offline requests) can be added later as the "local model" option, without touching the rest. A dedicated harness isn't worth it until we want non-Claude models.
+**Recommendation:** A+ gives the latency win today; move to **B (Agent SDK)** — the biggest wins (latency, custom stick-aware tools, direct approvals) with the same login. Keep `brain.py` behind a small interface (`ask(text, on_progress) -> reply`, `cancel()`) so a **C-style brain** (Pi or Ollama for private/offline requests) can be added later as the "local model" option, without touching the rest. A dedicated harness isn't worth it until we want non-Claude models.
 
 Note when sharing: each teammate runs the agent with **their own** Claude Code login, exactly as today. If this ever becomes a product used by people without Claude Code, it would switch to an API key (Anthropic's terms).
 

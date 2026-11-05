@@ -56,7 +56,7 @@ API key? Install the companion app"* — it uses your Claude Code login instead.
 - The same UI components as the local dashboard; "full mode" when the companion app is found.
 
 ### Phase 4 — Brain upgrade in the companion app
-- A persistent Claude Code session (`claude -p --input-format stream-json --output-format stream-json`) — no ~2 s start-up per request.
+- Done: a persistent Claude Code session (`claude -p --input-format stream-json --output-format stream-json`) — no start-up per request; the reply streams to the stick and is spoken sentence by sentence (`brain_mode`, `stream_replies`, `speak_stream`).
 - A "stick" MCP server with the shared tools; `--permission-prompt-tool` for approvals straight to the stick.
 - A brain interface: Claude Code / Anthropic API / OpenRouter / Ollama selectable in settings.
 

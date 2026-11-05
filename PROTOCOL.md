@@ -176,7 +176,7 @@ Buddy messages with `"src":"cli"`; the board answers
 | Mac → board | `"wmic":true\|false` in the hello (and on its own, `{"src":"agent","wmic":…}`, when it changes) — the agent can play the wireless Wispr mic (its `wireless_mic` is on and BlackHole 2ch was found) |
 | board → Mac | `{"src":"agent","evt":"wispr","state":"start","rate":16000,"codec":"ima-adpcm"}` when A goes down for Wispr away from USB |
 | board → Mac | `{"src":"agent","evt":"wispr","state":"stop"}` after the last audio frame |
-| Mac → board | `{"src":"agent","state":"thinking"\|"working"\|"done"\|"error","heard":"…","text":"…"}` — shown on screen |
+| Mac → board | `{"src":"agent","state":"thinking"\|"working"\|"done"\|"error","heard":"…","text":"…"}` — shown on screen. While Claude writes, repeated `working` messages carry the answer so far (≤ ~3 per second, ≤ 300 characters); `done` (with its chime) follows once |
 
 Audio frames: 16 kHz mono IMA-ADPCM, ≤20 ms each, little-endian:
 `[seq u16][predictor i16][step index u8][samples, 4 bits each, low nibble first]`.
