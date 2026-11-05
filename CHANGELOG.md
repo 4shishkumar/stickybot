@@ -12,6 +12,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-11-05
+
 The first published release (the v1.8.0 build stopped on a test). Firmware 1.8.0.
 
 ### Fixed
@@ -66,5 +68,6 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/ashish-kumar-noon/stick-key/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/ashish-kumar-noon/stick-key/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.1
 [1.8.0]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.0
