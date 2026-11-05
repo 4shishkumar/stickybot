@@ -12,6 +12,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [1.8.3] - 2026-11-05
+
 ### Changed
 - **Mic names follow the stick's name**, so two sticks' mics differ: the USB mic is
   `<stick>-mic-usb` (firmware 1.8.1) and the Bluetooth one `<stick>-mic-bluetooth`, e.g.
@@ -88,7 +90,8 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/ashish-kumar-noon/stick-key/compare/v1.8.2...HEAD
+[Unreleased]: https://github.com/ashish-kumar-noon/stick-key/compare/v1.8.3...HEAD
+[1.8.3]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.3
 [1.8.2]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.2
 [1.8.1]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.1
 [1.8.0]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.0
