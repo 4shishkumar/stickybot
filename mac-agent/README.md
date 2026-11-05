@@ -100,8 +100,32 @@ or, from a clone of the repo, `./install.sh`.
 
 What it does: checks for an Apple Silicon Mac, installs [uv](https://docs.astral.sh/uv/)
 (a standalone Python manager — no Homebrew or system Python needed) if it's
-missing, makes `~/.stick-agent/venv` with Python 3.14, installs stick-agent, and
-then runs **`stick-agent setup`**, which asks what else to set up:
+missing, makes `~/.stick-agent/venv` with Python 3.14, installs stick-agent, starts it
+(login item), and opens the **setup page** in your browser:
+**http://localhost:8660/#install**.
+
+The setup page does the rest, one step per screen, each with a button and live progress:
+
+| Step | | What happens when you click |
+|---|---|---|
+| Welcome | | checks Apple Silicon, macOS 13.5+, free disk space (4 GB for the model) |
+| Speech model | recommended | downloads it (~2.5 GB) with size, speed and time left |
+| Claude Code | optional | runs Anthropic's installer if it's missing; then says to run `claude` once in Terminal to log in, and notices by itself when you have |
+| Approvals on the stick | optional | shows the 3 hooks first, then adds them to `~/.claude/settings.json` (backup first) |
+| Stick tools for Claude Code | optional | runs `claude mcp add …` (see below) |
+| GitHub alerts | optional | shows `brew install gh` if `gh` is missing; logs in with a one-time code shown on the page (enter it at github.com/login/device); asks for your main repo |
+| Wireless Wispr mic | optional | installs BlackHole 2ch — a pinned, tested version (0.7.1), sha256 and signature checked, with the Mac's own password dialog — and turns the mic on |
+| Your stick | recommended | the setup wizard: pair, pick, name, firmware (USB or Bluetooth), try it |
+
+Skip any optional step; skipped steps can be done later from the last screen or
+**Settings → Components → Open the setup page**. Reopen the page with
+**`stick-agent install-page`** or the menu bar's **Finish setup…** (shown while the model or
+the stick isn't set up).
+
+**In the terminal instead** (scripts, AI agents, SSH): any of `--yes`, `--with`,
+`--without`, `--dry-run`, `--uninstall` or `--no-browser` — and an SSH session, or nobody
+logged in at the screen — runs **`stick-agent setup`** as before, which installs these
+components:
 
 | Component | Default | What it does |
 |---|---|---|
@@ -119,9 +143,7 @@ Anytime later: `stick-agent setup --status`, `stick-agent setup --with github`,
 `stick-agent uninstall`. The dashboard's **Settings → Components** shows the same
 list with Install / Remove buttons.
 
-Then, in the dashboard (it opens on the first start): **Settings → Find sticks
-nearby → Use this one**, and set your repo in **Quick commands**. macOS asks once
-for Bluetooth access — allow it. If the login item can't be written, fix it once with
+macOS asks once for Bluetooth access — allow it. If the login item can't be written, fix it once with
 `sudo chown $(whoami) ~/Library/LaunchAgents` and run `stick-agent setup` again.
 
 Requirements: a Mac with Apple Silicon, [Claude Code](https://claude.com/claude-code)
@@ -146,7 +168,8 @@ older firmware: *TinyUSB UAC1*). Without the cable, the agent makes a microphone
 uses the highest-ranked mic that is present — switches to it for that dictation. The rest
 of the time it isn't there and Wispr uses your usual mic (keyboard shortcut included).
 
-1. **Install BlackHole 2ch** (once; asks for your Mac password):
+1. **Install BlackHole 2ch** (once; asks for your Mac password): one click on the setup page
+   (`stick-agent install-page` → *Wireless Wispr mic*), or
    `brew install --cask blackhole-2ch` — the hidden carrier of the audio; Wispr is never set to it.
 2. **Turn it on:** `stick-agent setup --with wireless_mic`, or dashboard → **Settings →
    Wireless Wispr mic** (or **Components → Wireless Wispr mic → Install**). Firmware 1.7.1+.

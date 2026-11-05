@@ -43,6 +43,7 @@ DEFAULT_CONFIG = {
     # experimental: home screen reading when nothing needs you
     "idle_content": ["facts", "hn", "onthisday", "wikipedia"],
     "onboarding": {},         # wizard steps the user ticked by hand (see firmware_api.py)
+    "install_skipped": [],    # setup page (#install) steps the user skipped (see install_flow.py)
     "stick_approvals": True,  # Claude Code permission prompts go to the stick + dashboard first
     # The stick tools for Claude sessions (mcp_server.py): an MCP server at http://127.0.0.1:8660/mcp,
     # given to voice requests; terminal sessions: `stick-agent mcp install`

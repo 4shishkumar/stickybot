@@ -308,3 +308,53 @@ pre.log.tall { max-height: calc(100vh - 230px); min-height: 300px; }
 .wiz-foot .spacer { flex: 1; }
 @media (max-width: 720px) { .wiz { grid-template-columns: 1fr; } .wiz-steps { flex-direction: row; overflow-x: auto; padding: 12px; border-right: 0; border-bottom: 1px solid var(--line); }
   .wiz-steps .title { display: none; } .wiz-step span:not(.n) { display: none; } }
+
+/* ---------- setup page (#install) ---------- */
+body.install-mode .shell { grid-template-columns: 1fr; }
+body.install-mode .side, body.install-mode .mobile-nav, body.install-mode .page-head, body.install-mode .update-banner { display: none; }
+body.install-mode .page { max-width: 780px; margin: 0 auto; padding-top: 28px; }
+.inst { display: flex; flex-direction: column; gap: 16px; }
+.inst-top { display: flex; align-items: center; gap: 12px; }
+.inst-top .brand-name { font-size: 18px; }
+.inst-steps { display: flex; flex-direction: column; gap: 10px; }
+.inst-bar { height: 6px; border-radius: 99px; background: var(--raised); border: 1px solid var(--line); overflow: hidden; }
+.inst-bar > i { display: block; height: 100%; background: var(--agent); border-radius: 99px; transition: width .3s; }
+.inst-dots { list-style: none; margin: 0; padding: 0; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.inst-dot { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border: 0; border-radius: var(--radius-s); background: transparent;
+  color: var(--dim); font: inherit; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.inst-dot:hover { background: var(--raised); color: var(--ink); }
+.inst-dot .n { width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--line-strong); display: grid; place-items: center;
+  font-size: 11px; font-weight: 700; flex: none; }
+.inst-dot.on { background: var(--panel); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
+.inst-dot.on .n { border-color: var(--agent); color: var(--agent); }
+.inst-dot.done .n { background: var(--agent); border-color: var(--agent); color: var(--agent-ink); }
+.inst-dot.skipped .n { border-style: dashed; color: var(--faint); }
+.inst-dot.unavailable .n { border-color: var(--ask); color: var(--ask); }
+.inst-card { display: flex; flex-direction: column; gap: 12px; padding: 22px 24px 18px; min-height: 380px; }
+.inst-card .step-title { font-size: 20px; }
+.inst-card .lead { margin: 0; }
+.inst-content { display: flex; flex-direction: column; gap: 12px; }
+.inst-needs .tag b { color: var(--ink); font-weight: 650; }
+.inst-actions { padding-top: 2px; }
+.inst-actions input { flex: 1; min-width: 180px; }
+.inst-cmd { display: flex; align-items: center; gap: 8px; background: var(--ground); border: 1px solid var(--line); border-radius: var(--radius-s);
+  padding: 6px 6px 6px 12px; }
+.inst-cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; }
+.inst-job { display: flex; flex-direction: column; gap: 8px; }
+.inst-code-box:not(:empty) { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--agent) 45%, var(--line)); background: var(--agent-soft); border-radius: var(--radius); }
+.inst-code { font: 700 32px/1.1 var(--mono); letter-spacing: 0.12em; user-select: all; }
+.inst-ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.inst-card details summary { cursor: pointer; color: var(--dim); }
+.inst-card details pre.log { margin-top: 6px; }
+.spinner { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--agent);
+  animation: spin .9s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+@media (max-width: 620px) {
+  body.install-mode .page { padding-top: 16px; }
+  .inst-dot .t { display: none; }
+  .inst-dot.on .t { display: inline; }
+  .inst-card { padding: 16px; min-height: 0; }
+  .inst-code { font-size: 26px; }
+}

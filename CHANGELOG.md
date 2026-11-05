@@ -12,6 +12,25 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- **A setup page in the browser.** The install line (`curl … install.sh | sh`) now installs
+  the app, starts it and opens http://localhost:8660/#install, which walks through the rest
+  one step per screen with Install buttons and live progress: the speech model (with
+  download size, speed and time left), Claude Code (Anthropic's installer; the page waits
+  for the Terminal login by itself), the approval / "Claude finished" hooks (shows exactly
+  what is added first), the stick tools for Claude Code, GitHub alerts (`gh` login with a
+  one-time code shown on the page, then your main repo), the wireless Wispr mic and your
+  stick (the existing setup wizard). Optional steps can be skipped and picked up later.
+  Reopen it with `stick-agent install-page` or the menu bar's **Finish setup…**.
+- The wireless mic's BlackHole 2ch installs from the page without Terminal: a pinned,
+  tested package (0.7.1) downloaded over HTTPS, sha256 and signature checked, installed
+  with the Mac's own password dialog.
+- `stick-agent setup --only core` and `install.sh --no-browser`.
+
+### Changed
+- `install.sh` with `--yes` / `--with` / `--without` / `--dry-run` / `--uninstall`, over
+  SSH, or without a browser still sets up in the terminal exactly as before.
+
 ## [1.8.4] - 2026-11-05
 
 ### Changed

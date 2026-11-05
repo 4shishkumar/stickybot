@@ -8,6 +8,7 @@ install.sh all go through this module, so they always agree.
   stick-agent setup --yes              defaults, no questions
   stick-agent setup --with github --without model
   stick-agent setup --status [--json]  what's installed
+  stick-agent setup --only core        just these components (not the defaults)
   stick-agent setup --dry-run          say what would happen, change nothing
   stick-agent setup --uninstall all    (or a list) remove them again
   stick-agent uninstall [--purge]      = setup --uninstall all (+ delete ~/.stick-agent)
@@ -18,9 +19,12 @@ STICK_AGENT_BIN, STICK_AGENT_CLAUDE_SETTINGS move everything it touches, and
 """
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -74,9 +78,9 @@ class UI:
         else:
             print(f"  {line}", flush=True)
 
-    def progress(self, pct, stage=""):
+    def progress(self, pct, stage="", **extra):
         if self._emit:
-            self._emit({"progress": int(pct), "stage": stage})
+            self._emit({"progress": int(pct), "stage": stage, **extra})
 
     def ask(self, question, default=""):
         if not self.interactive or self.assume_yes:
@@ -227,6 +231,75 @@ class Core(Component):
 
 # --- model: speech to text ----------------------------------------------------------------
 
+MODEL_SIZE_GUESS = 2_500_000_000  # when the Hub can't say (offline / old huggingface_hub)
+
+
+def model_cache_dir(repo):
+    """The Hugging Face cache folder of a model repo (whatever downloads it: us or the agent's start-up)."""
+    from huggingface_hub import constants
+    return Path(constants.HF_HUB_CACHE) / ("models--" + repo.replace("/", "--"))
+
+
+def model_cached_bytes(repo):
+    """Bytes in the repo's blob store so far, half-downloaded files included."""
+    total = 0
+    try:
+        for e in os.scandir(model_cache_dir(repo) / "blobs"):
+            try:
+                total += e.stat(follow_symlinks=False).st_size
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return total
+
+
+def model_total_bytes(repo):
+    """The repo's download size from the Hub (one metadata call), or the usual size."""
+    try:
+        from huggingface_hub import HfApi
+        info = HfApi().model_info(repo, files_metadata=True, timeout=10)
+        size = sum((f.size or 0) for f in info.siblings or [])
+        return size or MODEL_SIZE_GUESS
+    except Exception:  # noqa: BLE001
+        return MODEL_SIZE_GUESS
+
+
+def fmt_bytes(n):
+    return f"{n / 1e9:.1f} GB" if n >= 1e9 else f"{n / 1e6:.0f} MB"
+
+
+def progress_text(done, total, rate):
+    """'1.2 GB of 2.5 GB · 14 MB/s · about 2 min left'"""
+    bits = [f"{fmt_bytes(done)} of {fmt_bytes(total)}"]
+    if rate > 0:
+        bits.append(f"{rate / 1e6:.0f} MB/s")
+        left = max(0, total - done) / rate
+        bits.append(f"about {max(1, round(left / 60))} min left" if left >= 60 else f"{int(left)} s left")
+    return " · ".join(bits)
+
+
+def watch_download(repo, total, ui, stop, every=1.0):
+    """Reports the download's bytes / percent / rate / ETA once a second until `stop` is set,
+    by measuring the cache folder (works with any download backend, and for a download that
+    another process — the agent's start-up — is doing)."""
+    start = last = model_cached_bytes(repo)
+    t0 = last_t = time.monotonic()
+    rate = 0.0
+    while not stop.wait(every):
+        done = model_cached_bytes(repo)
+        now = time.monotonic()
+        if now > last_t:
+            inst = (done - last) / (now - last_t)
+            rate = inst if not rate else 0.7 * rate + 0.3 * inst  # smoothed
+        last, last_t = done, now
+        if done - start <= 0 and now - t0 < 5:
+            continue
+        pct = min(99, int(done * 100 / total)) if total else 0
+        ui.progress(pct, progress_text(done, total, rate), bytes=done, total=total,
+                    eta_s=int(max(0, total - done) / rate) if rate > 0 else None)
+
+
 class Model(Component):
     id = "model"
     title = "Speech model"
@@ -258,8 +331,16 @@ class Model(Component):
         from huggingface_hub import snapshot_download
         ui.say(f"downloading {self._repo()} (~2.5 GB) — this takes a few minutes")
         ui.progress(0, "download")
-        snapshot_download(self._repo())
-        ui.progress(100, "download")
+        total = model_total_bytes(self._repo())
+        stop = threading.Event()
+        watcher = threading.Thread(target=watch_download, args=(self._repo(), total, ui, stop), daemon=True)
+        watcher.start()
+        try:
+            snapshot_download(self._repo())
+        finally:
+            stop.set()
+            watcher.join(timeout=3)
+        ui.progress(100, "download", bytes=total, total=total)
         ui.say("speech model ready")
 
     def uninstall(self, ui):
@@ -451,6 +532,73 @@ class Claude(Component):
 
 # --- github: PR alerts --------------------------------------------------------------------
 
+REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
+GH_DEVICE_URL = "https://github.com/login/device"
+GH_CODE_RE = re.compile(r"one-time code:\s*([A-Z0-9]{4}-[A-Z0-9]{4})")
+GH_URL_RE = re.compile(r"(https://github\.com/login/device)\b")
+BREW_INSTALL = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+
+
+def brew_path():
+    return shutil.which("brew") or next((p for p in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew")
+                                         if Path(p).exists()), None)
+
+
+def valid_repo(repo):
+    """owner/name as GitHub allows it (and nothing a URL or a shell could trip over)."""
+    return bool(REPO_RE.match(repo or "")) and repo.split("/")[1] not in (".", "..")
+
+
+def set_primary_repo(repo, alerts=None):
+    """The main repo: GitHub alerts watch it first, and the "PR 1234" / Devin review quick
+    commands open its pull requests (the setup wizard and the setup page call this through
+    POST /api/install/github/repo). alerts: True / False turns the watcher on / off, None keeps
+    it. -> the new github config."""
+    if repo:
+        try:
+            doc = json.loads(config.COMMANDS.read_text())
+        except (OSError, ValueError):
+            doc = None
+        if isinstance(doc, dict) and isinstance(doc.get("commands"), list):
+            changed = False
+            for c in doc["commands"]:
+                url = c.get("open_url") if isinstance(c, dict) else None
+                if not isinstance(url, str):
+                    continue
+                new = re.sub(r"(github\.com/)[^/]+/[^/]+(/pull/)", lambda m: f"{m[1]}{repo}{m[2]}", url)
+                new = re.sub(r"(app\.devin\.ai/review/)[^/]+/[^/]+(/pull/)", lambda m: f"{m[1]}{repo}{m[2]}", new)
+                if new != url:
+                    c["open_url"], changed = new, True
+            if changed:
+                config.COMMANDS.write_text(json.dumps(doc, indent=2))
+    cfg = config.load()
+    g = dict(cfg.get("github") or {})
+    g["primary_repo"] = repo
+    g["on"] = bool(alerts) if alerts is not None else g.get("on", True) is not False
+    g["interval_s"] = g.get("interval_s", 120)
+    cfg["github"] = g
+    config.save(cfg)
+    return g
+
+
+def gh_login_args(gh):
+    """`gh auth login` in its browser (one-time code) flow, asking nothing."""
+    return [gh, "auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web"]
+
+
+def parse_device_code(text):
+    """gh's one-time code and the page to enter it on, from its output so far -> (code, url) or
+    (None, None). gh prints "! First copy your one-time code: ABCD-1234", then either "Open this URL
+    to continue in your web browser: https://github.com/login/device" (not a terminal) or "Press
+    Enter to open https://github.com/login/device in your browser..." (a terminal)."""
+    text = re.sub(r"\x1b\[[0-9;]*m", "", text or "")
+    m = GH_CODE_RE.search(text)
+    if not m:
+        return None, None
+    u = GH_URL_RE.search(text)
+    return m.group(1), (u.group(1) if u else GH_DEVICE_URL)
+
+
 class GitHub(Component):
     id = "github"
     title = "GitHub alerts"
@@ -488,12 +636,11 @@ class GitHub(Component):
                 subprocess.run([gh, "auth", "login"])
             if not self._logged_in(gh):
                 raise NotAvailable("not logged in to GitHub — run `gh auth login`, then try again")
-        cfg = config.load()
-        g = dict(cfg.get("github") or {})
+        g = config.load().get("github") or {}
         repo = ui.ask("Your main repo (owner/name)", g.get("primary_repo") or "")
-        g.update({"on": True, "primary_repo": repo, "interval_s": g.get("interval_s", 120)})
-        cfg["github"] = g
-        config.save(cfg)
+        if repo and not valid_repo(repo):
+            raise NotAvailable(f"{repo!r} isn't a repo name like owner/name")
+        set_primary_repo(repo, alerts=True)
         ui.say(f"GitHub alerts on{f' — main repo {repo}' if repo else ''} (restart the agent to apply)")
 
     def uninstall(self, ui):
@@ -576,6 +723,136 @@ def blackhole_installed():
     return any(p.exists() for p in BLACKHOLE_DRIVERS)
 
 
+def blackhole_version():
+    """The installed BlackHole 2ch's version (its driver's Info.plist), or None."""
+    import plistlib
+    for d in BLACKHOLE_DRIVERS:
+        try:
+            with (d / "Contents/Info.plist").open("rb") as f:
+                return str(plistlib.load(f).get("CFBundleShortVersionString") or "?")
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            continue
+    return None
+
+
+# The one-click install (the setup page) uses this exact, tested package — not whatever is newest.
+# Bump it only after testing the new version with Wispr: take version / url / sha256 from
+# https://formulae.brew.sh/api/cask/blackhole-2ch.json (see docs/RELEASING.md).
+BLACKHOLE_PIN = {
+    "version": "0.7.1",
+    "url": "https://existential.audio/downloads/BlackHole2ch-0.7.1.pkg",
+    "sha256": "57b540f27a3e29c37e310e01bee0fdfab76733087e47f997ef9dccf851400dcf",
+}
+BLACKHOLE_SIGNER = "Developer ID Installer: Existential Audio Inc. (Q5C99V536K)"
+BLACKHOLE_MAX_BYTES = 30_000_000  # the pkg is ~100 kB; anything huge isn't it
+
+
+def download_verified(url, sha256, dest, ui=None, opener=None):
+    """Downloads url (HTTPS only) to dest, checking its sha256 on the way; a mismatch deletes
+    the file and raises NotAvailable. -> dest"""
+    import hashlib
+    if not url.startswith("https://"):
+        raise NotAvailable(f"refusing a download that isn't HTTPS: {url}")
+    opener = opener or (lambda u: urllib.request.urlopen(u, timeout=30))
+    h = hashlib.sha256()
+    n = 0
+    try:
+        with opener(url) as r, open(dest, "wb") as f:
+            while chunk := r.read(65536):
+                n += len(chunk)
+                if n > BLACKHOLE_MAX_BYTES:
+                    raise NotAvailable("the download is far bigger than expected — stopped")
+                h.update(chunk)
+                f.write(chunk)
+    except OSError as e:
+        Path(dest).unlink(missing_ok=True)
+        raise NotAvailable(f"couldn't download {url}: {e}") from e
+    except NotAvailable:
+        Path(dest).unlink(missing_ok=True)
+        raise
+    if h.hexdigest() != sha256:
+        Path(dest).unlink(missing_ok=True)
+        raise NotAvailable(f"the download's checksum is wrong (got {h.hexdigest()[:12]}…, expected "
+                           f"{sha256[:12]}…) — not installing it")
+    if ui:
+        ui.say(f"downloaded {n // 1000} kB, sha256 checked")
+    return dest
+
+
+def signature_ok(output):
+    """`pkgutil --check-signature` output -> (ok, why). It must be a notarized Developer ID
+    Installer package signed by Existential Audio (BlackHole's developer)."""
+    out = output or ""
+    if "Status: signed by a developer certificate issued by Apple" not in out:
+        return False, "the package isn't signed with an Apple-issued developer certificate"
+    if "Notarization: trusted by the Apple notary service" not in out:
+        return False, "the package isn't notarized by Apple"
+    first = re.search(r"^\s*1\.\s*(.+?)\s*$", out, re.M)
+    if not first or first.group(1) != BLACKHOLE_SIGNER:
+        return False, f"the package is signed by {first.group(1) if first else 'nobody we know'}, not Existential Audio"
+    return True, ""
+
+
+def applescript_quote(s):
+    """A string literal for AppleScript."""
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def admin_install_args(pkg):
+    """osascript argv that installs pkg with the Mac's own admin password dialog (we never see the
+    password) and restarts Core Audio in the same call, so BlackHole shows up without a reboot and
+    with a single prompt (its installer only says "restart" — its scripts don't reload Core Audio)."""
+    sh = f"/usr/sbin/installer -pkg {shlex.quote(str(pkg))} -target / && (/usr/bin/killall coreaudiod || true)"
+    prompt = "Stick Agent wants to install BlackHole 2ch, the audio driver for the wireless Wispr mic."
+    script = (f"do shell script {applescript_quote(sh)} with administrator privileges "
+              f"with prompt {applescript_quote(prompt)}")
+    return ["/usr/bin/osascript", "-e", script]
+
+
+def install_blackhole(ui, runner=None, opener=None, workdir=None):
+    """BlackHole 2ch, the pinned package: download, sha256, signature, then the macOS admin dialog.
+    runner(argv, timeout=) -> CompletedProcess (tests inject one). Already installed: nothing."""
+    import tempfile
+    runner = runner or run
+    if blackhole_installed():
+        v = blackhole_version()
+        pin = BLACKHOLE_PIN["version"]
+        ui.say(f"BlackHole {v} found" + ("" if v == pin else f" (tested with {pin})"))
+        return
+    base = Path(workdir or config.HOME)
+    base.mkdir(parents=True, exist_ok=True)
+    folder = Path(tempfile.mkdtemp(prefix="blackhole-", dir=base))  # 0700: only we can swap the file
+    pkg = folder / f"BlackHole2ch-{BLACKHOLE_PIN['version']}.pkg"
+    try:
+        ui.say(f"downloading BlackHole 2ch {BLACKHOLE_PIN['version']} from existential.audio…")
+        ui.progress(10, "Downloading BlackHole 2ch…")
+        download_verified(BLACKHOLE_PIN["url"], BLACKHOLE_PIN["sha256"], pkg, ui, opener)
+        ui.progress(40, "Checking its signature…")
+        r = runner(["/usr/sbin/pkgutil", "--check-signature", str(pkg)], timeout=60)
+        ok, why = signature_ok(r.stdout)
+        if r.returncode != 0 or not ok:
+            raise NotAvailable(f"not installing BlackHole: {why or 'pkgutil could not check it'}")
+        ui.say("signed by Existential Audio and notarized by Apple ✓")
+        ui.progress(60, "Waiting for your Mac password (a macOS dialog)…")
+        ui.say("macOS asks for your password now (its own dialog — Stick Agent never sees it)")
+        r = runner(admin_install_args(pkg), timeout=600)
+        if r.returncode != 0:
+            err = (r.stderr or r.stdout or "").strip()
+            if "-128" in err or "canceled" in err.lower() or "cancelled" in err.lower():
+                raise NotAvailable("cancelled — nothing was installed")
+            raise NotAvailable(f"the installer failed: {err[:300]}")
+        ui.progress(90, "Restarting Core Audio…")
+        for _ in range(10):
+            if blackhole_installed():
+                break
+            time.sleep(0.5)
+        if not blackhole_installed():
+            raise NotAvailable("the installer finished but BlackHole 2ch isn't there — restart the Mac and check again")
+        ui.say(f"BlackHole 2ch {blackhole_version() or BLACKHOLE_PIN['version']} installed")
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
 RANK_HINT = ("once: hold A, then in Wispr Flow → Settings → Microphone drag \"<stick>-mic-bluetooth\" "
              "(e.g. stick-key-mic-bluetooth) to the top "
              "(don't pick BlackHole 2ch itself)")
@@ -608,7 +885,8 @@ class WirelessMic(Component):
         ui.say("wireless Wispr mic on (from a terminal: restart the agent to apply)")
         if not blackhole_installed():
             # Never run it ourselves: the cask installs a system audio driver and asks for the admin password
-            raise NotAvailable(f"BlackHole 2ch isn't installed yet — in a terminal run: {BLACKHOLE_CASK} "
+            raise NotAvailable(f"BlackHole 2ch isn't installed yet — install it from the setup page "
+                               f"(stick-agent install-page), or in a terminal run: {BLACKHOLE_CASK} "
                                "(it asks for your Mac password)")
         ui.say(f"BlackHole 2ch found — {RANK_HINT}")
 
@@ -661,12 +939,12 @@ COMPONENTS = [Core(), Model(), Claude(), GitHub(), Firmware(), WirelessMic(), Mc
 BY_ID = {c.id: c for c in COMPONENTS}
 
 
-def selection(with_=(), without=()):
-    """The components to install: defaults, plus --with, minus --without (core always)."""
-    unknown = [x for x in (*with_, *without) if x not in BY_ID]
+def selection(with_=(), without=(), only=None):
+    """The components to install: defaults (or just `only`), plus --with, minus --without (core always)."""
+    unknown = [x for x in (*with_, *without, *(only or ())) if x not in BY_ID]
     if unknown:
         raise SystemExit(f"unknown component(s): {', '.join(unknown)} — choose from {', '.join(BY_ID)}")
-    picked = {c.id for c in COMPONENTS if c.default}
+    picked = set(only) if only is not None else {c.id for c in COMPONENTS if c.default}
     picked |= set(with_)
     picked -= set(without)
     picked.add("core")
@@ -677,7 +955,7 @@ def selection(with_=(), without=()):
 
 def parse(argv):
     opts = {"yes": False, "with": [], "without": [], "dry_run": False, "status": False, "uninstall": None,
-            "json": False, "purge": False}
+            "json": False, "purge": False, "only": None}
     i = 0
 
     def value():
@@ -697,6 +975,8 @@ def parse(argv):
             opts["with"] += [x for x in a.split("=", 1)[1].split(",") if x]
         elif a == "--without":
             opts["without"] += value()
+        elif a == "--only":  # just these (install.sh: --only core; the setup page does the rest)
+            opts["only"] = (opts["only"] or []) + value()
         elif a.startswith("--without="):
             opts["without"] += [x for x in a.split("=", 1)[1].split(",") if x]
         elif a == "--dry-run":
@@ -828,7 +1108,7 @@ def main(argv):
         print_results(results, opts)
         return 0 if all(not r.startswith("failed") for r in results.values()) else 1
 
-    picked = selection(opts["with"], opts["without"])
+    picked = selection(opts["with"], opts["without"], opts["only"])
     if interactive:
         picked = menu(picked)
     print("\nPlan:")

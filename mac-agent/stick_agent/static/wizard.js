@@ -146,21 +146,15 @@ async function repoStep(body) {
   body.appendChild(h("div", {class: "row"}, repo));
   body.appendChild(h("p", {class: "small faint"}, "Updates the GitHub PR and Devin review commands, and the primary repo for alerts."));
   foot(body, {primary: async () => {
-    const v = repo.value.trim();
-    if (!/^[\w.-]+\/[\w.-]+$/.test(v)) { toast("Use the form owner/repo, e.g. acme/web.", "err"); return; }
-    const doc = await get("/api/commands");
-    if (!doc.error && Array.isArray(doc.commands)) {
-      for (const c of doc.commands) {
-        if (typeof c.open_url !== "string") continue;
-        c.open_url = c.open_url
-          .replace(/(github\.com\/)[^/]+\/[^/]+(\/pull\/)/, `$1${v}$2`)
-          .replace(/(app\.devin\.ai\/review\/)[^/]+\/[^/]+(\/pull\/)/, `$1${v}$2`);
-      }
-      report(await put("/api/commands", doc));
-    }
-    const gh = {...(cfg.github || {}), primary_repo: v, on: cfg.github ? cfg.github.on !== false : true, interval_s: (cfg.github && cfg.github.interval_s) || 120};
-    if (report(await put("/api/config", {github: gh}), "Repo saved")) { await mark("repo"); next(); }
+    if (await saveRepo(repo.value.trim())) { await mark("repo"); next(); }
   }, primaryLabel: "Save repo"});
+}
+
+// The main repo: the PR / Devin quick commands and GitHub alerts (the agent rewrites both;
+// the setup page uses this too). alerts: true/false turns the alerts on/off, null keeps them.
+export async function saveRepo(v, alerts = null) {
+  if (!/^[\w.-]+\/[\w.-]+$/.test(v)) { toast("Use the form owner/repo, e.g. acme/web.", "err"); return false; }
+  return report(await post("/api/install/github/repo", {repo: v, alerts}), "Repo saved");
 }
 
 // 6 --------------------------------------------------------------------------

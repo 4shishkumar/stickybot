@@ -12,7 +12,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import clips, commands, components_api, config, firmware_api, link, mcp_server, mcp_setup, updates
+from . import clips, commands, components_api, config, firmware_api, install_flow, link, mcp_server, mcp_setup, updates
 from . import events as evmod
 
 log = logging.getLogger("server")
@@ -256,6 +256,7 @@ def make_app(agent):
     app.router.add_static("/static/", STATIC, show_index=False)
     app.add_routes(firmware_api.routes(agent))
     app.add_routes(components_api.routes(agent))
+    app.add_routes(install_flow.routes(agent))  # the setup page (#install); after firmware_api (stick_api)
     app.add_routes(mcp_server.routes(agent))
     app.add_routes(updates.routes(agent))
     app.add_routes([
