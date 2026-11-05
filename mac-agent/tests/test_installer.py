@@ -191,12 +191,13 @@ def test_core_with_a_login_item_builds_the_app_first(sandbox, venv, monkeypatch)
     order = []
     monkeypatch.setattr(app, "ensure", lambda say=None: order.append("app") or (True, "StickyBot.app: built"))
     monkeypatch.setattr(cli, "write_plist", lambda: order.append("plist") or cli.LOCAL_PLIST)
-    monkeypatch.setattr(cli, "launchctl", lambda *a: order.append(a[0]) or subprocess.CompletedProcess(a, 0, "", ""))
+    monkeypatch.setattr(cli, "launchctl", lambda *a: order.append(a[0]) or
+                        subprocess.CompletedProcess(a, 1 if a[0] == "print" else 0, "", ""))  # print: gone
     core = installer.Core()
     monkeypatch.setattr(core, "_dashboard_up", lambda: True)
     lines = []
     core.install(installer.UI(emit=lines.append))
-    assert order == ["app", "plist", "bootout", "bootstrap"]
+    assert order == ["app", "plist", "bootout", "print", "bootstrap"]
     assert any("StickyBot.app: built" in x.get("line", "") for x in lines)
 
 
@@ -402,3 +403,16 @@ async def test_component_not_available_is_reported(client, monkeypatch):
     r = await client.get(f"/api/components/jobs/{job}", headers=HOST)
     last = json.loads((await r.text()).strip().split("\n\n")[-1].removeprefix("data: "))
     assert last["done"] and not last["ok"] and "gh" in last["error"]
+
+
+def test_reload_waits_for_the_old_service_and_retries_bootstrap(monkeypatch):
+    from stick_agent import __main__ as cli
+    calls, answers = [], {"print": [0, 0, 1], "bootstrap": [5, 0]}  # still there twice; bootstrap fails once
+    def fake(*a):
+        calls.append(a[0])
+        codes = answers.get(a[0])
+        return subprocess.CompletedProcess(a, codes.pop(0) if codes else 0, "", "Bootstrap failed: 5")
+    monkeypatch.setattr(cli, "launchctl", fake)
+    r = cli.reload_login_item("/tmp/x.plist", sleep=lambda s: None)
+    assert r.returncode == 0
+    assert calls == ["bootout", "print", "print", "print", "bootstrap", "bootstrap"]

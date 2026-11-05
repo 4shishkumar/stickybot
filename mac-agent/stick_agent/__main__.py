@@ -140,7 +140,10 @@ def switch_to_app():
         return
     path = write_plist()
     lg.info("the login item now runs %s — restarting through launchd", program[0])
-    subprocess.Popen(["/bin/sh", "-c", 'sleep 1; launchctl bootout "$1"; launchctl bootstrap "$2" "$3"', "sh",
+    # (detached: this process is the one being replaced; same wait + retry as reload_login_item)
+    subprocess.Popen(["/bin/sh", "-c", 'sleep 1; launchctl bootout "$1"; i=0; '
+                      'while launchctl print "$1" >/dev/null 2>&1 && [ $i -lt 20 ]; do sleep 0.5; i=$((i+1)); done; '
+                      'for n in 1 2 3 4 5; do launchctl bootstrap "$2" "$3" && break; sleep $n; done', "sh",
                       f"{domain()}/{LABEL}", domain(), str(path)], start_new_session=True,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -206,10 +209,27 @@ def domain():
     return f"gui/{os.getuid()}"
 
 
+def reload_login_item(path, sleep=time.sleep, tries=5):
+    """bootout, then bootstrap `path`. bootout returns before the old process has exited, and an
+    immediate bootstrap then fails ("Bootstrap failed: 5: Input/output error"): wait until the
+    service is gone (up to ~10 s), and retry the bootstrap a few times. -> the last launchctl result."""
+    launchctl("bootout", f"{domain()}/{LABEL}")
+    for _ in range(20):
+        if launchctl("print", f"{domain()}/{LABEL}").returncode != 0:
+            break
+        sleep(0.5)
+    r = None
+    for i in range(tries):
+        r = launchctl("bootstrap", domain(), str(path))
+        if r.returncode == 0:
+            break
+        sleep(1 + i)
+    return r
+
+
 def start():
     path = write_plist()
-    launchctl("bootout", f"{domain()}/{LABEL}")
-    r = launchctl("bootstrap", domain(), str(path))
+    r = reload_login_item(path)
     if r.returncode != 0:
         print(f"failed: {r.stderr.strip()}")
         return

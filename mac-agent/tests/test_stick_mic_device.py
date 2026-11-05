@@ -381,7 +381,8 @@ async def test_a_renamed_stick_renames_its_mic(wired, no_core_audio):
     wired.mic_dev.name = wired._mic_name()
     assert {"src": "agent", "proto": "@state", "id": "name"} in wired.link.sent  # asked on connect
     await wired.holds.show(60)
-    wired._on_message({"id": "name", "ok": True, "board": "m5-sticks3", "name": "Desk Stick", "fw": "1.8.1"})
+    wired._on_message({"src": "agent", "evt": "proto", "id": "name",  # how the stick really answers @state
+                       "reply": {"ok": True, "board": "m5-sticks3", "name": "Desk Stick", "fw": "1.8.1"}})
     assert wired.cfg["stick"] == {"address": "X", "name": "Desk Stick"}
     assert config.load()["stick"]["name"] == "Desk Stick"
     assert await wait_for(lambda: not no_core_audio.ours())  # the old one goes

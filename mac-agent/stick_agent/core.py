@@ -194,8 +194,11 @@ class Agent:
 
     def _note_name(self, msg):
         """A @state reply: remember the stick's current name (the mic is named after it)."""
-        stick, name = self.cfg.get("stick"), msg.get("name")
-        if stick and isinstance(name, str) and name and msg.get("board") and name != stick.get("name"):
+        reply = msg.get("reply") if msg.get("evt") == "proto" else None  # {"evt":"proto","id","reply":{...}}
+        if not isinstance(reply, dict):
+            return
+        stick, name = self.cfg.get("stick"), reply.get("name")
+        if stick and isinstance(name, str) and name and reply.get("board") and name != stick.get("name"):
             log.info("the stick is now called %r (was %r)", name, stick.get("name"))
             self.cfg["stick"] = {**stick, "name": name}  # not update_config: that reconnects the link
             config.save(self.cfg)

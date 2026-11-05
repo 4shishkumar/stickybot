@@ -223,8 +223,7 @@ class Core(Component):
         ok, msg = app.ensure(say=ui.say)  # the login item runs it; plain python if it can't be built
         ui.say(msg)
         path = cli.write_plist()
-        cli.launchctl("bootout", f"{cli.domain()}/{cli.LABEL}")
-        r = cli.launchctl("bootstrap", cli.domain(), str(path))
+        r = cli.reload_login_item(path)
         if r.returncode != 0:
             raise RuntimeError(f"couldn't start the login item: {r.stderr.strip()}")
         if path == cli.LOCAL_PLIST:
