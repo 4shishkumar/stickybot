@@ -14,8 +14,16 @@ What it tells you:
   - the stick: one "nice" toast per release ("Update vX ready — see the dashboard"),
     held back during quiet hours and while the stick is away; remembered across restarts
 
-  GET  /api/update          status() + the release notes
-  POST /api/update/check    check now -> the same
+Updating: the agent updates itself in one click for install.sh installs (selfupdate.py;
+a developer checkout gets instructions instead), and the stick's firmware goes on with
+the USB flasher (firmware_api) or any updater registered below (Bluetooth OTA).
+
+  GET  /api/update                     status() + the release notes, how this agent is
+                                       installed ("install") and the firmware updaters
+  POST /api/update/check               check now -> the same
+  POST /api/update/agent               {"tag"?} (default: the latest) -> {"job"}
+  POST /api/update/firmware/{updater}  -> {"job"}: a registered firmware updater
+  GET  /api/update/jobs/{id}           SSE: {"line"} / {"progress","stage"} / {"done","ok","error"}
 State: ~/.stick-agent/updates.json.
 """
 import asyncio
@@ -25,7 +33,7 @@ import time
 
 from aiohttp import web
 
-from . import __version__, config, events, releases
+from . import __version__, config, events, flasher, releases, selfupdate
 
 log = logging.getLogger("updates")
 
@@ -208,11 +216,125 @@ class Updates:
             await asyncio.sleep(TICK_S)
 
 
+# --- ways to put new firmware on the stick ----------------------------------------------------
+#
+# The dashboard's firmware panel (Stick -> Firmware; the banner's Update button leads there)
+# always has the USB flasher ("Update via USB": firmware_api's /api/firmware/flash). Other ways
+# register here and show up next to it, as buttons, whenever available() says they can run:
+#
+#   register_firmware_updater("ota", "Update over Bluetooth", available, run)
+#     available(agent) -> "" if it can run now, else why not (shown under the button)
+#     run(agent, fw, emit)  async; fw = flasher.bundled() (manifest + "files" [(offset, path)]);
+#                           emit({"line": ...}) / emit({"progress": 0-100, "stage": ...});
+#                           raise to fail (the message is shown)
+#
+# TODO(OTA): the Bluetooth OTA sender registers itself here — e.g. at the end of its module,
+# imported by core.py — and nothing else needs to change.
+FIRMWARE_UPDATERS = {}
+
+
+def register_firmware_updater(uid, title, available, run):
+    FIRMWARE_UPDATERS[uid] = {"id": uid, "title": title, "available": available, "run": run}
+
+
+def firmware_updaters(agent):
+    out = []
+    for u in FIRMWARE_UPDATERS.values():
+        try:
+            why = u["available"](agent) or ""
+        except Exception as e:  # noqa: BLE001
+            why = f"error: {e}"
+        out.append({"id": u["id"], "title": u["title"], "available": not why, "why": why})
+    return out
+
+
 def routes(agent):
+    from .firmware_api import Job, stream_job  # (the flash jobs work the same way)
+    jobs = {}
+
+    def full():
+        st = agent.updates.status(notes=True)
+        st["install"] = selfupdate.install_info()
+        st["firmware_updaters"] = firmware_updaters(agent)
+        return st
+
+    def start(work):
+        if any(not j.done for j in jobs.values()):
+            return None
+        job = Job()
+        jobs[job.id] = job
+
+        async def go():
+            ok, err = False, None
+            try:
+                await work(job.emit)
+                ok = True
+            except (selfupdate.UpdateError, flasher.FlashError, releases.ReleaseError) as e:
+                err = str(e)
+            except Exception as e:  # noqa: BLE001
+                log.exception("update job failed")
+                err = f"unexpected error: {e}"
+            log.info("update job %s: %s", job.id, "ok" if ok else err)
+            job.emit({"done": True, "ok": ok, "error": err})
+            job.done = True
+        asyncio.ensure_future(go())
+        return job
+
     async def get_update(_):
-        return web.json_response(agent.updates.status(notes=True))
+        return web.json_response(await asyncio.get_running_loop().run_in_executor(None, full))
 
     async def check_now(_):
-        return web.json_response(await agent.updates.check())
+        await agent.updates.check()
+        return web.json_response(await asyncio.get_running_loop().run_in_executor(None, full))
 
-    return [web.get("/api/update", get_update), web.post("/api/update/check", check_now)]
+    async def update_agent(request):
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        latest = agent.updates.status()["latest"] or {}
+        tag = str(body.get("tag") or latest.get("tag") or "")
+        if not tag:
+            return web.json_response({"error": "no release to update to — check for updates first"}, status=400)
+        info = await asyncio.get_running_loop().run_in_executor(None, selfupdate.install_info)
+        if not info["can_update"]:
+            return web.json_response({"error": info["why"], "install": info}, status=409)
+
+        async def work(emit):
+            emit({"line": f"updating stick-agent {__version__} -> {tag} in {info['path']}"})
+            await selfupdate.update(tag, emit, restart=lambda: agent.restart_soon(1.0))
+        job = start(work)
+        if job is None:
+            return web.json_response({"error": "an update is already running"}, status=409)
+        return web.json_response({"job": job.id})
+
+    async def update_firmware(request):
+        u = FIRMWARE_UPDATERS.get(request.match_info["updater"])
+        if u is None:
+            return web.json_response({"error": "no such firmware updater"}, status=404)
+        why = next(x["why"] for x in firmware_updaters(agent) if x["id"] == u["id"])
+        if why:
+            return web.json_response({"error": why}, status=409)
+        fw = flasher.bundled()
+        if not fw:
+            return web.json_response({"error": flasher.NO_FIRMWARE}, status=409)
+
+        async def work(emit):
+            emit({"line": f"{u['title']}: firmware {fw['version']} ({flasher.describe(fw)})"})
+            await u["run"](agent, fw, emit)
+            await agent.updates.refresh_stick(force=True)
+        job = start(work)
+        if job is None:
+            return web.json_response({"error": "an update is already running"}, status=409)
+        return web.json_response({"job": job.id})
+
+    async def job_events(request):
+        job = jobs.get(request.match_info["id"])
+        if not job:
+            return web.json_response({"error": "no such job"}, status=404)
+        return await stream_job(request, job)
+
+    return [web.get("/api/update", get_update), web.post("/api/update/check", check_now),
+            web.post("/api/update/agent", update_agent),
+            web.post("/api/update/firmware/{updater}", update_firmware),
+            web.get("/api/update/jobs/{id}", job_events)]

@@ -1,7 +1,5 @@
 """Menu-bar icon: state at a glance, dashboard, pause, restart, quit."""
 import asyncio
-import os
-import sys
 import webbrowser
 
 import rumps
@@ -121,8 +119,7 @@ class Menu(rumps.App):
         self.agent.loop.call_soon_threadsafe(self.agent.link.pause, not self.agent.link.paused)
 
     def restart(self, _):
-        self.agent.shutdown()  # execv skips atexit: remove the stick mic device first
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        self.agent.restart_now()
 
     def quit(self, _):
         rumps.quit_application()  # exit 0: the login item doesn't bring it back until next login / start

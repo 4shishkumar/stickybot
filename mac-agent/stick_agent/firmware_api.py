@@ -153,6 +153,28 @@ class Job:
         self.changed.set()
 
 
+async def stream_job(request, job):
+    """A job's events as server-sent events, until it's done."""
+    resp = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"})
+    await resp.prepare(request)
+    i = 0
+    try:
+        while True:
+            while i < len(job.events):
+                await resp.write(f"data: {json.dumps(job.events[i])}\n\n".encode())
+                i += 1
+            if job.done and i >= len(job.events):
+                break
+            job.changed.clear()
+            try:
+                await asyncio.wait_for(job.changed.wait(), 15)
+            except TimeoutError:
+                await resp.write(b": keep-alive\n\n")
+    except (ConnectionResetError, asyncio.CancelledError):
+        pass
+    return resp
+
+
 # --- onboarding ------------------------------------------------------------------------
 
 def _history_has_voice():
@@ -247,24 +269,7 @@ def routes(agent):
         job = jobs.get(request.match_info["id"])
         if not job:
             return web.json_response({"error": "no such job"}, status=404)
-        resp = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"})
-        await resp.prepare(request)
-        i = 0
-        try:
-            while True:
-                while i < len(job.events):
-                    await resp.write(f"data: {json.dumps(job.events[i])}\n\n".encode())
-                    i += 1
-                if job.done and i >= len(job.events):
-                    break
-                job.changed.clear()
-                try:
-                    await asyncio.wait_for(job.changed.wait(), 15)
-                except TimeoutError:
-                    await resp.write(b": keep-alive\n\n")
-        except (ConnectionResetError, asyncio.CancelledError):
-            pass
-        return resp
+        return await stream_job(request, job)
 
     async def proto(request):
         body = await request.json()

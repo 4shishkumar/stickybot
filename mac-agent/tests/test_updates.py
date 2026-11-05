@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from stick_agent import __version__, config, events, releases, server, updates
+from stick_agent import __version__, config, events, releases, selfupdate, server, updates
 
 HOST = {"Host": f"localhost:{config.PORT}"}
 
@@ -237,7 +237,8 @@ async def test_firmware_only_toast(up, gh, agent):
 
 # --- API ------------------------------------------------------------------------------------
 
-async def test_update_api(up, gh, agent, aiohttp_client):
+async def test_update_api(up, gh, agent, aiohttp_client, monkeypatch):
+    monkeypatch.setattr(selfupdate, "install_info", lambda root=None: {"kind": "dev", "can_update": False})
     client = await aiohttp_client(server.make_app(agent))
     gh.rel = release(bump(__version__))
     r = await client.get("/api/update", headers=HOST)
@@ -245,7 +246,8 @@ async def test_update_api(up, gh, agent, aiohttp_client):
     assert (await client.post("/api/update/check", headers=HOST)).status == 403   # needs the token
     r = await client.post("/api/update/check", headers={**HOST, "X-Stick-Token": config.token()})
     d = await r.json()
-    assert d["agent_update"] and d["latest"]["notes"]
+    assert d["agent_update"] and d["latest"]["notes"] and d["install"]["kind"] == "dev"
+    assert d["firmware_updaters"] == []
     d = await (await client.get("/api/update", headers=HOST)).json()
     assert d["latest"]["tag"] == gh.rel["tag"] and d["checked_at"]
     s = await (await client.get("/api/status", headers=HOST)).json()

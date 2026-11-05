@@ -8,8 +8,6 @@ import asyncio
 import hmac
 import json
 import logging
-import os
-import sys
 from pathlib import Path
 
 from aiohttp import web
@@ -247,10 +245,7 @@ def make_app(agent):
 
     async def restart(_):
         log.info("restart requested from the dashboard")
-        def again():
-            agent.shutdown()  # execv skips atexit: remove the stick mic device first
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-        asyncio.get_running_loop().call_later(0.3, again)
+        agent.restart_soon()
         return web.json_response({"ok": True})
 
     app = web.Application(middlewares=[guard])

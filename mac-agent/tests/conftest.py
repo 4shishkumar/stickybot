@@ -127,6 +127,18 @@ def no_real_github(monkeypatch):
     monkeypatch.setattr(releases, "gh_path", lambda: None)
 
 
+@pytest.fixture(autouse=True)
+def no_real_self_update(monkeypatch):
+    """...never run git / uv for a self-update, and never restart the test process."""
+    from stick_agent import core, selfupdate
+
+    def refuse(*a, **kw):
+        raise AssertionError(f"a test ran a real self-update command: {a}")
+    monkeypatch.setattr(selfupdate, "git_out", refuse)
+    monkeypatch.setattr(selfupdate, "run_cmd", refuse)
+    monkeypatch.setattr(core.Agent, "restart_now", refuse)
+
+
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     """A fresh agent home folder (config, commands, token, workspace...)."""

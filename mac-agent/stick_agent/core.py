@@ -4,6 +4,7 @@ import collections
 import json
 import logging
 import os
+import sys
 import time
 import uuid
 
@@ -162,6 +163,16 @@ class Agent:
     def shutdown(self):
         """Exit / SIGTERM / restart: never leave the device behind (it outlives us otherwise)."""
         self.holds.shutdown()
+
+    def restart_now(self):
+        """Starts the agent again in this process (new code from disk; launchd sees the same pid).
+        execv skips atexit: remove the stick mic device first."""
+        self.shutdown()
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    def restart_soon(self, delay=0.3):
+        """restart_now() once the current reply (e.g. an HTTP response) has gone out."""
+        asyncio.get_running_loop().call_later(delay, self.restart_now)
 
     # --- events for the dashboard / menu bar --------------------------------
 
