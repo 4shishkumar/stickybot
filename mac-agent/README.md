@@ -116,7 +116,7 @@ then runs **`stick-agent setup`**, which asks what else to set up:
 | `model` | on | downloads the speech model (~2.5 GB, once) |
 | `claude` | on | checks Claude Code is installed and logged in; adds our 3 hooks to `~/.claude/settings.json` (backup first, other hooks kept) |
 | `github` | off | checks `gh`, logs in if needed, sets your main repo, turns on GitHub alerts |
-| `firmware` | off | flashes the bundled firmware to a stick plugged in by USB (keeps its settings) |
+| `firmware` | off | downloads the latest release's firmware (sha256-checked) and flashes it to a stick plugged in by USB (keeps its settings) |
 | `wireless_mic` | off | the stick's mic for Wispr without a cable: checks for BlackHole 2ch (tells you the `brew` command if it's missing — it needs your password, so it never runs it) and turns `wireless_mic` on; then rank “stick-mic-bluetooth” first in Wispr once |
 
 Options (for `install.sh` and `stick-agent setup`): `--yes` (defaults, no

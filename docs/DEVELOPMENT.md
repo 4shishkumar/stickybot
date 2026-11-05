@@ -12,7 +12,8 @@ common things. First-time setup is in [BUILDING.md](BUILDING.md).
 | `mac-agent/` | `stick-agent`, the Mac side: `stick_agent/` package, `tests/` |
 | `PROTOCOL.md` | **the contract** between boards, the settings pages and the Mac agent: serial commands, HTTP API, the Bluetooth "Mac link" (JSON messages, audio frames, sound clips, events) |
 | `tools/devportal/` | small web UI to build, flash and watch logs for both boards |
-| `docs/` | this file and BUILDING.md |
+| `docs/` | this file, BUILDING.md, RELEASING.md (versions, tags, the release workflow) |
+| `tools/release.sh` | cut a release locally: bump, date the CHANGELOG, commit, tag (never pushes) |
 
 The pieces only talk through what PROTOCOL.md describes — change it there first
 when a message changes, then both sides.
@@ -39,6 +40,10 @@ make lint             # ruff on mac-agent
 - GitHub change detection runs on `tests/fixtures/github_base.json` (GraphQL-shaped).
 - The hook scripts run as real subprocesses against a test server on the agent's port.
 - Mark anything needing the model or hardware `@pytest.mark.slow`.
+- **Releases and updates:** tests never reach GitHub or run git / uv for real. `conftest.py`
+  refuses `releases.run` / `releases.urlopen` and `selfupdate.git_out` / `run_cmd` (and the
+  restart); `tests/test_releases.py` fakes gh and HTTPS, `tests/test_selfupdate.py` fakes git.
+  `tests/test_release_tool.py` runs `tools/release.sh` in a throwaway repo.
 - **Audio devices:** tests never open a real audio device (`FakeSoundDevice`) and never create
   a CoreAudio device (`FakeCoreAudio` replaces `stick_mic_device.CoreAudioDevices`, autouse).
   The one real end-to-end check creates and removes a test-named aggregate:
@@ -103,6 +108,12 @@ and `core.py` / `link.py` (agent), with a test on the agent side.
   `stick_text()`.
 - Secrets never go in git: the OTA password lives in `secrets.ini` (git-ignored); the agent's
   token in `~/.stick-agent/token`; the Mac password only on the stick (write-only).
+
+## Releases
+
+`tools/release.sh X.Y.Z` (or `make release VERSION=X.Y.Z`), then push the tag. See
+[RELEASING.md](RELEASING.md). Add your changes under `## [Unreleased]` in CHANGELOG.md as
+you go.
 
 ## Commits
 

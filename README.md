@@ -22,5 +22,10 @@ Start with the board's README: install PlatformIO, flash, pair.
 up someone else's stick: [docs/TEAMMATE-SETUP.md](docs/TEAMMATE-SETUP.md). Building
 everything from scratch: [docs/BUILDING.md](docs/BUILDING.md).
 
-Not in git: `.pio/` (build cache, recreated automatically) and `backup/`
-(per-device factory images).
+Releases: one version `vX.Y.Z` for the whole project ([CHANGELOG.md](CHANGELOG.md)).
+Each GitHub release carries the stick firmware, and the agent checks for new ones and
+updates itself and the stick ([docs/RELEASING.md](docs/RELEASING.md)).
+
+Not in git: `.pio/` (build cache, recreated automatically), `backup/`
+(per-device factory images) and firmware binaries (they're release assets; a local
+build goes to `~/.stick-agent/firmware/local/`).

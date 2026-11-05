@@ -38,7 +38,20 @@ The first tagged release: everything on `main` so far. Firmware 1.7.2.
   on or off.
 - **Firmware 1.7.2:** questions from Claude sessions get their own screen with the two
   answers on A and B.
+- **Releases:** one version for the project, this changelog, `tools/release.sh` (local
+  commit + tag) and a release workflow that tests, builds the firmware and publishes it as
+  release assets with a sha256 manifest.
+- **Updates:** the agent checks for new releases daily (stable or beta channel) and shows
+  them in the dashboard (banner with the notes and an **Update** button), the menu bar and,
+  once, on the stick. Installs made by `install.sh` update themselves in one click. Release
+  firmware is downloaded and sha256-checked into `~/.stick-agent/firmware/`.
 - MIT licence and third-party notices; CI on pull requests (macOS runners).
+
+### Changed
+- Firmware binaries are no longer committed: they come from releases, or from
+  `make -C m5-stick-s3 release` (now written to `~/.stick-agent/firmware/local/`).
+- `install.sh` checks out the latest stable release (main before the first one) and
+  clones over HTTPS when `gh` isn't logged in.
 
 [Unreleased]: https://github.com/ashish-kumar-noon/stick-key/compare/v1.7.2...HEAD
 [1.7.2]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.7.2

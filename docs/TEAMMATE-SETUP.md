@@ -8,7 +8,8 @@ Two parts: **you** flash and name their stick on your Mac (about 3 minutes), the
 
 1. **Plug their stick in by USB-C** (unplug yours, so you can't pick the wrong one).
 2. **Find its port:** `ls /dev/cu.usbmodem*` — ignore the LG monitor ones.
-3. **Flash it:**
+3. **Flash it** (the agent uses the latest release's firmware; it downloads it at start-up,
+   or run `stick-agent setup --with firmware`):
    ```sh
    stick-agent flash --port /dev/cu.usbmodemXXXX            # add --backup to keep M5Stack's factory firmware
    ```
@@ -51,6 +52,9 @@ in the office don't interfere.
 ## Notes
 - **Wi-Fi developer mode:** both sticks would claim `stick-key.local` (the Wi-Fi name
   doesn't follow the Bluetooth name yet) — keep it off on theirs.
-- **Updating later:** re-run the installer (it pulls the latest code), and update the
-  stick from the dashboard's **Stick → Firmware** (or `stick-agent flash`).
+- **Updating later:** the agent checks for new releases every day. The dashboard shows a
+  banner with an **Update** button (it updates the agent in one click and restarts it), the
+  menu bar says "Update available", and the stick shows a toast once. Update the stick from
+  **Stick → Firmware** (or `stick-agent flash`). Re-running the installer also moves to the
+  newest stable release. Want betas? Settings → Updates → Channel: Beta.
 - **Removing:** `stick-agent uninstall` (add `--purge` to delete `~/.stick-agent` too).

@@ -57,6 +57,14 @@ pio run -e sticks3 -t upload           # build + flash over USB
 - Then pair it with the Mac: System Settings → Bluetooth → **stick-key** → Connect, and
   accept the code on the stick (button A).
 
+### A firmware build for the agent (dashboard / `stick-agent flash`)
+```sh
+make -C m5-stick-s3 release    # build + ~/.stick-agent/firmware/local/ (manifest + 4 parts)
+```
+The agent flashes the highest firmware version it has: this local build, or a release it
+downloaded into `~/.stick-agent/firmware/<version>/` (a local build wins a tie). Firmware
+binaries aren't committed; releases carry them ([RELEASING.md](RELEASING.md)).
+
 ### Over Wi-Fi (OTA)
 1. Copy `secrets.example.ini` to `secrets.ini` (git-ignored) and put your **device
    password** in it (`upload_flags = --auth=<password>`; set the password on the settings page).
@@ -74,7 +82,9 @@ pio run -e sticks3 -t upload           # build + flash over USB
 ```
 
 This installs uv if needed, creates `~/.stick-agent/venv` (Python 3.14), installs
-`mac-agent/` into it **editable** (so code changes apply after `stick-agent restart`),
+`mac-agent/` into it **editable** (so code changes apply after `stick-agent restart`;
+run from a clone, the dashboard's one-click update leaves your checkout alone and shows
+the commands instead),
 and runs `stick-agent setup` to pick the components (speech model, Claude Code
 hooks, GitHub alerts, flashing a stick). See [mac-agent/README.md](../mac-agent/README.md#install)
 for the components and options. Re-run it any time; it only changes what's missing.

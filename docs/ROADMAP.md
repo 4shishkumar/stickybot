@@ -40,7 +40,7 @@ API key? Install the companion app"* — it uses your Claude Code login instead.
 - **Flash:** ESP Web Tools install button with a manifest per release. *New stick:* clean install. *Update:* writes only bootloader / partitions / boot_app0 / app, so settings and pairing survive (never a merged image over NVS).
 - **Set up over USB (Web Serial):** name, combo, Enter-after-hold, Mac password (write-only), sounds/volume, motion, slots — reusing the stick's existing serial protocol (PROTOCOL.md).
 - **Pairing guide:** System Settings → Bluetooth → stick-key → accept with A; then "Hold A in Wispr" test and picking the stick's mic in Wispr.
-- Firmware binaries published as GitHub Release assets (from `make -C m5-stick-s3 release`).
+- Firmware binaries published as GitHub Release assets: done (the release workflow, see docs/RELEASING.md).
 
 ### Phase 2 — Companion app installer (level 3)
 - `install.sh` using **uv** (standalone Python manager — no Homebrew/system Python): installs Python + stick-agent into `~/.stick-agent`, the login item, the Claude Code hooks (asks first), opens the local dashboard.
