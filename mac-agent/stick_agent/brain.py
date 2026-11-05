@@ -34,9 +34,15 @@ import os
 import re
 import time
 
-from . import config
+from . import config, mcp_setup
 
 log = logging.getLogger("claude")
+
+
+def mcp_server_tools():
+    """mcp__stick__notify, ... (mcp_server imports core, which imports us: import it late)."""
+    from .mcp_server import allowed_tool_names
+    return allowed_tool_names()
 TIMEOUT_S = 240
 INTERRUPT_WAIT_S = 3   # after an interrupt, the turn should end at once; else the process is killed
 
@@ -240,8 +246,17 @@ class Brain:
     # --- oneshot: a process per request ---------------------------------------
 
     def _common_args(self, cfg):
+        allowed = list(cfg.get("safe_tools") or [])
+        mcp = []
+        if cfg.get("mcp_server", True):
+            # The stick tools (mcp_server.py) over HTTP on our own server. The feedback ones run
+            # without asking; open_url / open_app / quick_command change the Mac, so they're left to
+            # Claude Code's permission prompt (our hook -> A / B on the stick). --mcp-config takes
+            # several values, so an option must follow it.
+            mcp = ["--mcp-config", str(mcp_setup.brain_config())]
+            allowed += [t for t in mcp_server_tools() if t not in allowed]
         return ["--output-format", "stream-json", "--verbose", "--include-partial-messages",
-                "--model", cfg.get("model") or "sonnet", "--allowedTools", ",".join(cfg.get("safe_tools") or [])]
+                "--model", cfg.get("model") or "sonnet", *mcp, "--allowedTools", ",".join(allowed)]
 
     async def _ask_oneshot(self, text, cfg, claude, turn, info):
         args = [claude, "-p", text, *self._common_args(cfg)]
@@ -275,7 +290,8 @@ class Brain:
     # --- session: one long-lived process ----------------------------------------
 
     def _signature(self, cfg, claude):
-        return (claude, cfg.get("model") or "sonnet", tuple(cfg.get("safe_tools") or []), str(config.WORKSPACE))
+        return (claude, cfg.get("model") or "sonnet", tuple(cfg.get("safe_tools") or []), str(config.WORKSPACE),
+                bool(cfg.get("mcp_server", True)))
 
     async def prewarm(self):
         """Starts the session process ahead of the first request (when the stick connects)."""

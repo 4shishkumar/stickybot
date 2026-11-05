@@ -44,6 +44,9 @@ DEFAULT_CONFIG = {
     "idle_content": ["facts", "hn", "onthisday", "wikipedia"],
     "onboarding": {},         # wizard steps the user ticked by hand (see firmware_api.py)
     "stick_approvals": True,  # Claude Code permission prompts go to the stick + dashboard first
+    # The stick tools for Claude sessions (mcp_server.py): an MCP server at http://127.0.0.1:8660/mcp,
+    # given to voice requests; terminal sessions: `stick-agent mcp install`
+    "mcp_server": True,
     # Wireless Wispr mic: an A hold away from USB streams the stick's mic over Bluetooth; the agent
     # plays it into BlackHole 2ch and, just for the hold, shows it as the "stick-mic-bluetooth" mic
     # (rank it first in Wispr's microphone list once). `stick-agent setup --with wireless_mic`

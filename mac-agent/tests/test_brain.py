@@ -332,6 +332,35 @@ async def test_session_timeout(fake_claude, brains, monkeypatch):
     assert not ok and reply == "Took too long, stopped." and not b.alive
 
 
+# --- the stick tools (MCP) -------------------------------------------------------------
+
+async def test_session_gets_the_stick_tools(fake_claude, brains):
+    b = brains()
+    await ask(b, "hello")
+    args = fake_claude()[0]
+    path = Path(args[args.index("--mcp-config") + 1])
+    assert path == config.HOME / "mcp-voice.json" and oct(path.stat().st_mode & 0o777) == "0o600"
+    server = json.loads(path.read_text())["mcpServers"]["stick"]
+    assert server["type"] == "http" and server["url"] == f"http://127.0.0.1:{config.PORT}/mcp"
+    assert server["headers"] == {"Authorization": f"Bearer {config.token()}", "X-Stick-Client": "voice"}
+    allowed = args[args.index("--allowedTools") + 1].split(",")
+    assert {"WebSearch", "mcp__stick__notify", "mcp__stick__ask", "mcp__stick__celebrate", "mcp__stick__progress",
+            "mcp__stick__pin_home", "mcp__stick__stick_status", "mcp__stick__speak"} <= set(allowed)
+    for changes_the_mac in ("open_url", "open_app", "quick_command"):  # left to the permission prompt
+        assert f"mcp__stick__{changes_the_mac}" not in allowed
+    assert args.index("--mcp-config") < args.index("--allowedTools")  # (both take several values)
+
+
+async def test_stick_tools_off_restarts_without_them(fake_claude, brains):
+    b = brains()
+    await ask(b, "hello")
+    set_config(mcp_server=False)
+    await ask(b, "again")
+    starts = fake_claude()
+    assert len(starts) == 2 and "--mcp-config" not in starts[1]
+    assert "mcp__stick" not in starts[1][starts[1].index("--allowedTools") + 1]
+
+
 # --- helpers ---------------------------------------------------------------------------
 
 def test_describe_and_plain():

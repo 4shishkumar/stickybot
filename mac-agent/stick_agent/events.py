@@ -33,6 +33,9 @@ KINDS = {
     "review_requested":  ("headsup",   "review", "Review requested",          "loom #5510 - Update deps"),
     "changes_requested": ("headsup",   "x",      "Changes requested",         "loom #5507"),
     "ci_failed":         ("headsup",   "x",      "CI failed",                 "loom #5507 - build"),
+    # notify() / celebrate() from a Claude session (the stick tools, mcp_server.py): the session picks
+    # the level; "off" here silences them all
+    "claude_tool":       ("nice",      "claude", "Tests passed",              "from loom"),
     "test":              ("nice",      "bell",   "Test event",                "from the dashboard"),
 }
 DEFAULT_RULES = {k: v[0] for k, v in KINDS.items()}

@@ -114,6 +114,8 @@ class Agent:
         self.events = collections.deque(maxlen=300)   # for the dashboard
         self.subscribers = set()                       # SSE queues
         self.prompts = {}                              # id -> {"tool","hint","from","future"}
+        self.asks = {}                                 # id -> {"question","options","from","future"} (ask_user)
+        self.last_input = None                         # time.time() of the last press / gesture we heard of
         self.loop = None
         self.stats = {"requests": 0, "quick": 0, "claude": 0, "started": time.time()}
         self.listeners = []  # extra callbacks for every message from the stick
@@ -188,6 +190,8 @@ class Agent:
         return {"state": self.state, "detail": self.detail, "link": self.link_state, "stick": self.cfg.get("stick"),
                 "stt_ready": self.stt_ready, "busy": self.brain.busy, "mtu": self.link.mtu, "stats": self.stats,
                 "prompts": [{"id": k, **{x: v[x] for x in ("tool", "hint", "from")}} for k, v in self.prompts.items()],
+                "asks": [{"id": k, **{x: v[x] for x in ("question", "options", "from")}} for k, v in self.asks.items()],
+                "mcp": self.cfg.get("mcp_server", True),
                 "model": self.cfg.get("model"), "weather": self.weather.now, "github": self.github.status(),
                 "stick_approvals": self.cfg.get("stick_approvals", True), "wireless_mic": self.wireless_status(),
                 "brain": self.brain.status() if getattr(self.brain, "status", None) else None}
@@ -217,6 +221,12 @@ class Agent:
     def _on_message(self, msg):
         for listen in list(self.listeners):  # e.g. firmware_api waiting for a "proto" reply
             listen(msg)
+        if msg.get("cmd") == "permission" or (msg.get("src") == "agent" and (
+                msg.get("evt") in ("talk", "cancel") or (msg.get("evt") == "wispr" and msg.get("state") != "stop"))):
+            self.last_input = time.time()  # a button press or a gesture (for stick_status)
+        if msg.get("cmd") == "permission" and msg.get("id") in self.asks:
+            self._answer(msg["id"], msg.get("decision"), "stick")
+            return
         if msg.get("src") == "agent" and msg.get("evt") == "event_shown":
             self.notifier.acked(msg.get("id"))
             return
@@ -265,12 +275,19 @@ class Agent:
         elif self.rec is not None:
             self.rec.add(frame)
 
-    def _hello_extra(self):
+    def home_card(self):
         card = dict(self.home.card(self))
         card["a"] = stick_text(card.get("a", ""))[:60]
         card["b"] = stick_text(card.get("b", ""))[:140]
+        return card
+
+    async def push_home(self):
+        """The home card now, not with the next hello (up to 8 s later)."""
+        return await self.link.send({"src": "agent", "home": self.home_card()})
+
+    def _hello_extra(self):
         # wready: we answer the stick's "prepare" with "ready" (it holds the key until then)
-        extra = {"home": card, "wmic": self.wispr.ready, "wready": True}
+        extra = {"home": self.home_card(), "wmic": self.wispr.ready, "wready": True}
         if self.weather.now:
             extra["wx"] = {**self.weather.now, "at": stick_text(self.weather.now.get("at", ""))}
         return extra
@@ -465,6 +482,112 @@ class Agent:
 
     def decide(self, pid, allow):
         self._decide(pid, "allow" if allow else "deny", "dashboard")
+
+    # --- questions from a Claude session (the stick tools' ask()) ----------------
+
+    def busy_reason(self):
+        """Why the stick can't take a question now ("" = it can)."""
+        if self.prompts:
+            return "an approval prompt is waiting on the stick"
+        if self.asks:
+            return "another question is waiting on the stick"
+        if self.rec is not None or self.state in ("listening", "transcribing"):
+            return "the user is talking to the stick"
+        if self.wispr.active:
+            return "the user is dictating with the stick"
+        return ""
+
+    async def ask_user(self, question, options, timeout_s, origin):
+        """Shows a question on the stick (A = options[0], B = options[1]) and the dashboard.
+        Returns the chosen label, "dismissed", "timeout", "busy: <why>" or "stick not connected".
+
+        Shown with the approval prompt's message ("src":"cli", see PROTOCOL.md), plus "kind":"ask"
+        and the button labels for firmware 1.7.2+ (older firmware shows "A yes / B no" and the
+        options in the text). An approval that arrives meanwhile goes in front: the question waits
+        (its time keeps running) and comes back once the approval is answered."""
+        if not self.link.connected:
+            return "stick not connected"
+        why = self.busy_reason()
+        if why:
+            return f"busy: {why}"
+        aid = "ask-" + uuid.uuid4().hex[:8]
+        fut = asyncio.get_running_loop().create_future()
+        q = stick_text(question)[:160]
+        labels = [stick_text(o)[:16] for o in options]
+        self.asks[aid] = {"question": q, "options": labels, "from": origin, "future": fut}
+        self.emit("ask", id=aid, question=question, options=labels, origin=origin, timeout_s=timeout_s)
+        fallback = " - " + " / ".join(f"{k}: {o}" for k, o in zip("AB", labels, strict=False))
+        prompt = {"src": "cli", "prompt": {"id": aid, "tool": "Question", "hint": (q + fallback)[:160],
+                                           "from": stick_text(origin)[:24], "kind": "ask", "q": q,
+                                           "a": labels[0], "b": labels[1] if len(labels) > 1 else ""}}
+        shown = False
+        answer = "cancelled"  # unless it ends normally (the caller went away, e.g. an interrupted session)
+        try:
+            deadline = time.monotonic() + timeout_s
+            while not fut.done() and (left := deadline - time.monotonic()) > 0:
+                if self.prompts:  # an approval is on the stick: wait for it
+                    shown = False
+                    wait = min(0.5, left)
+                else:
+                    shown = await self.link.send(prompt) or shown
+                    wait = min(PROMPT_RESEND_S, left)
+                try:
+                    await asyncio.wait_for(asyncio.shield(fut), wait)
+                except TimeoutError:
+                    pass
+            answer = fut.result() if fut.done() else "timeout"
+        finally:
+            self.asks.pop(aid, None)
+            if not fut.done():
+                fut.cancel()
+            if shown and not self.prompts:
+                await self.link.send({"src": "cli"})  # clear it on the stick (never an approval)
+            self.emit("ask_done", id=aid, answer=answer)
+        return answer
+
+    def _answer(self, aid, decision, by):
+        """A (once) = the first option, B (deny) = the second, "dismiss" (shake) = dismissed."""
+        a = self.asks.get(aid)
+        if not a or a["future"].done():
+            return
+        opts = a["options"]
+        if decision in ("once", "allow", "always"):
+            choice = opts[0]
+        elif decision == "deny" and len(opts) > 1:
+            choice = opts[1]
+        else:
+            choice = "dismissed"
+        a["future"].set_result(choice)
+        log.info("question %s answered on %s: %s", aid, by, choice)
+
+    def answer(self, aid, choice):
+        """From the dashboard: choice = an option's index, or None = dismiss."""
+        a = self.asks.get(aid)
+        if not a:
+            return False
+        decision = "once" if choice == 0 else "deny" if choice == 1 and len(a["options"]) > 1 else "dismiss"
+        self._answer(aid, decision, "dashboard")
+        return True
+
+    # --- the stick's own state (battery etc., for the stick tools' stick_status()) ---
+
+    async def stick_report(self, wait=2.0):
+        """Asks the stick for its status ({"cmd":"status"}, the Hardware Buddy message): battery,
+        USB power, uptime. None if it isn't connected or doesn't answer."""
+        got = asyncio.get_running_loop().create_future()
+
+        def listen(msg):
+            if msg.get("ack") == "status" and not got.done():
+                got.set_result(msg.get("data") or {})
+        self.listeners.append(listen)
+        try:
+            if not await self.link.send({"cmd": "status"}):
+                return None
+            return await asyncio.wait_for(got, wait)
+        except TimeoutError:
+            return None
+        finally:
+            self.listeners.remove(listen)
 
     # --- sounds on the stick -------------------------------------------------------
 

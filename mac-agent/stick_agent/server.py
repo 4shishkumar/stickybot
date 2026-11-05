@@ -5,6 +5,7 @@ changes state needs the token in ~/.stick-agent/token (the dashboard page has
 it built in) — so a random website can't drive the agent through your browser.
 """
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -13,7 +14,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import clips, commands, components_api, config, firmware_api, link
+from . import clips, commands, components_api, config, firmware_api, link, mcp_server, mcp_setup
 from . import events as evmod
 
 log = logging.getLogger("server")
@@ -29,7 +30,12 @@ def make_app(agent):
     async def guard(request, handler):
         if request.host not in OK_HOSTS:
             return web.json_response({"error": "bad host"}, status=403)
-        if request.method != "GET" and request.headers.get("X-Stick-Token") != tok:
+        if request.path == "/mcp":  # every method; MCP clients send the token as a bearer token
+            same = lambda a, b: hmac.compare_digest(a.encode("utf-8", "replace"), b.encode())
+            if not (same(request.headers.get("Authorization", ""), f"Bearer {tok}")
+                    or same(request.headers.get("X-Stick-Token", ""), tok)):
+                return web.json_response({"error": "bad token"}, status=403)
+        elif request.method != "GET" and request.headers.get("X-Stick-Token") != tok:
             return web.json_response({"error": "bad token"}, status=403)
         return await handler(request)
 
@@ -201,6 +207,39 @@ def make_app(agent):
                                          str(body.get("prompt", "")))
         return web.json_response({"ok": True, "shown": bool(ev)})
 
+    # --- the stick tools (MCP) for Claude sessions --------------------------------------
+
+    async def mcp_status(_):
+        """The server switch, recent use, and whether terminal Claude Code sessions have the tools."""
+        st = await asyncio.get_running_loop().run_in_executor(None, mcp_setup.status)
+        tools = getattr(agent, "mcp_tools", None)
+        return web.json_response({"enabled": agent.cfg.get("mcp_server", True), "url": mcp_setup.url(),
+                                  "terminal": st, "calls": tools.calls if tools else 0,
+                                  "last_call": tools.last_call if tools else None,
+                                  "tools": [{"name": t["name"], "title": t["title"],
+                                             "approval": t["name"] in mcp_server.MAC_TOOLS}
+                                            for t in mcp_server.TOOLS]})
+
+    async def mcp_terminal(request):
+        """Install / remove the tools for terminal sessions (`claude mcp add|remove`). The page shows
+        the command first; the request must say {"confirm": true}."""
+        body = await request.json()
+        if body.get("confirm") is not True:
+            return web.json_response({"error": "needs {\"confirm\": true}"}, status=400)
+        action = request.match_info["action"]
+        lines = []
+        fn = mcp_setup.install if action == "install" else mcp_setup.uninstall
+        ok, msg = await asyncio.get_running_loop().run_in_executor(None, lambda: fn(confirm=None, say=lines.append))
+        log.info("mcp %s for terminal sessions: %s", action, msg)
+        return web.json_response({"ok": ok, "message": msg, "ran": [x.strip() for x in lines]},
+                                 status=200 if ok else 500)
+
+    async def mcp_answer(request):
+        body = await request.json()
+        choice = body.get("choice")
+        ok = agent.answer(body.get("id"), choice if isinstance(choice, int) else None)
+        return web.json_response({"ok": ok}, status=200 if ok else 404)
+
     async def new_chat(_):
         agent.brain.forget()
         agent.emit("info", text="Next request starts a new conversation")
@@ -218,6 +257,11 @@ def make_app(agent):
     app.router.add_static("/static/", STATIC, show_index=False)
     app.add_routes(firmware_api.routes(agent))
     app.add_routes(components_api.routes(agent))
+    app.add_routes(mcp_server.routes(agent))
+    app.add_routes([
+        web.get("/api/mcp", mcp_status), web.post("/api/mcp/terminal/{action:install|uninstall}", mcp_terminal),
+        web.post("/api/mcp/answer", mcp_answer),
+    ])
     app.add_routes([
         web.get("/", page), web.get("/api/status", status), web.get("/api/events", events),
         web.get("/api/history", history), web.get("/api/logs", logs), web.post("/api/ask", ask),

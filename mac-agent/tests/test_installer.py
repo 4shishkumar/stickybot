@@ -296,7 +296,7 @@ def test_status_json(sandbox, capsys, monkeypatch):
     monkeypatch.setattr(installer.Model, "status", lambda self: ("missing", "not downloaded"))
     assert installer.main(["--status", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
-    assert [c["id"] for c in data] == ["core", "model", "claude", "github", "firmware", "wireless_mic"]
+    assert [c["id"] for c in data] == ["core", "model", "claude", "github", "firmware", "wireless_mic", "mcp"]
     assert {"status", "detail", "needs", "from_dashboard", "removable"} <= set(data[0])
 
 
@@ -314,7 +314,7 @@ async def test_components_listing(client):
     r = await client.get("/api/components", headers=HOST)
     assert r.status == 200
     ids = [c["id"] for c in await r.json()]
-    assert ids == ["core", "model", "claude", "github", "firmware", "wireless_mic"]
+    assert ids == ["core", "model", "claude", "github", "firmware", "wireless_mic", "mcp"]
 
 
 async def test_component_changes_need_the_token(client):

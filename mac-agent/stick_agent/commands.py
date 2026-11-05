@@ -138,10 +138,18 @@ def match(text: str):
     return None
 
 
-def run(cmd, slots):
+def run(cmd, slots, quote_shell=False):
     """Runs a matched command. Returns a short result line, or None if it doesn't apply
-    (e.g. no such app) so the request goes to Claude instead."""
+    (e.g. no such app) so the request goes to Claude instead.
+
+    quote_shell: slot values go into a "shell" command shell-quoted (the stick tools' quick_command:
+    the phrase comes from a model, so a slot like "x; rm -rf ~" must stay one harmless word)."""
     fill = lambda s: s.format(**slots) if s else s
+    if quote_shell and "shell" in cmd:
+        import shlex
+        shell = cmd["shell"].format(**{k: shlex.quote(v) for k, v in slots.items()})
+        r = subprocess.run(shell, shell=True, capture_output=True, text=True, timeout=30)
+        return (r.stdout or r.stderr).strip()[:200] or "Done."
     if "open_url" in cmd:
         url = fill(cmd["open_url"])
         if "<org>" in url or "<repo>" in url:

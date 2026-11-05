@@ -2,6 +2,9 @@
 
 Pinned when something needs you (urgent, orange on the stick):
   - approvals waiting ("Claude wants Bash", "A yes · B no")
+  - a question from a Claude session (the stick tools' ask(), see mcp_server.py)
+Then a line a Claude session put there with the stick tools (progress() or pin_home()),
+until it expires or is replaced; the newer of the two wins.
 Otherwise it rotates every ROTATE_S between:
   - your last answer (for 3 min after it arrived)
   - Claude Code sessions open
@@ -17,6 +20,8 @@ import time
 
 FRESH_REPLY_S = 180
 ROTATE_S = 16
+PROGRESS_S = 600       # a progress line stays this long after its last update
+PROGRESS_DONE_S = 120  # ... or this long once done == total
 
 
 def claude_sessions(exclude_pid=None):
@@ -44,12 +49,38 @@ class Home:
         self._slot = 0
         self._last_turn = 0.0
         self._current = None
+        self.slots = {}  # "progress" | "pin" -> {"k", "a", "b", "until", "at"} (set by the stick tools)
+
+    def put(self, slot, a, b, secs):
+        """Shows a line on the card for `secs` (a Claude session's progress or pinned line)."""
+        now = time.time()
+        self.slots[slot] = {"k": "claude", "a": a, "b": b, "until": now + secs, "at": now}
+
+    def clear(self, slot):
+        return self.slots.pop(slot, None) is not None
+
+    def pinned(self):
+        """The newest progress / pinned line that hasn't expired, or None."""
+        now = time.time()
+        for slot in [s for s, v in self.slots.items() if v["until"] <= now]:
+            del self.slots[slot]
+        if not self.slots:
+            return None
+        top = max(self.slots.values(), key=lambda v: v["at"])
+        return {"k": top["k"], "a": top["a"], "b": top["b"]}
 
     def card(self, agent):
         if agent.prompts:
             p = next(iter(agent.prompts.values()))
             more = f" +{len(agent.prompts) - 1}" if len(agent.prompts) > 1 else ""
             return {"k": "approval", "a": f"Claude wants {p['tool']}{more}", "b": "A yes  ·  B no", "u": True}
+        asks = getattr(agent, "asks", None)
+        if asks:
+            q = next(iter(asks.values()))
+            return {"k": "approval", "a": f"{q['from']} asks", "b": q["question"], "u": True}
+        pin = self.pinned()
+        if pin:
+            return pin
 
         # Rotation candidates, rebuilt each time
         cands = []

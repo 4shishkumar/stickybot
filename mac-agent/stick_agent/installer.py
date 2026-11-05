@@ -600,7 +600,45 @@ class WirelessMic(Component):
         ui.say("wireless Wispr mic off (BlackHole stays installed: brew uninstall --cask blackhole-2ch removes it)")
 
 
-COMPONENTS = [Core(), Model(), Claude(), GitHub(), Firmware(), WirelessMic()]
+# --- mcp: the stick tools for terminal Claude Code sessions ---------------------------------
+
+class Mcp(Component):
+    id = "mcp"
+    title = "Stick tools for Claude Code"
+    description = ("any Claude Code session can notify you, ask A/B questions and show progress on the stick "
+                   "(runs `claude mcp add --scope user stick …`; voice requests have them already)")
+    default = False
+
+    def status(self):
+        from . import mcp_setup
+        st = mcp_setup.status()
+        if st["installed"]:
+            return "installed", st["detail"]
+        if st["installed"] is None:
+            return "missing", st["detail"]
+        return ("partial" if st.get("conflict") else "missing"), f"{st['detail']} — runs: {st['command']}"
+
+    def plan(self):
+        from . import mcp_setup
+        return f"run: {mcp_setup.shown(mcp_setup.add_args('claude', config.token()))}"
+
+    def install(self, ui):
+        from . import mcp_setup
+        ok, msg = mcp_setup.install(confirm=None if ui.assume_yes or not ui.interactive else ui.confirm,
+                                    say=ui.say)
+        ui.say(msg)
+        if not ok:
+            raise NotAvailable(msg)
+
+    def uninstall(self, ui):
+        from . import mcp_setup
+        ok, msg = mcp_setup.uninstall(confirm=None, say=ui.say)
+        ui.say(msg)
+        if not ok:
+            raise NotAvailable(msg)
+
+
+COMPONENTS = [Core(), Model(), Claude(), GitHub(), Firmware(), WirelessMic(), Mcp()]
 BY_ID = {c.id: c for c in COMPONENTS}
 
 

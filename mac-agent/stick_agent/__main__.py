@@ -9,6 +9,7 @@
   stick-agent open       open the dashboard
   stick-agent flash      flash the bundled firmware to a stick on USB  [--port P] [--backup]
   stick-agent setup      install / check / remove parts (see `stick-agent setup --help`)
+  stick-agent mcp        the stick tools for terminal Claude Code sessions: install | uninstall | status  [--yes]
   stick-agent uninstall  remove everything it installed  [--purge: also delete ~/.stick-agent]
 """
 import asyncio
@@ -199,6 +200,9 @@ def main():
     elif cmd == "setup":
         from . import installer
         sys.exit(installer.main(sys.argv[2:]))
+    elif cmd == "mcp":  # stick-agent mcp install|uninstall|status [--yes]
+        from . import mcp_setup
+        sys.exit(mcp_setup.cli(sys.argv[2:]))
     elif cmd == "uninstall":  # = setup --uninstall all
         from . import installer
         sys.exit(installer.main(["--uninstall", "all", *sys.argv[2:]]))
