@@ -12,6 +12,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [1.8.5] - 2026-11-05
+
 ### Added
 - **Pick the brain: Claude Code or OpenRouter** (Settings → Brain). OpenRouter uses your own API key,
   pay per use, with any model from its list (prices shown, a fast cheap model suggested). Replies stream
@@ -122,7 +124,8 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/ashish-kumar-noon/stick-key/compare/v1.8.4...HEAD
+[Unreleased]: https://github.com/ashish-kumar-noon/stick-key/compare/v1.8.5...HEAD
+[1.8.5]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.5
 [1.8.4]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.4
 [1.8.3]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.3
 [1.8.2]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.2
