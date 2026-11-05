@@ -158,7 +158,7 @@ void stop() {
 bool active() { return state != State::OFF; }
 
 // Developer mode (on USB power): no idle auto-off, and no Wi-Fi power saving —
-// in modem sleep the radio misses mDNS queries, so stick-key.local won't resolve.
+// in modem sleep the radio misses mDNS queries, so stickybot.local won't resolve.
 void setKeepAlive(bool on) {
   keepAlive = on;
   if (state != State::OFF) WiFi.setSleep(!on);

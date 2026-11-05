@@ -41,7 +41,7 @@ static int16_t _volume[3] = {0, 0, 0};
 static int32_t *_spk_buf = NULL;  //[CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ / 4]
 static arduino_usb_audio_card_data_handler_t _cb = NULL;
 static StickUSBAudio *_uac = NULL;
-static const char *_name = "stick-mic-usb";  // [stick-key change] the name macOS shows for the mic
+static const char *_name = "stickybot-usb-mic";  // [stick-key change] the name macOS shows for the mic
 static const char *(*_nameFn)() = NULL;      // [stick-key change] asked for the name when USB starts
 
 // [stick-key change] the name now: from the provider if there is one (it may read the settings)

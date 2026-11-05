@@ -1,7 +1,7 @@
 // Wi-Fi settings page + OTA updates. Off by default; on demand only.
 //
-// If home Wi-Fi is saved: joins it, page at http://stick-key.local
-// Otherwise (or if joining fails): hotspot "stick-key-setup", password =
+// If home Wi-Fi is saved: joins it, page at http://stickybot.local
+// Otherwise (or if joining fails): hotspot "stickybot-setup", password =
 // device password, page at http://192.168.4.1
 #pragma once
 #include <Arduino.h>
