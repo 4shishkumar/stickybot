@@ -10,6 +10,7 @@ import uuid
 from . import brain, clips, commands, config, events, feed, github, home, link, stt, weather, wispr_mic
 from . import stick_mic_device as mic_device
 from .adpcm import Recording
+from .speech import Sentences, Speaker
 
 log = logging.getLogger("agent")
 
@@ -29,6 +30,65 @@ def stick_text(s):
     return "".join(out)
 PROMPT_RESEND_S = 3    # the stick drops a prompt it hasn't heard about for 30 s
 PROMPT_WAIT_S = 120
+
+
+class StickStream:
+    """The reply on the stick while Claude writes it: "working" updates, the latest text only,
+    at most one per `interval` seconds and never two at once (Bluetooth writes queue up)."""
+
+    def __init__(self, send, interval):
+        self.send = send          # async (text) -> None
+        self.interval = interval
+        self.pending = None
+        self.shown = None
+        self.sent = 0             # updates sent (for the log / tests)
+        self.closed = False
+        self._last = 0.0
+        self._wake = asyncio.Event()
+        self._task = None
+
+    def push(self, text):
+        if self.closed or text == (self.pending if self.pending is not None else self.shown):
+            return
+        self.pending = text
+        if self._task is None or self._task.done():
+            self._task = asyncio.ensure_future(self._run())
+
+    async def _run(self):
+        while self.pending is not None and not self.closed:
+            wait = self._last + self.interval - time.monotonic()
+            if wait > 0:
+                self._wake.clear()
+                try:
+                    await asyncio.wait_for(self._wake.wait(), wait)
+                except TimeoutError:
+                    pass
+                continue
+            text, self.pending = self.pending, None
+            self._last = time.monotonic()
+            self.shown = text
+            self.sent += 1
+            await self.send(text)
+
+    async def send_now(self, text):
+        """Sends this one straight away (a tool line: every one is shown), after one in flight."""
+        self.pending = None
+        self._wake.set()
+        if self._task:
+            await self._task
+        if self.closed:
+            return
+        self._last = time.monotonic()
+        self.shown = text
+        self.sent += 1
+        await self.send(text)
+
+    async def close(self):
+        """No more updates; returns once one being sent has gone (so "done" comes after it)."""
+        self.closed = True
+        self._wake.set()
+        if self._task:
+            await self._task
 
 
 class Agent:
@@ -57,8 +117,9 @@ class Agent:
         self.loop = None
         self.stats = {"requests": 0, "quick": 0, "claude": 0, "started": time.time()}
         self.listeners = []  # extra callbacks for every message from the stick
-        self.voice = None  # the `say` process while speaking
-        self.wispr = wispr_mic.WisprMic(emit=self.emit)  # A held away from USB: the stick's mic into BlackHole
+        self.speaker = Speaker(lambda: self.link, self._speech_output,
+                                      lambda: self.cfg.get("speak_voice") or "")
+        self.wispr = wispr_mic.WisprMic(emit=self.emit_soon)  # A held away from USB: the stick's mic into BlackHole
         self.wispr.set_enabled(self.cfg.get("wireless_mic"))
         # ...heard by Wispr through the "stick-mic-bluetooth" device, which exists only around an A hold
         self.stick_usb = None  # the stick is plugged into a computer by USB (it says so; None = unknown / older)
@@ -128,7 +189,8 @@ class Agent:
                 "stt_ready": self.stt_ready, "busy": self.brain.busy, "mtu": self.link.mtu, "stats": self.stats,
                 "prompts": [{"id": k, **{x: v[x] for x in ("tool", "hint", "from")}} for k, v in self.prompts.items()],
                 "model": self.cfg.get("model"), "weather": self.weather.now, "github": self.github.status(),
-                "stick_approvals": self.cfg.get("stick_approvals", True), "wireless_mic": self.wireless_status()}
+                "stick_approvals": self.cfg.get("stick_approvals", True), "wireless_mic": self.wireless_status(),
+                "brain": self.brain.status() if getattr(self.brain, "status", None) else None}
 
     def _history(self, entry):
         with config.HISTORY.open("a") as f:
@@ -141,6 +203,8 @@ class Agent:
         self.emit("link", state=state)
         if state == "connected":
             asyncio.ensure_future(self.sound({"get": 1}))
+            if getattr(self.brain, "prewarm", None):
+                asyncio.ensure_future(self.brain.prewarm())  # Claude Code ready before the first request
             self.wispr.warm()  # ready before the first key-down
         else:
             self.wispr.stop()
@@ -257,6 +321,18 @@ class Agent:
         started = time.time()
         self.emit("heard", text=text, source=source)
         entry = {"t": started, "heard": text, "source": source}
+        reset, rest = brain.split_new_chat(text)
+        if reset:  # "new chat", "start over" (+ maybe the request itself)
+            self.brain.forget()
+            self.emit("info", text="Next request starts a new conversation")
+            if not rest:
+                reply = "OK, new chat."
+                self.emit("reply", text=reply, via="quick", ms=int((time.time() - started) * 1000))
+                await self.tell_stick("done", text, reply)
+                self._history({**entry, "via": "new_chat", "reply": reply})
+                self.set_state("ready")
+                return
+            text = rest
         hit = commands.match(text)
         if hit:
             cmd, slots = hit
@@ -276,22 +352,64 @@ class Agent:
         self.set_state("thinking", text)
         await self.tell_stick("thinking", text, "")
 
+        async def to_stick(line):
+            await self.tell_stick("working", text, line)
+        stream = StickStream(to_stick, max(0.1, float(self.cfg.get("stream_interval_ms") or 300) / 1000))
+        live = self.cfg.get("stream_replies", True)
+        # Speech sentence by sentence as the answer is written (see speech.py)
+        utter = self.speaker.start(int(self.cfg.get("speak_max_words") or 40)) if self._stream_speech() else None
+        sentences = Sentences()
+
         async def progress(line):
             self.set_state("working", line)
             self.emit("progress", text=line)
-            await self.tell_stick("working", text, line)
+            await stream.send_now(line)
 
-        ok, reply = await self.brain.ask(text, progress)
+        async def on_text(answer):
+            if utter:
+                for sentence in sentences.feed(answer):
+                    utter.add(sentence)
+            shown = brain.plain(answer)
+            if live and shown:
+                stream.push(shown)
+
+        try:
+            ok, reply = await self.brain.ask(text, progress, on_text)
+        except BaseException:
+            if utter:
+                utter.cancel()
+            raise
+        finally:
+            await stream.close()
         if self.brain.cancelled:  # dismissed on the stick: say nothing more
+            if utter:
+                utter.cancel()
             self._history({**entry, "via": "claude", "ok": False, "reply": "(cancelled)"})
             return
+        if stream.sent:
+            log.info("reply streamed to the stick in %d update%s", stream.sent, "s" if stream.sent != 1 else "")
         self.emit("reply", text=reply, via="claude", ok=ok, ms=int((time.time() - started) * 1000))
         if ok:
             self.last_reply = {"t": time.time(), "text": reply}
         await self.tell_stick("done" if ok else "error", text, reply)
         self._history({**entry, "via": "claude", "ok": ok, "reply": reply})
         self.set_state("ready" if self.link_state == "connected" else self.link_state)
-        await self.speak(reply)
+        if utter and ok and sentences.text and not utter.cancelled:
+            for sentence in sentences.finish():
+                utter.add(sentence)
+            utter.close()
+            if utter.spoken:
+                self.emit("spoken", text=" ".join(utter.spoken))
+        else:
+            if utter:
+                utter.cancel()
+            await self.speak(reply)
+
+    def _stream_speech(self):
+        return bool(self.cfg.get("speak_replies") and self.cfg.get("speak_stream", True))
+
+    def _speech_output(self):
+        return "stick" if self.cfg.get("speak_output", "stick") == "stick" and self.link.connected else "mac"
 
     def should_speak(self, text, quick=False):
         if not text or not self.cfg.get("speak_replies"):
@@ -301,34 +419,16 @@ class Agent:
         return len(text.split()) <= int(self.cfg.get("speak_max_words") or 40)
 
     async def speak(self, text, quick=False, force=False):
-        """Reads a reply aloud if it's short enough (longer ones stay on the screen)."""
+        """Reads a reply aloud if it's short enough (longer ones stay on the screen). Returns at once;
+        the speech goes on in the background (self.speaker.current)."""
         if not force and not self.should_speak(text, quick):
             return False
-        self.stop_speaking()
-        voice = ["-v", self.cfg["speak_voice"]] if self.cfg.get("speak_voice") else []
-        if self.cfg.get("speak_output", "stick") == "stick" and self.link.connected:
-            # Speech made on the Mac (offline macOS voices), played on the stick's speaker
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix=".aiff", delete=False) as f:
-                path = f.name
-            p = await asyncio.create_subprocess_exec("say", *voice, "-o", path, text)
-            await p.wait()
-            try:
-                pcm = await asyncio.get_running_loop().run_in_executor(None, clips.load, path, 30, True)
-            finally:
-                os.unlink(path)
-            t = time.time()
-            await self.link.send_audio(clips.packets(pcm))
-            log.info("spoke %.1fs on the stick (sent in %.1fs)", len(pcm) / clips.RATE, time.time() - t)
-        else:
-            self.voice = await asyncio.create_subprocess_exec("say", *voice, text)
+        self.speaker.say(text)
         self.emit("spoken", text=text)
         return True
 
     def stop_speaking(self):
-        if self.voice and self.voice.returncode is None:
-            self.voice.terminate()
-        self.voice = None
+        self.speaker.stop()
 
     # --- permission prompts (from the Claude Code hook) -----------------------
 

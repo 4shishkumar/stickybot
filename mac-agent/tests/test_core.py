@@ -45,7 +45,7 @@ class FakeBrain:
         self.asked = []
         self.proc = None
 
-    async def ask(self, text, on_progress):
+    async def ask(self, text, on_progress, on_text=None):
         self.asked.append(text)
         for p in self.prog:
             await on_progress(p)
@@ -123,7 +123,7 @@ async def test_busy_brain(agent):
 async def test_cancel_from_the_stick(agent):
     b = FakeBrain()
 
-    async def ask(text, on_progress):
+    async def ask(text, on_progress, on_text=None):
         await asyncio.sleep(0.2)
         b.cancelled = True  # what the real Brain does after cancel()
         return False, "killed"
@@ -193,3 +193,171 @@ def test_should_speak(agent):
     assert not agent.should_speak("Opened Slack.", quick=True)
     agent.cfg["speak_replies"] = False
     assert not agent.should_speak("hi")
+
+
+# --- streaming the reply (both brain modes stream) -----------------------------------------
+
+class StreamingBrain(FakeBrain):
+    """Writes its answer in chunks: text is appended, None withdraws it (a preamble), "TOOL:x" is a tool line."""
+
+    def __init__(self, chunks, pause=0.0, ok=True):
+        super().__init__(ok=ok)
+        self.chunks, self.pause = chunks, pause
+        self.forgot = False
+
+    async def ask(self, text, on_progress, on_text=None):
+        self.asked.append(text)
+        acc = ""
+        for c in self.chunks:
+            if c is None:
+                acc = ""
+                await on_text("")
+            elif c.startswith("TOOL:"):
+                await on_progress(c[5:])
+            else:
+                acc += c
+                await on_text(acc)
+            await asyncio.sleep(self.pause)
+            if self.cancelled:
+                return False, "Stopped."
+        return self.ok, acc.strip()
+
+    def forget(self):
+        self.forgot = True
+
+
+@pytest.fixture
+def fake_voice(agent):
+    """The agent's speaker with fake `say` and playback: records what's made and played."""
+    log = {"made": [], "played": [], "sent_before": []}
+
+    async def synth(sentence, procs):
+        log["made"].append(sentence)
+        log["sent_before"].append(len(agent.link.states()))  # how far the stick screen had got
+        return {"pcm": np.zeros(160, dtype=np.int16), "text": sentence}
+
+    async def play(batch, procs):
+        log["played"] += [c["text"] for c in batch]
+        await asyncio.sleep(0.01)
+    agent.speaker.synth, agent.speaker.play = synth, play
+    agent.cfg.update(speak_replies=True, speak_max_words=40)
+    return log
+
+
+async def test_reply_streams_to_the_stick_throttled(agent):
+    agent.cfg["stream_interval_ms"] = 100
+    agent.brain = StreamingBrain([f"w{i} " for i in range(40)], pause=0.01)   # ~0.4 s of writing
+    await agent.handle_text("count")
+    st = agent.link.states()
+    working = [t for s, t in st if s == "working"]
+    assert st[0] == ("thinking", "") and st[-1] == ("done", " ".join(f"w{i}" for i in range(40)))
+    assert 2 <= len(working) <= 7                      # ~3-4 a second, not 40
+    assert all(len(a) <= len(b) for a, b in zip(working, working[1:], strict=False))  # only grows
+    assert agent.last_reply["text"].startswith("w0 w1")
+    history = [json.loads(line) for line in config.HISTORY.read_text().splitlines()]
+    assert history[-1]["reply"] == agent.last_reply["text"]
+
+
+async def test_streaming_off_shows_only_tool_lines(agent):
+    agent.cfg["stream_replies"] = False
+    agent.brain = StreamingBrain(["TOOL:Searching: x", "It's ", "sunny."])
+    await agent.handle_text("weather")
+    assert agent.link.states() == [("thinking", ""), ("working", "Searching: x"), ("done", "It's sunny.")]
+
+
+async def test_stick_text_limits_hold_while_streaming(agent):
+    agent.cfg["stream_interval_ms"] = 100
+    agent.brain = StreamingBrain(["Café ✨ **bold** " + "word " * 120], pause=0)
+    await agent.handle_text("long")
+    for m in agent.link.sent:
+        if m.get("state") == "working":
+            assert len(m["text"]) <= 300
+            assert all(ch.isascii() or ch in core.STICK_EXTRA for ch in m["text"])
+            assert "*" not in m["text"]
+
+
+async def test_streamed_speech_sentence_by_sentence(agent, fake_voice):
+    agent.brain = StreamingBrain(["It's 28°C. ", "Sunny ", "today. ", "Bring a hat."], pause=0.02)
+    await agent.handle_text("weather")
+    await asyncio.wait_for(agent.speaker.current.wait(), 2)
+    assert fake_voice["made"] == ["It's 28°C.", "Sunny today.", "Bring a hat."]
+    assert fake_voice["played"] == fake_voice["made"]
+    done_at = [s for s, _ in agent.link.states()].index("done")
+    assert fake_voice["sent_before"][0] <= done_at     # speaking began before "done" went to the stick
+    assert any(e["kind"] == "spoken" and e["text"].startswith("It's 28") for e in agent.events)
+
+
+async def test_preamble_is_not_spoken(agent, fake_voice):
+    agent.brain = StreamingBrain(["Let me check. ", None, "TOOL:Searching: weather", "It's sunny. ", "Warm."])
+    await agent.handle_text("weather")
+    await asyncio.wait_for(agent.speaker.current.wait(), 2)
+    assert fake_voice["made"] == ["It's sunny.", "Warm."]
+    assert ("working", "Searching: weather") in agent.link.states()
+
+
+async def test_long_replies_are_spoken_up_to_the_word_limit(agent, fake_voice):
+    agent.cfg["speak_max_words"] = 6
+    agent.brain = StreamingBrain(["One two three. ", "Four five. ", "Six seven eight. ", "Nine."])
+    await agent.handle_text("count")
+    await asyncio.wait_for(agent.speaker.current.wait(), 2)
+    assert fake_voice["made"] == ["One two three.", "Four five."]
+
+
+async def test_cancel_stops_the_stream_and_the_speech(agent, fake_voice):
+    agent.brain = StreamingBrain([f"Sentence {i}. " for i in range(50)], pause=0.02)
+    task = asyncio.create_task(agent.handle_text("long job"))
+    await asyncio.sleep(0.2)
+    utter = agent.speaker.current
+    agent._on_message({"src": "agent", "evt": "cancel"})
+    await asyncio.wait_for(task, 2)
+    assert utter.cancelled and agent.speaker.current is None
+    assert "done" not in [s for s, _ in agent.link.states()]
+    made = len(fake_voice["made"])
+    await asyncio.sleep(0.1)
+    assert len(fake_voice["made"]) == made and made < 50
+
+
+async def test_talking_again_stops_the_speech(agent, fake_voice):
+    agent.brain = StreamingBrain(["One. ", "Two. ", "Three."])
+    await agent.handle_text("count")
+    utter = agent.speaker.current
+    agent._on_message({"src": "agent", "evt": "talk", "state": "start"})
+    assert utter.cancelled
+
+
+async def test_failed_request_speaks_the_error_in_one_go(agent, fake_voice):
+    agent.brain = StreamingBrain([], ok=False)
+
+    async def fail(text, on_progress, on_text=None):
+        return False, "Claude Code failed."
+    agent.brain.ask = fail
+    await agent.handle_text("hi")
+    await asyncio.wait_for(agent.speaker.current.wait(), 2)
+    assert fake_voice["made"] == ["Claude Code failed."]
+
+
+@pytest.mark.parametrize("said, asked", [("Start over.", []), ("New chat. Weather?", ["Weather?"])])
+async def test_new_chat_phrase(agent, said, asked):
+    agent.brain = StreamingBrain(["It's sunny."])
+    await agent.handle_text(said)
+    assert agent.brain.forgot and agent.brain.asked == asked
+    if not asked:
+        assert agent.link.states() == [("done", "OK, new chat.")]
+
+
+async def test_connecting_prewarms_the_brain(agent):
+    warmed = []
+
+    async def prewarm():
+        warmed.append(1)
+    agent.brain.prewarm = prewarm
+    agent._on_link("connected")
+    await asyncio.sleep(0.01)
+    assert warmed == [1]
+
+
+def test_status_reports_the_brain(agent):
+    from stick_agent import brain
+    agent.brain = brain.Brain()
+    st = agent.status()["brain"]
+    assert st["mode"] == "session" and st["alive"] is False and st["last"] is None

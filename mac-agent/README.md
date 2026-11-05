@@ -33,7 +33,9 @@ easier for the speech model than "P R 1234".
 - **Questions & the web:** "what's the weather", "what's the latest on …", "summarise <url>"
 - **Your Mac:** "how much disk space do I have", "what's using my CPU", "find my notes about X"
 - **Apps (AppleScript):** "play my focus playlist in Spotify", "set volume to 30%"
-- **Follow-ups** within 10 minutes continue the conversation ("and tomorrow?")
+- **Follow-ups** within 10 minutes continue the conversation ("and tomorrow?"); say **"new chat"** or **"start over"** to begin again
+- The answer appears on the stick **while Claude writes it**, and with *Read replies aloud* on it's spoken sentence by sentence
+  (Settings → Claude: *Claude Code runs as one session* keeps it ready — no start-up per request; *once per request* is the old way)
 - Web search and reading run without asking; commands that change things ask on the stick (A yes / B no, 30 s, then Claude Code asks in the terminal).
 - **Click B** on any agent screen to cancel and go back to Home. **Shake** does the same.
 
@@ -171,7 +173,8 @@ Files: everything lives in `~/.stick-agent/` — `config.json`, `commands.json`,
 | `link.py` | Bluetooth to the chosen stick (bleak): JSON messages, mic audio in, sound clips out |
 | `stt.py` | speech to text — Parakeet (MLX), English-only v2 by default (`stt_model`) |
 | `commands.py` | quick commands: phrase matching, spoken numbers, app lookup |
-| `brain.py` | Claude Code headless (`claude -p`, stream-json), follow-ups, cancel |
+| `brain.py` | Claude Code headless: a persistent stream-json session (or `claude -p` per request), follow-ups, interrupt/cancel, timings |
+| `speech.py` | replies read aloud: sentence splitting, `say` per sentence, a queue to the stick speaker or the Mac |
 | `core.py` | the agent: talk → text → command or Claude → reply; approvals; sounds; speech |
 | `wispr_mic.py` | the wireless Wispr mic: stick audio → jitter buffer → BlackHole 2ch (sounddevice) |
 | `stick_mic_device.py` | the "stick-mic-bluetooth" device around each A hold: a CoreAudio aggregate on BlackHole (ctypes), the prepare → ready → tail flow |

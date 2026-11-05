@@ -27,7 +27,15 @@ DEFAULT_CONFIG = {
     "speak_max_words": 40,    # "short" = at most this many words
     "speak_voice": "",        # macOS voice name, "" = the system voice
     "speak_quick": False,     # also speak quick-command confirmations ("Opened Slack.")
-    "followup_minutes": 10,   # a request within this time continues the same conversation
+    "followup_minutes": 10,   # a request within this time continues the same conversation ("oneshot" mode)
+    # How Claude Code runs (brain.py): "session" = one long-lived process, no start-up per request;
+    # "oneshot" = `claude -p` per request (the original way, the fallback)
+    "brain_mode": "session",
+    "brain_prewarm": True,    # start the session when the stick connects, before the first request
+    "brain_idle_min": 10,     # session unused this long -> stopped; the next request starts a new chat
+    "stream_replies": True,   # show the reply on the stick while Claude writes it
+    "stream_interval_ms": 300,  # at most one screen update per this many ms (Bluetooth)
+    "speak_stream": True,     # speak sentence by sentence as the reply is written (with speak_replies)
     "safe_tools": ["WebSearch", "WebFetch", "Read", "Glob", "Grep"],  # run without asking
     "weather": True,          # weather on the stick's home screen (Open-Meteo, free)
     "weather_location": "auto",  # "auto" = from this Mac's internet connection, or a city name

@@ -6,7 +6,7 @@ export const title = "Settings";
 export const subtitle = "How the agent behaves. Changes apply right away once you save.";
 
 const SOURCES = [["facts", "Fun facts"], ["hn", "Hacker News"], ["onthisday", "On this day"], ["wikipedia", "Wikipedia featured article"]];
-let root = null, cfg = null, unsub = null;
+let root = null, cfg = null, unsub = null, unsubBrain = null;
 
 export function actions() {
   return [
@@ -38,7 +38,11 @@ export async function render(el) {
       field("Model", h("select", {id: "model"}, [["sonnet", "Sonnet — fast (recommended)"], ["opus", "Opus — smartest, slower"], ["haiku", "Haiku — fastest"]]
         .map(([v, l]) => h("option", {value: v, selected: c.model === v}, l)))),
       field("Follow-ups", h("div", {class: "row"}, h("input", {type: "number", id: "followup", min: 0, max: 120, value: c.followup_minutes ?? 10, style: "width:90px"}), h("span", {class: "dim"}, "minutes")),
-        "A request within this time continues the same conversation.")),
+        "A request within this time continues the same conversation; after it, a new chat. (Or say “new chat”.)"),
+      field("Claude Code runs", h("select", {id: "brainMode"}, [["session", "as one session, always ready (faster)"], ["oneshot", "once per request (the old way)"]]
+        .map(([v, l]) => h("option", {value: v, selected: (c.brain_mode || "session") === v}, l)))),
+      field("Live replies", toggle("streamReplies", "Show the reply on the stick while Claude writes it", c.stream_replies !== false)),
+      brainStatus()),
     card("Speech & replies",
       field("Read replies aloud", toggle("speak", "Short replies are spoken; long ones stay on the screen", c.speak_replies)),
       field("Play on", h("select", {id: "speakOut"}, [["stick", "the stick's speaker"], ["mac", "the Mac's speakers"]].map(([v, l]) => h("option", {value: v, selected: (c.speak_output || "stick") === v}, l)))),
@@ -47,6 +51,8 @@ export async function render(el) {
         await put("/api/config", {speak_voice: voice.value, speak_output: document.getElementById("speakOut").value});
         report(await post("/api/voice/test", {}), "Playing a sample");
       }}, "Test")), "Better voices: System Settings → Accessibility → Spoken Content → System voice → Manage voices."),
+      field("As it's written", toggle("speakStream", "Start speaking with the first sentence (don't wait for the whole reply)", c.speak_stream !== false),
+        "Long replies: the first sentences up to the word limit are read, the rest stays on the screen."),
       field("Quick commands", toggle("speakQuick", "Also speak confirmations like “Opened Slack.”", c.speak_quick)),
       field("Speech model", h("select", {id: "sttModel"}, [["mlx-community/parakeet-tdt-0.6b-v2", "English only (recommended)"], ["mlx-community/parakeet-tdt-0.6b-v3", "25 languages"]]
         .map(([v, l]) => h("option", {value: v, selected: (c.stt_model || "mlx-community/parakeet-tdt-0.6b-v2") === v}, l))), "Runs on this Mac. Changing it takes effect after a restart (first use downloads ~2.5 GB).")),
@@ -78,12 +84,38 @@ export async function render(el) {
         "Off: Claude Code asks in the terminal straight away. On: it waits up to 30 s for A / B.")),
     card("Advanced",
       field("Run without asking", h("input", {id: "safeTools", class: "mono", value: (c.safe_tools || []).join(", ")}), "Claude Code tools that never need approval."),
-      field("Claude path", h("input", {id: "claudePath", class: "mono", placeholder: "found automatically", value: c.claude_path || ""}))),
+      field("Claude path", h("input", {id: "claudePath", class: "mono", placeholder: "found automatically", value: c.claude_path || ""})),
+      field("Pre-warm", toggle("brainPrewarm", "Start the Claude Code session when the stick connects", c.brain_prewarm !== false))),
     card("Components", componentsPanel()),
   );
 }
 
-export function leave() { root = null; if (unsub) unsub(); unsub = null; wmListeners.clear(); }
+export function leave() {
+  root = null;
+  if (unsub) unsub();
+  if (unsubBrain) unsubBrain();
+  unsub = unsubBrain = null;
+  wmListeners.clear();
+}
+
+// How Claude Code runs and how fast the last requests were, from /api/status (brain).
+function brainStatus() {
+  const line = h("div", {class: "small dim"});
+  const s = ms => ms == null ? "–" : `${(ms / 1000).toFixed(1)} s`;
+  const paint = b => {
+    clear(line);
+    if (!b) { line.textContent = "This version of the agent doesn't report it."; return; }
+    const mode = b.mode === "oneshot" ? "once per request" : `session ${b.alive ? "running" : "not running"}`;
+    line.appendChild(h("div", null, `Now: ${mode}`));
+    if (b.last) line.appendChild(h("div", null, `Last request (${b.last.mode}${b.last.warm ? ", warm" : ""}): first words after ${s(b.last.first_token_ms)}, done after ${s(b.last.total_ms)}${b.last.cancelled ? " (cancelled)" : ""}`));
+    for (const [m, a] of Object.entries(b.avg || {}))
+      line.appendChild(h("div", null, `Average ${m} (${a.n}): first words ${s(a.first_token_ms)}, done ${s(a.total_ms)}`));
+  };
+  paint((store.status || {}).brain);
+  if (unsubBrain) unsubBrain();
+  unsubBrain = store.on((type, data) => { if (type === "status") paint(data.brain); });
+  return field("Speed", line);
+}
 
 const micName = c => (c.wispr_mic_name || "").trim() || "stick-mic-bluetooth";
 
@@ -191,6 +223,11 @@ async function save() {
   const r = await put("/api/config", {
     model: v("model").value,
     followup_minutes: +v("followup").value,
+    brain_idle_min: +v("followup").value || 10,
+    brain_mode: v("brainMode").value,
+    stream_replies: v("streamReplies").checked,
+    speak_stream: v("speakStream").checked,
+    brain_prewarm: v("brainPrewarm").checked,
     speak_replies: v("speak").checked,
     speak_output: v("speakOut").value,
     speak_max_words: +v("speakMax").value || 40,

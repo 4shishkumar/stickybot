@@ -180,7 +180,7 @@ Buddy messages with `"src":"cli"`; the board answers
 | board → Mac | `{"src":"agent","evt":"wispr","state":"start","rate":16000,"codec":"ima-adpcm"}` instead of `prepare`, to an agent without `wready` (firmware 1.7.0 always) |
 | board → Mac | `{"src":"agent","evt":"wispr","state":"stop"}` after the last audio frame (also after a press cancelled before `ready`) |
 | board → Mac | `{"src":"agent","evt":"usb","mounted":true\|false}` — plugged into a computer that enumerated its USB device (firmware 1.7.1+): when it changes, to a new agent, and every 20 s with the hellos; `usbMounted` in `@state` |
-| Mac → board | `{"src":"agent","state":"thinking"\|"working"\|"done"\|"error","heard":"…","text":"…"}` — shown on screen |
+| Mac → board | `{"src":"agent","state":"thinking"\|"working"\|"done"\|"error","heard":"…","text":"…"}` — shown on screen. While Claude writes, repeated `working` messages carry the answer so far (≤ ~3 per second, ≤ 300 characters); `done` (with its chime) follows once |
 
 Audio frames: 16 kHz mono IMA-ADPCM, ≤20 ms each, little-endian:
 `[seq u16][predictor i16][step index u8][samples, 4 bits each, low nibble first]`.
