@@ -12,6 +12,19 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- **Landscape screens (firmware 1.9.0).** Held sideways, the screens with text to read turn
+  landscape: Claude approvals, questions, event alerts, the agent's listening / thinking /
+  reply screens, dictation, messages, pairing, Web settings and the Home / Agent / Status
+  pages. The wider lines fit more text in a bigger font. On approvals, questions and
+  pairing the A button's answer sits at the end of the screen next to the real button A,
+  with an arrow. The stick switches after it has been held still on a side for about half a
+  second, so it doesn't flicker while you move it; lying flat keeps the last one. The menu,
+  the firmware update screen and the dock clock work as before. A new setting **Landscape
+  screens** (on by default; it needs Auto-rotate) is in the stick's menu, its settings page
+  and the dashboard's Stick page. The serial `screens` demo now shows the landscape
+  layouts too (`screens landscape` for just those).
+
 ## [1.8.6] - 2026-11-05
 
 The v1.8.5 build stopped on a test that assumed it runs on a Mac; this release has the

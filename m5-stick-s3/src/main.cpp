@@ -37,6 +37,7 @@
 #include "logic/clock.h"
 #include "logic/wispr.h"
 #include "logic/prompt.h"
+#include "logic/orientation.h"
 #include "sound.h"
 #include "events.h"
 #include "ota.h"
@@ -90,6 +91,7 @@ static uint32_t   lastBatteryReport = 0;
 static int        reportedBattery = -1;
 static ui::Status status{};
 static ui::Page   page = ui::Page::HOME;
+static orientation::Screen shownScreen{false, 0};  // the rotation the screens use now
 static bool       devActive = false;  // developer mode: Wi-Fi kept on while on USB
 
 static ui::Status readStatus() {
@@ -99,9 +101,17 @@ static ui::Status readStatus() {
           battery::level(), battery::charging(), battery::line()};
 }
 
+static String   msgTitle, msgSub;  // the message on screen (redrawn when the stick turns)
+static bool     msgHasSub = false;
+static uint16_t msgBg = 0;
+
 static void showMessage(const char* title, const char* sub, uint16_t bg, uint32_t ms = 1500) {
   ui::wake(ms + B_SCREEN_MS);
   ui::drawMessage(title, sub, bg);
+  msgTitle = title;
+  msgHasSub = sub != nullptr;
+  msgSub = sub ? sub : "";
+  msgBg = bg;
   messageUntil = millis() + ms;
 }
 
@@ -435,6 +445,7 @@ static void onMenu(menu::Action a) {
       settings::saveEnterDelayMs(d.enterDelayMs);
       settings::saveMotion(d.lift, d.faceDown, d.shake);
       settings::saveAutoRotate(d.autoRotate);
+      settings::saveLandscape(d.landscape);
       settings::saveDevMode(d.devMode);
       settings::saveSoundOn(d.sound);
       settings::saveSoundVolume(d.volume);
@@ -472,10 +483,12 @@ static void onMenu(menu::Action a) {
 
 // --- Serial ------------------------------------------------------------------------
 
-// Serial "screens": shows every screen with sample data (~3 s each), for design review.
-static void screenDemo() {
+// Serial "screens": shows every screen with sample data (~3 s each), for design review:
+// portrait first, then the landscape layouts (button A on the right, then on the left).
+// "screens landscape" shows only the landscape ones.
+static void screenDemo(bool portrait = true) {
   Log.println("Screen demo: each screen for ~3 s");
-  ui::wake(120000);
+  ui::wake(240000);
   ui::Dash d = readDash();
   auto hold = [](uint32_t ms, auto draw) {
     for (uint32_t t0 = millis(); millis() - t0 < ms;) {
@@ -485,50 +498,80 @@ static void screenDemo() {
       delay(40);
     }
   };
-  for (int p = 0; p < (int)ui::Page::COUNT; p++) hold(3000, [&] { ui::drawPage((ui::Page)p, d); });
-  hold(3500, [&] { ui::drawHolding(settings::combo(), true); });
-  hold(3500, [] { ui::drawTalk(true); });
-  hold(2500, [] { ui::drawTalk(false); });
-  hold(3000, [] { ui::drawAgent("thinking", "what's on my calendar today", ""); });
-  hold(3000, [] { ui::drawAgent("working", "how much disk space do I have", "Running: df -h /"); });
-  hold(4000, [] { ui::drawAgent("done", "what's the weather in Bangalore", "It's 28°C in Bangalore with patchy rain nearby and 54% humidity."); });
-  hold(2500, [] { ui::drawAgent("error", "open the thing", "Didn't catch that."); });
-  hold(4000, [] { ui::drawPrompt("Bash", "rm -rf build/ && npm run build", "web"); });
-  {
-    static const char* MOODS[] = {"Idle", "Listening", "Thinking", "Working", "Done", "Error", "Needs you", "Offline", "Party"};
-    for (int m = 0; m < ui::MOOD_COUNT; m++) hold(1800, [&] { ui::drawMood(m, MOODS[m]); });
-  }
-  {  // home: a fact, then the eyes peek and a news item fades in
-    ui::Dash h = d;
-    h.agentLinked = true; h.bt = 0;
-    h.cardKind = "fact"; h.cardA = "Did you know?"; h.cardB = "Honey never spoils."; h.cardUrgent = false;
-    h.cardIndex = 1; h.cardCount = 5;
-    hold(1500, [&] { ui::drawPage(ui::Page::HOME, h); });
-    ui::forceHomePeek();
-    h.cardKind = "news"; h.cardA = "Hacker News - 433 pts"; h.cardB = "OpenBSD 8.0 released"; h.cardIndex = 2;
-    hold(2800, [&] { ui::drawPage(ui::Page::HOME, h); });
-    h.cardKind = "wiki"; h.cardA = "Wikipedia: London Monster"; h.cardB = "An attacker of women in London, 1788-1790."; h.cardIndex = 3;
-    hold(1500, [&] { ui::drawPage(ui::Page::HOME, h); });
-  }
-  {  // dock: landscape, portrait, night
-    ui::Dash k = d;
-    k.charging = true;
-    hold(3500, [&] { ui::drawDock(k, 1, false); });
-    hold(3000, [&] { ui::drawDock(k, 0, false); });
-    hold(2500, [&] { ui::drawDock(k, 1, true); });
-    hold(2000, [&] { ui::drawDock(k, 0, true); });
-    ui::dockEnd();
-  }
-  {
+  auto prompts = [&] {
+    hold(4000, [] { ui::drawPrompt("Bash", "rm -rf build/ && npm run build", "web"); });
+    hold(4000, [] { ui::drawPrompt("Edit", "src/components/settings/ThemeToggle.tsx: replace the toggle with a three-way "
+                                           "switch (light / dark / system) and keep the saved choice", "acme-web"); });
+    hold(4000, [] { ui::drawAsk("Deploy the preview build to staging now, or wait for the tests to finish first?",
+                                "acme-web", "Staging now", "Wait"); });
+  };
+  auto events = [&] {
     uint32_t t0 = millis();
     hold(6000, [&] { ui::drawEvent(0, "PR #5507 merged!", "acme/web - feat: dark mode", "merge", millis() - t0); });
     t0 = millis();
     hold(4000, [&] { ui::drawEvent(1, "PR approved", "#5510 by teammate - ready to merge", "check", millis() - t0); });
     t0 = millis();
     hold(4000, [&] { ui::drawEvent(2, "Review requested", "#5512 - fix login redirect", "review", millis() - t0); });
+  };
+  // The screens with text to read (all of them have a landscape layout)
+  auto reading = [&](bool moods) {
+    for (int p = 0; p < (int)ui::Page::COUNT; p++) hold(3000, [&] { ui::drawPage((ui::Page)p, d); });
+    hold(3500, [&] { ui::drawHolding(settings::combo(), true); });
+    hold(3500, [] { ui::drawTalk(true); });
+    hold(2500, [] { ui::drawTalk(false); });
+    hold(3000, [] { ui::drawAgent("thinking", "what's on my calendar today", ""); });
+    hold(3000, [] { ui::drawAgent("working", "how much disk space do I have", "Running: df -h /"); });
+    hold(4000, [] { ui::drawAgent("done", "what's the weather in Bangalore", "It's 28°C in Bangalore with patchy rain nearby and 54% humidity."); });
+    hold(2500, [] { ui::drawAgent("error", "open the thing", "Didn't catch that."); });
+    prompts();
+    if (moods) {
+      static const char* MOODS[] = {"Idle", "Listening", "Thinking", "Working", "Done", "Error", "Needs you", "Offline", "Party"};
+      for (int m = 0; m < ui::MOOD_COUNT; m++) hold(1800, [&] { ui::drawMood(m, MOODS[m]); });
+    }
+    {  // home: a fact, then the eyes peek and a news item fades in
+      ui::Dash h = d;
+      h.agentLinked = true; h.bt = 0;
+      h.cardKind = "fact"; h.cardA = "Did you know?"; h.cardB = "Honey never spoils."; h.cardUrgent = false;
+      h.cardIndex = 1; h.cardCount = 5;
+      hold(1500, [&] { ui::drawPage(ui::Page::HOME, h); });
+      ui::forceHomePeek();
+      h.cardKind = "news"; h.cardA = "Hacker News - 433 pts"; h.cardB = "OpenBSD 8.0 released"; h.cardIndex = 2;
+      hold(2800, [&] { ui::drawPage(ui::Page::HOME, h); });
+      h.cardKind = "wiki"; h.cardA = "Wikipedia: London Monster"; h.cardB = "An attacker of women in London, 1788-1790."; h.cardIndex = 3;
+      hold(1500, [&] { ui::drawPage(ui::Page::HOME, h); });
+    }
+    events();
+    hold(3000, [] { ui::drawPairing(482913); });
+    hold(2500, [] { ui::drawMessage("Saved", "Option+Cmd", 0x03E0); });
+    {
+      static const String WEB[] = {"Join Wi-Fi:", "stick-key-setup", "Password:", "macro-setup", "Then open:", "stick-key.local"};
+      hold(2500, [] { ui::drawInfo("Web settings", WEB, 6, "Triple-B: close"); });
+    }
+  };
+
+  if (portrait) {
+    ui::setOrientation(shownScreen.flipped, 0);
+    reading(true);
+    {  // dock: landscape, portrait, night
+      ui::Dash k = d;
+      k.charging = true;
+      hold(3500, [&] { ui::drawDock(k, 1, false); });
+      hold(3000, [&] { ui::drawDock(k, 0, false); });
+      hold(2500, [&] { ui::drawDock(k, 1, true); });
+      hold(2000, [&] { ui::drawDock(k, 0, true); });
+      ui::dockEnd();
+    }
   }
-  hold(3000, [] { ui::drawPairing(482913); });
-  hold(2500, [] { ui::drawMessage("Saved", "Option+Cmd", 0x03E0); });
+  // Landscape: turn the stick so the arrow on the A chip points at button A
+  ui::setOrientation(shownScreen.flipped, 1);
+  hold(4000, [] { ui::drawMessage("Landscape, A on the right", "Turn the stick until this reads upright: the arrow on A points at button A", 0x03E0); });
+  reading(false);
+  ui::setOrientation(shownScreen.flipped, -1);
+  hold(4000, [] { ui::drawMessage("Landscape, A on the left", "Turn the stick until this reads upright: the arrow on A points at button A", 0x03E0); });
+  prompts();
+  events();
+  hold(4000, [] { ui::drawAgent("done", "what's the weather in Bangalore", "It's 28°C in Bangalore with patchy rain nearby and 54% humidity."); });
+  ui::setOrientation(shownScreen.flipped, shownScreen.side);  // back to how the stick is held
   Log.println("Screen demo done");
 }
 
@@ -538,6 +581,7 @@ static void pollSerial() {
     char c = Serial.read();
     if (c == '\n' || c == '\r') {
       if (line == "screens") screenDemo();
+      else if (line == "screens landscape") screenDemo(false);
       else if (line.startsWith("event ")) {  // event celebrate|nice|headsup <title>|<sub>|<icon>
         String rest = line.substring(6);
         rest.trim();
@@ -597,6 +641,7 @@ void setup() {
   ui::wake(fromStandby ? WAKE_SCREEN_MS : BOOT_SCREEN_MS);
   hid::begin(settings::slot());
   motion::begin();
+  motion::resetFacing(settings::flipped() ? orientation::Orient::PORTRAIT_FLIPPED : orientation::Orient::PORTRAIT);
   mic::begin();
   sound::begin();
 
@@ -760,13 +805,19 @@ void loop() {
     ui::wake(B_SCREEN_MS);
     dirty = true;
   }
-  if (settings::autoRotate()) {
-    static int shownOrient = 0;
-    int o = motion::upright();
-    if (o && o != shownOrient) {
-      shownOrient = o;
-      ui::setFlipped(o < 0);
+  // Which way the screens face: the manual flip, or with auto-rotate the motion sensor
+  // (held sideways, the reading screens turn landscape). A turn redraws whatever is shown.
+  bool turned = false;
+  {
+    orientation::Screen sc =
+        orientation::choose(motion::facing(), settings::autoRotate(), settings::landscape(), settings::flipped());
+    if (sc != shownScreen) {
+      shownScreen = sc;
+      ui::setOrientation(sc.flipped, sc.side);
+      turned = true;
       dirty = true;
+      lastFrame = 0;  // an event redraws right away
+      if (messageUntil && millis() < messageUntil) ui::drawMessage(msgTitle.c_str(), msgHasSub ? msgSub.c_str() : nullptr, msgBg);
     }
   }
   if (mev == motion::Event::LIFT && settings::liftWakes()) {
@@ -798,19 +849,19 @@ void loop() {
   static String shownPrompt;
   if (buddy::hasPrompt()) {
     const buddy::Prompt& p = buddy::prompt();
-    if (shownPrompt != p.id) {
+    bool fresh = shownPrompt != p.id;
+    if (fresh) {
       shownPrompt = p.id;
       promptAt = millis();
       lastPing = 0;
       ui::wake(60000);
-      if (p.ask) {
-        ui::drawAsk(p.q.length() ? p.q : p.hint, p.from, p.a, p.b);
-        Log.printf("Question (%s): %s — A %s, B %s\n", p.from.c_str(), p.q.c_str(), p.a.c_str(), p.b.c_str());
-      } else {
-        ui::drawPrompt(p.tool, p.hint, p.from);
-        Log.printf("Claude asks (%s): %s %s — A approve, B deny\n", p.from.length() ? p.from.c_str() : "desktop",
+      if (p.ask) Log.printf("Question (%s): %s — A %s, B %s\n", p.from.c_str(), p.q.c_str(), p.a.c_str(), p.b.c_str());
+      else Log.printf("Claude asks (%s): %s %s — A approve, B deny\n", p.from.length() ? p.from.c_str() : "desktop",
                       p.tool.c_str(), p.hint.c_str());
-      }
+    }
+    if (fresh || turned) {  // turning the stick redraws it; its timers carry on
+      if (p.ask) ui::drawAsk(p.q.length() ? p.q : p.hint, p.from, p.a, p.b);
+      else ui::drawPrompt(p.tool, p.hint, p.from);
     }
     ui::keepAwake();
     if (comboDown) comboRelease();
@@ -919,7 +970,7 @@ void loop() {
           menu::open({settings::combo(), hid::slot(), settings::standbyMin(), settings::brightnessPct(),
                       settings::enterDelayMs(),
                       settings::liftWakes(), settings::faceDownSleeps(), settings::shakeEscapes(),
-                      settings::autoRotate(), settings::devMode(), settings::soundOn(), settings::soundVolume(),
+                      settings::autoRotate(), settings::landscape(), settings::devMode(), settings::soundOn(), settings::soundVolume(),
                       settings::wirelessMic()},
                      hid::state() == hid::Bt::OFF);
           mode = Mode::MENU;

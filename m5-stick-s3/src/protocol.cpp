@@ -57,6 +57,7 @@ static String stateJson() {
   j += ",\"standby\":" + String(settings::standbyMin());
   j += ",\"brightness\":" + String(settings::brightnessPct());
   j += String(",\"autoRotate\":") + (settings::autoRotate() ? "true" : "false");
+  j += String(",\"landscape\":") + (settings::landscape() ? "true" : "false");  // 1.9.0
   j += String(",\"devMode\":") + (settings::devMode() ? "true" : "false");
   j += String(",\"wirelessMic\":") + (settings::wirelessMic() ? "true" : "false");
   j += String(",\"ota\":1,\"otaPending\":") + (ota::pendingVerify() ? "true" : "false");  // Bluetooth update (1.8.0+)
@@ -211,6 +212,12 @@ Result run(const String& action, const Args& arg) {
     String v = arg("on");
     settings::saveAutoRotate(v == "1" || v == "true");
     return ok();
+  }
+
+  if (action == "landscape") {  // landscape screens when held sideways (with auto-rotate)
+    String v = arg("on");
+    settings::saveLandscape(v == "1" || v == "true");
+    return ok(String("\"landscape\":") + (settings::landscape() ? "true" : "false"));
   }
 
   if (action == "wmic") {

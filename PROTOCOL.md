@@ -86,6 +86,8 @@ and can be ignored.
 | `standby` | `min=0..120` | Battery boards: standby after N idle minutes on battery (0 = never) |
 | `brightness` | `pct=10..100` | Boards with a screen: screen brightness |
 | `wmic` | `on=0\|1` | StickS3: the wireless Wispr mic switch (see section 5) |
+| `autorotate` | `on=0\|1` | StickS3: turn the screen with the motion sensor (state: `autoRotate`) |
+| `landscape` | `on=0\|1` | StickS3 1.9.0+: with auto-rotate, landscape screens when held sideways (state: `landscape`) |
 
 Responses that end in a restart include `"restarting":true`.
 

@@ -56,6 +56,8 @@ void   saveMotion(bool lift, bool faceDown, bool shake);
 
 bool   autoRotate();     // follow the motion sensor instead of the manual flip
 void   saveAutoRotate(bool on);
+bool   landscape();      // with auto-rotate: the reading screens turn landscape when held sideways
+void   saveLandscape(bool on);
 
 // Mac password for "unlock" (double-press B). Write-only from outside.
 String macPassword();

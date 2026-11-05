@@ -4,11 +4,15 @@
 #include "fonts_vlw.h"
 #include "logic/text.h"
 #include "logic/prompt.h"
+#include "logic/orientation.h"
 
 namespace ui {
 
 // Portrait, 135 x 240. "Flip screen" in the menu switches between the two
-// portrait rotations (0 and 2).
+// portrait rotations (0 and 2); with auto-rotate the motion sensor picks them.
+// Landscape, 240 x 135 (rotations 1 and 3): the screens with text to read (prompts,
+// questions, events, the agent, home / status, messages) have a wide layout too, used
+// while the stick is held sideways (setOrientation); the rest stay portrait.
 //
 // Look: a calm dark base with anti-aliased Inter fonts (tools/make_fonts.py). The
 // agent screens have big eyes with a mood (colour + expression) that also tints
@@ -71,12 +75,52 @@ void begin() {
   lastActivity = millis();
 }
 
-static int orient_ = 0;  // 0 portrait; +1 / -1 landscape (the dock, lying on a side)
+static int  orient_ = 0;  // shown now: 0 portrait; +1 / -1 landscape (rotation 1 / 3)
+static int  want_ = 0;    // the reading screens' rotation, from setOrientation()
+static bool dimmed_ = false;
 
 void setFlipped(bool flipped) {
   flipped_ = flipped;
   if (orient_ == 0) M5.Display.setRotation(flipped ? 2 : 0);
 }
+
+void setOrientation(bool flipped, int side) {
+  want_ = side;
+  setFlipped(flipped);
+}
+
+// Turns the display (and the canvas, sized to match) to portrait (0) or a landscape side.
+static void applyOrientation(int o) {
+  if (o == orient_) return;
+  orient_ = o;
+  canvas.deleteSprite();
+  M5.Display.setRotation(o == 0 ? (flipped_ ? 2 : 0) : o > 0 ? 1 : 3);
+  W = M5.Display.width();
+  H = M5.Display.height();
+  canvas.createSprite(W, H);
+}
+
+static void undim() {
+  if (!dimmed_) return;
+  dimmed_ = false;
+  if (awake_) M5.Display.setBrightness(brightness);
+}
+
+void dockEnd() {  // portrait-only screens
+  applyOrientation(0);
+  undim();
+}
+
+// Screens with a landscape layout: turn to the held side; true = draw the wide layout.
+static bool wide() {
+  applyOrientation(want_);
+  undim();
+  return orient_ != 0;
+}
+
+// Landscape: the end of the screen that button A is at (+1 right, -1 left). The
+// stick turned with its right edge up (rotation 1) has A on the right.
+static int aEnd() { return orientation::buttonAOnRight(orient_) ? 1 : -1; }
 
 void setBrightness(uint8_t pct) {
   brightness = (uint16_t)pct * 255 / 100;
@@ -161,6 +205,32 @@ static int paragraph(const String& s, const lgfx::IFont* f, int x, int y, int ma
   return n;
 }
 
+// Line height for each font in wrapped text.
+static int lineH(const lgfx::IFont* f) {
+  return f == F9 ? 13 : f == F12 ? 16 : f == F14 ? 18 : f == F18 ? 22 : 26;
+}
+
+// Biggest of `fonts` (largest first) in which all of s wraps into a box maxW x boxH
+// (logic/text.cpp fits()); else the last one (the text is then cut with "...").
+static const lgfx::IFont* fitBox(const String& s, int maxW, int boxH, std::initializer_list<const lgfx::IFont*> fonts) {
+  const lgfx::IFont* last = nullptr;
+  for (auto f : fonts) {
+    canvas.setFont(f);
+    last = f;
+    if (text::fits(std::string(s.c_str()), boxH / lineH(f), maxW, canvasWidth, nullptr)) return f;
+  }
+  return last;
+}
+
+// Wrapped lines centred on cx, the block centred on cy.
+static void centredLines(const String& text, const lgfx::IFont* f, int cx, int cy, int maxW, int maxLines,
+                         uint16_t color, int lh) {
+  String lines[4];
+  int n = wrap(text, f, lines, min(maxLines, 4), maxW);
+  int y = cy - (n - 1) * lh / 2;
+  for (int i = 0; i < n; i++) txt(lines[i], cx, y + i * lh, f, color, middle_center);
+}
+
 // "Ctrl+Option+Cmd" -> {"Ctrl", "Option", "Cmd"}
 static int comboParts(const Combo& c, String out[], int max) {
   String s = comboToString(c);
@@ -238,6 +308,23 @@ static void chip(const String& s, int cx, int cy, uint16_t dot, uint16_t bg = CH
 }
 
 static void card(int x, int y, int w, int h) { canvas.fillRoundRect(x, y, w, h, 10, PANEL); }
+
+// A button chip for the landscape screens, filled or outlined. arrow (+1 / -1): a small
+// arrow at that end pointing at the real button (A, at the left or right end of the screen).
+static void keyChip(const String& s, int x, int y, int w, int h, uint16_t c, uint16_t bg, bool filled, int arrow) {
+  if (filled) canvas.fillRoundRect(x, y, w, h, h / 2, c);
+  else canvas.drawRoundRect(x, y, w, h, h / 2, c);
+  const uint16_t ink = filled ? bg : c;
+  int cx = x + w / 2, room = w - 16;
+  if (arrow) {
+    int ax = arrow > 0 ? x + w - h / 2 + 2 : x + h / 2 - 2, cy = y + h / 2;
+    canvas.fillTriangle(ax - 3 * arrow, cy - 5, ax - 3 * arrow, cy + 5, ax + 4 * arrow, cy, ink);
+    cx -= arrow * 7;
+    room -= 14;
+  }
+  const lgfx::IFont* f = fit(s, room, {F12, F9});
+  txt(ellipsize(s, f, room), cx, y + h / 2, f, ink, middle_center);
+}
 
 // --- Colour helpers ----------------------------------------------------------------
 
@@ -343,10 +430,12 @@ static void eyes(Mood m, int cx, int cy, float s, uint16_t c, uint16_t bg) {
     case Mood::OFFLINE: eh *= 0.34f; drop = 56 * s * 0.2f; py = 2; break;
     default: break;
   }
-  if (m != Mood::OFFLINE) {  // follow the tilt (screen flipped: the other way round)
-    float f = flipped_ ? -1 : 1;
-    px = constrain(px + f * tiltDX * 30, -13.0f, 13.0f);
-    py = constrain(py + f * tiltDY * 24, -13.0f, 13.0f);
+  if (m != Mood::OFFLINE) {  // follow the tilt, turned to the screen's rotation
+    float f = flipped_ ? -1 : 1, sx = f * tiltDX, sy = f * tiltDY;
+    if (orient_ > 0) { sx = -tiltDY; sy = tiltDX; }        // rotation 1: right edge up
+    else if (orient_ < 0) { sx = tiltDY; sy = -tiltDX; }   // rotation 3: left edge up
+    px = constrain(px + sx * 30, -13.0f, 13.0f);
+    py = constrain(py + sy * 24, -13.0f, 13.0f);
   }
   for (int side = -1; side <= 1; side += 2) {
     float ex = cx + side * gap;
@@ -402,10 +491,57 @@ static void eyes(Mood m, int cx, int cy, float s, uint16_t c, uint16_t bg) {
   }
 }
 
+// Landscape agent screens. Without a reply: big eyes in the middle, the label and the
+// dim line (what was heard) under them. With one: small eyes + label in a band at the
+// top, the reply in a full-width panel below (the widest lines, the biggest font that fits).
+static void moodScreenWide(Mood m, const String& label, const String& dimText, const String& inkText, bool bar,
+                           const String& barTitle, const Dash* d, int bottomGap) {
+  const uint16_t c = moodColor(m), bgTint = blend(GROUND, c, 0.2f);
+  canvas.fillScreen(GROUND);
+  const int top0 = bar ? BAR_H : 0, bottom = H - 4 - bottomGap, inner = W - 2 * PAD - 6;
+  if (!inkText.length()) {
+    String dl[2];
+    int dn = dimText.length() ? wrap(dimText, F12, dl, 2, W - 2 * PAD) : 0;
+    int eyesBottom = bottom - (label.length() ? 22 : 0) - dn * 15 - 4;
+    int cy = (top0 + eyesBottom) / 2 + 2;
+    float sc = constrain((eyesBottom - top0 - 20) / 70.0f, 0.5f, 0.9f);
+    glow(W / 2, cy, (int)(76 * sc) + 10, c, 0.24f);
+    eyes(m, W / 2, cy, sc, c, bgTint);
+    int y = eyesBottom + 4;
+    if (label.length()) {
+      txt(label, W / 2, y + 9, fit(label, W - 2 * PAD, {F18, F14, F12}), c, middle_center);
+      y += 22;
+    }
+    for (int i = 0; i < dn; i++) txt(dl[i], W / 2, y + 7 + i * 15, F12, blend(DIM, GROUND, 0.1f), middle_center);
+  } else {
+    // the band: eyes on the left, the label and / or the heard line beside them
+    const int band = 40, ex = PAD + 25, cy = top0 + band / 2, tx = 66, tw = W - tx - PAD;
+    glow(ex, cy, 30, c, 0.2f);
+    eyes(m, ex, cy, 0.42f, c, bgTint);
+    if (label.length()) {
+      txt(label, tx, cy - (dimText.length() ? 8 : 0), fit(label, tw, {F18, F14, F12}), c);
+      if (dimText.length()) txt(ellipsize(dimText, F9, tw), tx, cy + 10, F9, DIM);
+    } else if (dimText.length()) {
+      String dl[2];
+      int dn = wrap(dimText, F12, dl, 2, tw);
+      for (int i = 0; i < dn; i++) txt(dl[i], tx, cy - (dn - 1) * 8 + i * 16, F12, DIM);
+    }
+    // the panel
+    const int panelTop = top0 + band, ph = bottom - panelTop;
+    const uint16_t pb = blend(GROUND, c, 0.17f);
+    canvas.fillRoundRect(4, panelTop, W - 8, ph, 12, pb);
+    canvas.drawFastHLine(18, panelTop, W - 36, blend(pb, c, 0.45f));
+    const lgfx::IFont* tf = fitBox(inkText, inner, ph - 10, {F14, F12, F9});
+    paragraph(inkText, tf, PAD + 3, panelTop + 6, inner, (ph - 10) / lineH(tf), INK, lineH(tf));
+  }
+  if (bar) statusBar(barTitle, d, c);
+}
+
 // Agent screens: mood glow + big eyes on top, a mood-tinted panel with the text at
 // the bottom. The panel grows with the text; the eyes shrink to make room.
 static void moodScreen(Mood m, const String& label, const String& dimText, const String& inkText, bool bar,
                        const String& barTitle, const Dash* d, int bottomGap) {
+  if (orient_ != 0) return moodScreenWide(m, label, dimText, inkText, bar, barTitle, d, bottomGap);
   const uint16_t c = moodColor(m);
   canvas.fillScreen(GROUND);
   const int top0 = bar ? BAR_H : 0, inner = W - 2 * PAD - 6;
@@ -558,28 +694,37 @@ static bool     haveCard = false, transActive = false, transPeek = false, forceP
 static uint32_t transAt = 0, lastPeekAt = 0;
 static int      changesSincePeek = 0;
 constexpr uint32_t FADE_MS = 170, PEEK_MS = 1500;
-constexpr int CARD_TOP = 146, CARD_H = 70;
+constexpr int CARD_TOP = 146, CARD_H = 70;           // portrait
+constexpr int CARD_TOP_WIDE = 66, CARD_H_WIDE = 58;  // landscape
+static int cardTop_ = CARD_TOP, cardH_ = CARD_H;
 
 bool homeAnimating() { return transActive; }
 void forceHomePeek() { forcePeek = true; }
 
 static void drawCard(const CardView& v, float alpha, int dip) {
-  const int x = 4, y = CARD_TOP + dip, w = W - 8;
+  const int x = 4, y = cardTop_ + dip, w = W - 8;
+  const bool wide = cardH_ != CARD_H;  // landscape: lower and wider, two lines of text
   if (v.urgent) {
-    canvas.fillRoundRect(x, y, w, CARD_H, 12, ASK);
+    canvas.fillRoundRect(x, y, w, cardH_, 12, ASK);
     { const lgfx::IFont* f = fit(v.a, w - 14, {F14, F12});
-      txt(ellipsize(v.a, f, w - 14), PAD + 4, y + 16, f, blend(ON_ASK, ASK, 1 - alpha)); }
-    paragraph(v.b, F12, PAD + 4, y + 30, w - 14, 2, blend(ON_ASK, ASK, 1 - alpha), 15);
+      txt(ellipsize(v.a, f, w - 14), PAD + 4, y + (wide ? 13 : 16), f, blend(ON_ASK, ASK, 1 - alpha)); }
+    paragraph(v.b, F12, PAD + 4, y + (wide ? 24 : 30), w - 14, 2, blend(ON_ASK, ASK, 1 - alpha), 15);
     return;
   }
   const uint16_t kc = kindColor(v.kind);
   // the card's tint fades with the text, through a neutral grey, so kinds blend into each other
   const uint16_t bg = blend(blend(GROUND, INK, 0.04f), kc, 0.13f * alpha);
-  canvas.fillRoundRect(x, y, w, CARD_H, 12, bg);
+  canvas.fillRoundRect(x, y, w, cardH_, 12, bg);
   if (alpha <= 0.02f) return;
-  cardIcon(v.kind, PAD + 7, y + 15, blend(bg, kc, alpha));
+  const int ty = y + (wide ? 13 : 15);
+  cardIcon(v.kind, PAD + 7, ty, blend(bg, kc, alpha));
   { const lgfx::IFont* f = fit(v.a, w - 28, {F12, F9});
-    txt(ellipsize(v.a, f, w - 28), PAD + 18, y + 15, f, blend(bg, kc, alpha)); }
+    txt(ellipsize(v.a, f, w - 28), PAD + 18, ty, f, blend(bg, kc, alpha)); }
+  if (wide) {
+    const lgfx::IFont* f = fitBox(v.b, w - 14, 2 * 15, {F12, F9});
+    paragraph(v.b, f, PAD + 6, y + 24, w - 14, 2, blend(bg, INK, 0.9f * alpha), f == F9 ? 14 : 15);
+    return;
+  }
   bool longText = v.b.length() > 44;
   paragraph(v.b, longText ? F9 : F12, PAD + 18 - 12, y + 27, w - 14, longText ? 3 : 3,
             blend(bg, INK, 0.9f * alpha), longText ? 13 : 15);
@@ -619,7 +764,7 @@ static void homeCard(const CardView& v) {
     float rise = p < 0.22f ? smooth(p / 0.22f) : p > 0.78f ? 1 - smooth((p - 0.78f) / 0.22f) : 1;
     lookX = p < 0.25f ? 0 : p < 0.5f ? -7 * smooth((p - 0.25f) / 0.1f) : p < 0.75f ? 7 * smooth((p - 0.5f) / 0.12f) : 0;
     int dip = (int)(5 * sinf(PI * p));
-    eyes(Mood::IDLE, W / 2, CARD_TOP + 14 - (int)(30 * rise) + dip, 0.42f, AGENT, GROUND);
+    eyes(Mood::IDLE, W / 2, cardTop_ + 14 - (int)(30 * rise) + dip, 0.42f, AGENT, GROUND);
     lookX = NAN;
     drawCard(nextCard, 0, dip);  // empty card in front hides the lower half of the eyes
   } else if (e < 2 * FADE_MS + mid) {  // the new one fades in
@@ -631,11 +776,43 @@ static void homeCard(const CardView& v) {
   }
 }
 
+// Landscape home: the clock on the left, date + weather on the right, the card below.
+static void homeTopWide(const Dash& d) {
+  int right = W - PAD, x0 = PAD;
+  if (d.clock.length()) {
+    canvas.setFont(F44);
+    int cw = canvas.textWidth(d.clock);
+    txt(d.clock, PAD, 44, F44, INK, middle_left);
+    txt(d.ampm, PAD + cw + 3, 58, F12, DIM, baseline_left);
+    canvas.setFont(F12);
+    x0 = PAD + cw + 3 + canvas.textWidth(d.ampm) + 10;
+  } else {
+    txt(d.name, PAD, 38, fit(d.name, 130, {F24, F12}), INK, middle_left);
+    txt("time comes from the Mac agent", PAD, 58, F9, FAINT, middle_left);
+    x0 = 146;
+  }
+  const int room = right - x0;
+  if (d.date.length()) txt(ellipsize(d.date, F12, room), right, 32, F12, DIM, middle_right);
+  if (d.wxValid) {
+    String t = String(d.wxTemp) + "°";
+    canvas.setFont(F14);
+    int tw = canvas.textWidth(t);
+    txt(t, right, 50, F14, INK, middle_right);
+    weatherIcon(d.wxIcon, d.wxDay, right - tw - 22, 41, 18);
+    txt(ellipsize(d.wxCond, F9, room), right, 64, F9, DIM, middle_right);
+  }
+}
+
 static void drawHome(const Dash& d) {
   statusBar("", &d);
+  const bool wide = orient_ != 0;
+  cardTop_ = wide ? CARD_TOP_WIDE : CARD_TOP;
+  cardH_ = wide ? CARD_H_WIDE : CARD_H;
 
   // Clock + date (the agent sends the time; until then just the name)
-  if (d.clock.length()) {
+  if (wide) {
+    homeTopWide(d);
+  } else if (d.clock.length()) {
     canvas.setFont(F44);
     int cw = canvas.textWidth(d.clock);
     canvas.setFont(F12);
@@ -650,7 +827,7 @@ static void drawHome(const Dash& d) {
   }
 
   // Weather chip
-  if (d.wxValid) {
+  if (d.wxValid && !wide) {
     String t = String(d.wxTemp) + "°";
     canvas.setFont(F14);
     int tw = canvas.textWidth(t);
@@ -683,18 +860,20 @@ static void drawHome(const Dash& d) {
 }
 
 // Status: a big battery number + level bar, the last hour (when there's enough
-// of it), then the device's details. Everything on its own line.
+// of it), then the device's details. Everything on its own line. Landscape: the
+// battery on the left, the details on the right (no last-hour graph).
 static void drawStatus(const Dash& d) {
   static const char* BT[] = {"connected", "waiting", "off"};
   statusBar("Status", &d);
   const int pct = d.battery;
   const uint16_t lc = d.charging ? OK : pct >= 0 && pct < 15 ? ERR : pct >= 0 && pct < 30 ? AMBER : INK;
+  const bool wide = orient_ != 0;
   // big number
   String num = pct >= 0 ? String(pct) : "--";
   canvas.setFont(F44);
   int nw = canvas.textWidth(num);
-  txt(num, PAD, 50, F44, lc, middle_left);
-  txt("%", PAD + nw + 2, 60, F18, blend(lc, GROUND, 0.3f), baseline_left);
+  txt(num, PAD, wide ? 44 : 50, F44, lc, middle_left);
+  txt("%", PAD + nw + 2, wide ? 54 : 60, F18, blend(lc, GROUND, 0.3f), baseline_left);
   // state + time, right-aligned beside it
   int eta = battery::etaMinutes();
   String state = d.charging ? "charging" : battery::full() ? "full" : battery::usbPower() ? "on USB" : "on battery";
@@ -702,6 +881,25 @@ static void drawStatus(const Dash& d) {
   if (eta > 0 && eta < 24 * 60) {
     String t = eta >= 60 ? String(eta / 60) + "h " + String(eta % 60) + "m" : String(eta) + " min";
     when = d.charging ? "full in " + t : t + " left";
+  }
+  if (wide) {
+    const int colW = 96, x0 = 114;
+    txt(state, PAD, 74, F12, d.charging ? OK : DIM);
+    if (when.length()) txt(when, PAD, 90, F9, DIM);
+    canvas.fillRoundRect(PAD, 102, colW, 8, 4, CHIP);
+    if (pct >= 0) canvas.fillRoundRect(PAD, 102, max(8, colW * pct / 100), 8, 4, lc);
+    auto rowW = [&](const char* label, const String& value, int y, uint16_t color) {
+      txt(label, x0, y, F9, DIM);
+      int room = W - PAD - x0 - canvas.textWidth(label) - 6;
+      const lgfx::IFont* f = fit(value, room, {F12, F9});
+      txt(ellipsize(value, f, room), W - PAD, y, f, color, middle_right);
+    };
+    rowW("Mac", String("slot ") + d.slot + " - " + BT[d.bt], 32, d.bt == 0 ? INK : ASK);
+    rowW("Agent", d.agentLinked ? "linked" : "offline", 52, d.agentLinked ? AGENT : DIM);
+    rowW("Wi-Fi", d.wifi, 72, d.wifi == "off" ? DIM : INK);
+    rowW("Uptime", fmtUptime(d.uptimeS), 92, INK);
+    txt(ellipsize(d.name + "  -  fw " + d.fw, F9, W - PAD - x0), x0 + (W - PAD - x0) / 2, 114, F9, FAINT, middle_center);
+    return;
   }
   txt(state, W - PAD, when.length() ? 40 : 48, F12, d.charging ? OK : DIM, middle_right);
   if (when.length()) txt(when, W - PAD, 56, F9, DIM, middle_right);
@@ -751,7 +949,7 @@ static void drawAgentPage(const Dash& d) {
 }
 
 void drawPage(Page p, const Dash& d) {
-  dockEnd();  // normal screens are portrait
+  wide();  // landscape when held sideways
   canvas.fillScreen(GROUND);
   switch (p) {
     case Page::HOME:    drawHome(d); break;
@@ -781,9 +979,9 @@ static void orb(int cx, int cy, uint16_t c) {
   canvas.fillCircle(cx - r / 4, cy - r / 3, r / 5, blend(c, TFT_WHITE, 0.55f));
 }
 
-// A row of bars following the mic level.
-static void meter(int y, uint16_t c) {
-  const int n = 22, gap = 2, x0 = PAD + 4, w = (W - 2 * x0 - (n - 1) * gap) / n;
+// A row of n bars following the mic level, from x0 to x1.
+static void meter(int y, uint16_t c, int x0, int x1, int n = 22) {
+  const int gap = 2, w = (x1 - x0 - (n - 1) * gap) / n;
   const uint32_t t = millis();
   for (int i = 0; i < n; i++) {
     float wob = 0.5f + 0.5f * sinf(t / 110.0f + i * 0.9f);
@@ -795,17 +993,29 @@ static void meter(int y, uint16_t c) {
 
 // Button A held: dictation.
 void drawHolding(const Combo& c, bool usbMic, bool wirelessMic) {
-  dockEnd();  // normal screens are portrait
+  bool landscape = wide();
   canvas.fillScreen(GROUND);
-  txt("Dictating", W / 2, 24, F18, WISPR, middle_center);
   String parts[5];
   int n = comboParts(c, parts, 5);
   String one;
   for (int i = 0; i < n; i++) one += (i ? "+" : "") + parts[i];
   bool stickMic = usbMic || wirelessMic;
+  if (landscape) {  // the orb on the left, the words and the meter on the right
+    const int x0 = 118, room = W - PAD - x0;
+    orb(58, 68, WISPR);
+    txt("Dictating", x0, 24, F18, WISPR);
+    txt(ellipsize(one + " held", F12, room), x0, 46, F12, INK);
+    txt(stickMic ? "stick mic on" : "Mac's mic", x0, 62, F9, DIM);
+    meter(88, WISPR, x0, W - PAD, 14);
+    paragraph(usbMic ? "Wispr hears the stick (USB)" : wirelessMic ? "Wispr hears the stick (BT)" : "plug in USB for the stick mic",
+              F9, x0, 106, room, 2, FAINT, 13);
+    canvas.pushSprite(0, 0);
+    return;
+  }
+  txt("Dictating", W / 2, 24, F18, WISPR, middle_center);
   txt(one + " held - " + (stickMic ? "stick mic on" : "Mac's mic"), W / 2, 46, F9, DIM, middle_center);
   orb(W / 2, 112, WISPR);
-  meter(186, WISPR);
+  meter(186, WISPR, PAD + 4, W - PAD - 4);
   txt(usbMic ? "Wispr hears the stick (USB)" : wirelessMic ? "Wispr hears the stick (BT)" : "plug in USB for the stick mic",
       W / 2, 216, F9, FAINT, middle_center);
   canvas.pushSprite(0, 0);
@@ -813,7 +1023,7 @@ void drawHolding(const Combo& c, bool usbMic, bool wirelessMic) {
 
 // Button B held: talking to the agent.
 void drawTalk(bool linked) {
-  dockEnd();  // normal screens are portrait
+  wide();
   if (!linked) moodScreen(Mood::OFFLINE, "Agent offline", "start it on the Mac", "", false, "", nullptr, 0);
   else moodScreen(Mood::LISTEN, "Listening", "release to send", "", false, "", nullptr, 0);
   canvas.pushSprite(0, 0);
@@ -826,7 +1036,7 @@ static String dots(const String& word) {
 }
 
 void drawAgent(const String& state, const String& heard, const String& text) {
-  dockEnd();  // normal screens are portrait
+  wide();
   String h = heard.length() ? "\"" + heard + "\"" : "";
   if (state == "done") moodScreen(Mood::DONE, "", h, text, false, "", nullptr, 0);
   else if (state == "error") moodScreen(Mood::ERROR, "Hmm", h, text, false, "", nullptr, 0);
@@ -837,15 +1047,44 @@ void drawAgent(const String& state, const String& heard, const String& text) {
 }
 
 void drawMood(int mood, const String& label) {
-  dockEnd();  // normal screens are portrait
+  wide();
   moodScreen((Mood)constrain(mood, 0, (int)Mood::COUNT - 1), label, "", "", false, "", nullptr, 0);
   canvas.pushSprite(0, 0);
 }
 
+// Landscape: the tool and who asks on the top line, the command in a wide box, the
+// buttons along the bottom with A at the end nearest the real button.
+static void promptWide(const String& tool, const String& hint, const String& from) {
+  String who = from.length() ? from + " asks" : "Claude asks";
+  canvas.setFont(F12);
+  int ww = canvas.textWidth(who);
+  txt(who, W - PAD, 15, F12, ON_ASK, middle_right);
+  String t = tool.length() ? tool : "Permission";
+  const int tRoom = W - 2 * PAD - ww - 8;
+  const lgfx::IFont* tf = fit(t, tRoom, {F24, F18, F14});
+  txt(ellipsize(t, tf, tRoom), PAD, 15, tf, ON_ASK);
+  const int boxY = 30, boxH = 68, inner = W - 2 * PAD - 4;
+  canvas.fillRoundRect(PAD - 4, boxY, W - 2 * (PAD - 4), boxH, 8, ON_ASK);
+  const lgfx::IFont* hf = fitBox(hint, inner, boxH - 10, {F12, F9});
+  paragraph(hint, hf, PAD + 2, boxY + 6, inner, (boxH - 10) / lineH(hf), rgb(0xff, 0xe2, 0xb8), lineH(hf));
+  // A (approve) at its end, B (deny) at the other
+  const int a = aEnd(), cw = 78, ch = 28, cy = 103;
+  const int ax = a > 0 ? W - 4 - cw : 4, bx = a > 0 ? 4 : W - 4 - cw;
+  keyChip("A  yes", ax, cy, cw, ch, ON_ASK, ASK, true, a);
+  keyChip("B  no", bx, cy, cw, ch, ON_ASK, ASK, false, 0);
+  txt("no answer:", W / 2, cy + 8, F9, ON_ASK, middle_center);
+  txt("asks on the Mac", W / 2, cy + 20, F9, ON_ASK, middle_center);
+}
+
 // Claude Code permission prompt: the whole screen turns orange.
 void drawPrompt(const String& tool, const String& hint, const String& from) {
-  dockEnd();  // normal screens are portrait
+  bool landscape = wide();
   canvas.fillScreen(ASK);
+  if (landscape) {
+    promptWide(tool, hint, from);
+    canvas.pushSprite(0, 0);
+    return;
+  }
   txt(from.length() ? from + " asks" : "Claude asks", W / 2, 18, F12, ON_ASK, middle_center);
   String t = tool.length() ? tool : "Permission";
   txt(t, W / 2, 46, fit(t, W - 2 * PAD, {F24, F18, F14}), ON_ASK, middle_center);
@@ -864,8 +1103,24 @@ void drawPrompt(const String& tool, const String& hint, const String& from) {
 // A question from a Claude session (the agent's stick tools): orange like an approval, but the
 // question gets the room and each button its own row with the option's label.
 void drawAsk(const String& question, const String& from, const String& a, const String& b) {
-  dockEnd();  // normal screens are portrait
+  bool landscape = wide();
   canvas.fillScreen(ASK);
+  if (landscape) {  // the question in a wide box, the two answers side by side (A at its end)
+    txt(from.length() ? from + " asks" : "Claude asks", PAD, 12, F12, ON_ASK);
+    txt("shake: dismiss", W - PAD, 12, F9, ON_ASK, middle_right);
+    const int boxY = 24, boxH = 74, inner = W - 2 * PAD - 4;
+    canvas.fillRoundRect(PAD - 4, boxY, W - 2 * (PAD - 4), boxH, 8, ON_ASK);
+    const lgfx::IFont* qf = fitBox(question, inner, boxH - 10, {F14, F12, F9});
+    paragraph(question, qf, PAD + 2, boxY + 6, inner, (boxH - 10) / lineH(qf), rgb(0xff, 0xe2, 0xb8), lineH(qf));
+    String la = String(prompt::button('A', a.c_str(), "yes", 16).c_str());
+    String lb = String(prompt::button('B', b.c_str(), b.length() || !a.length() ? "no" : "dismiss", 16).c_str());
+    const int e = aEnd(), cw = (W - 8 - 6) / 2, ch = 30, cy = 102;
+    const int ax = e > 0 ? W - 4 - cw : 4, bx = e > 0 ? 4 : W - 4 - cw;
+    keyChip(la, ax, cy, cw, ch, ON_ASK, ASK, true, e);
+    keyChip(lb, bx, cy, cw, ch, ON_ASK, ASK, false, 0);
+    canvas.pushSprite(0, 0);
+    return;
+  }
   txt(from.length() ? from + " asks" : "Claude asks", W / 2, 18, F12, ON_ASK, middle_center);
   canvas.fillRoundRect(PAD - 4, 34, W - 2 * (PAD - 4), 122, 8, ON_ASK);
   paragraph(question, F12, PAD + 2, 42, W - 2 * PAD - 4, 6, rgb(0xff, 0xe2, 0xb8), 18);
@@ -881,12 +1136,23 @@ void drawAsk(const String& question, const String& from, const String& a, const 
 }
 
 void drawPairing(uint32_t code) {
-  dockEnd();  // normal screens are portrait
+  bool landscape = wide();
   canvas.fillScreen(GROUND);
   statusBar("Pair with Mac?", nullptr, ASK);
-  txt("Code on the Mac:", W / 2, 58, F12, DIM, middle_center);
   char c[8];
   snprintf(c, sizeof c, "%03lu %03lu", (unsigned long)(code / 1000), (unsigned long)(code % 1000));
+  if (landscape) {  // the code in the middle, accept at A's end, reject at the other
+    txt("Code on the Mac:", W / 2, 32, F12, DIM, middle_center);
+    card(PAD - 4, 42, W - 2 * (PAD - 4), 44);
+    txt(c, W / 2, 64, fit(c, W - 2 * PAD, {F24, F18}), INK, middle_center);
+    txt("Same number?", W / 2, 98, F12, DIM, middle_center);
+    const int e = aEnd();
+    chip("A  accept", e > 0 ? W * 3 / 4 : W / 4, 120, OK);
+    chip("B  reject", e > 0 ? W / 4 : W * 3 / 4, 120, ERR);
+    canvas.pushSprite(0, 0);
+    return;
+  }
+  txt("Code on the Mac:", W / 2, 58, F12, DIM, middle_center);
   card(PAD - 4, 76, W - 2 * (PAD - 4), 56);
   txt(c, W / 2, 104, fit(c, W - 2 * PAD, {F24, F18}), INK, middle_center);
   txt("Same number?", W / 2, 152, F12, DIM, middle_center);
@@ -925,11 +1191,30 @@ void drawMenu(const MenuView& m) {
   canvas.pushSprite(0, 0);
 }
 
-// Lines ending in ':' are labels (grey); the others are values (white).
+// Lines ending in ':' are labels (grey); the others are values (white). Landscape:
+// each label with its value on one row.
 void drawInfo(const char* title, const String lines[], int count, const char* hint) {
-  dockEnd();  // normal screens are portrait
+  bool landscape = wide();
   canvas.fillScreen(GROUND);
   statusBar(title, nullptr);
+  if (landscape) {
+    card(PAD - 4, BAR_H + 4, W - 2 * (PAD - 4), H - BAR_H - 22);
+    const int vx = 92;
+    int y = BAR_H + 18;
+    String label;
+    for (int i = 0; i < count && y < H - 20; i++) {
+      if (lines[i].endsWith(":")) { label = lines[i]; continue; }
+      int x = label.length() ? vx : PAD + 2, room = W - PAD - 2 - x;
+      if (label.length()) txt(ellipsize(label, F9, vx - PAD - 6), PAD + 2, y, F9, DIM);
+      const lgfx::IFont* f = fit(lines[i], room, {F14, F12, F9});
+      txt(ellipsize(lines[i], f, room), x, y, f, INK);
+      label = "";
+      y += 26;
+    }
+    txt(hint, W / 2, H - 9, F9, FAINT, middle_center);
+    canvas.pushSprite(0, 0);
+    return;
+  }
   card(PAD - 4, BAR_H + 6, W - 2 * (PAD - 4), H - BAR_H - 34);
   int y = BAR_H + 22;
   for (int i = 0; i < count; i++) {
@@ -948,10 +1233,21 @@ void drawInfo(const char* title, const String lines[], int count, const char* hi
 
 // A short message (saved, restarting, standby...). `accent` colours the title.
 void drawMessage(const char* title, const char* sub, uint16_t accent) {
-  dockEnd();  // normal screens are portrait
+  bool landscape = wide();
   canvas.fillScreen(GROUND);
   // The callers pass dark status colours; brighten them for text
   uint16_t c = accent == 0x03E0 ? OK : accent == 0xC300 ? ASK : accent == 0x2104 ? DIM : INK;
+  if (landscape) {  // centred; the wide lines need fewer of them
+    String tl[2], sl[3];
+    int tn = wrap(title, F18, tl, 2, W - 2 * PAD), sn = sub ? wrap(sub, F12, sl, 3, W - 2 * PAD) : 0;
+    int y = (H - (9 + tn * 24 + sn * 16)) / 2;
+    canvas.fillRoundRect(W / 2 - 18, y, 36, 5, 2, c);
+    y += 9 + 12;
+    for (int i = 0; i < tn; i++, y += 24) txt(tl[i], W / 2, y, F18, INK, middle_center);
+    for (int i = 0; i < sn; i++, y += 16) txt(sl[i], W / 2, y - 4, F12, DIM, middle_center);
+    canvas.pushSprite(0, 0);
+    return;
+  }
   canvas.fillRoundRect(W / 2 - 18, 62, 36, 5, 2, c);
   String tl[3];
   int tn = wrap(title, F18, tl, 3, W - 2 * PAD);
@@ -1048,12 +1344,12 @@ struct Bit { float x, y, vx, vy, spin; uint16_t c; bool on; };
 static Bit bits[48];
 static uint32_t confettiLast = 0;
 
-static void confettiReset() {
+static void confettiReset(float x, float y) {  // the burst starts at x, y (the icon)
   static const uint16_t COLORS[] = {WISPR, AGENT, ASK, OK, ERR, SUN, RAIN, INK};
   for (int i = 0; i < 48; i++) {
     Bit& b = bits[i];
     float a = (esp_random() % 360) * PI / 180, v = 1.5f + (esp_random() % 100) / 25.0f;
-    b = {W / 2.0f, 92, cosf(a) * v, sinf(a) * v - 2.5f, (float)(esp_random() % 628) / 100, COLORS[i % 8], true};
+    b = {x, y, cosf(a) * v, sinf(a) * v - 2.5f, (float)(esp_random() % 628) / 100, COLORS[i % 8], true};
   }
   confettiLast = millis();
 }
@@ -1092,19 +1388,38 @@ static float easeOutBack(float t) {
 }
 
 static void centredLines(const String& text, const lgfx::IFont* f, int cy, int maxLines, uint16_t color, int lh) {
-  String lines[4];
-  int n = wrap(text, f, lines, min(maxLines, 4), W - 2 * PAD);
-  int y = cy - (n - 1) * lh / 2;
-  for (int i = 0; i < n; i++) txt(lines[i], W / 2, y + i * lh, f, color, middle_center);
+  centredLines(text, f, W / 2, cy, W - 2 * PAD, maxLines, color, lh);
+}
+
+// Landscape events: the icon on the left, the title and the line under it on the right
+// (the block centred on cy). shadow: a dark copy under the title, for busy backgrounds.
+constexpr int EV_X = 54, EV_TX = 106;  // icon centre, text column start
+static void eventText(const String& title, std::initializer_list<const lgfx::IFont*> fonts, const String& sub,
+                      int cy, uint16_t ink, uint16_t subInk, bool shadow) {
+  const int w = W - PAD - EV_TX, cx = EV_TX + w / 2;
+  const lgfx::IFont* f = fitBox(title, w, 2 * 24, fonts);
+  String tl[2], sl[3];
+  int tn = wrap(title, f, tl, 2, w), sn = sub.length() ? wrap(sub, F12, sl, 3, w) : 0;
+  const int th = lineH(f), gap = sn ? 6 : 0;
+  int y = cy - (tn * th + gap + sn * 15) / 2 + th / 2;
+  for (int i = 0; i < tn; i++, y += th) {
+    if (shadow) txt(tl[i], cx + 1, y + 1, f, GROUND, middle_center);
+    txt(tl[i], cx, y, f, ink, middle_center);
+  }
+  y += gap - th / 2 + 7;
+  for (int i = 0; i < sn; i++, y += 15) txt(sl[i], cx, y, F12, subInk, middle_center);
 }
 
 void drawEvent(uint8_t level, const String& title, const String& sub, const String& icon, uint32_t ms) {
-  dockEnd();  // normal screens are portrait
+  const bool landscape = wide();
   const float t = ms / 1000.0f;
+  // where the icon goes: portrait above the text, landscape on its left
+  const int ix = landscape ? EV_X : W / 2;
   if (level == 0) {
     // CELEBRATE: colour pulse, white flash at the start, confetti, party face, big icon
+    const int iy = landscape ? 80 : 92;
     static uint32_t lastMs = UINT32_MAX;
-    if (ms < lastMs || lastMs == UINT32_MAX) confettiReset();
+    if (ms < lastMs || lastMs == UINT32_MAX) confettiReset(ix, iy);
     lastMs = ms;
     static const uint16_t HUES[] = {WISPR, AGENT, ASK, OK};
     uint16_t hue = HUES[(ms / 450) % 4];
@@ -1112,13 +1427,18 @@ void drawEvent(uint8_t level, const String& title, const String& sub, const Stri
     uint16_t bg = ms < 140 ? blend(INK, hue, ms / 140.0f) : blend(GROUND, hue, pulse);
     canvas.fillScreen(bg);
     confettiDraw(ms > 1200);
-    eyes(Mood::PARTY, W / 2, 30, 0.42f, INK, bg);
+    eyes(Mood::PARTY, ix, landscape ? 24 : 30, landscape ? 0.36f : 0.42f, INK, bg);
     float pop = easeOutBack(ms / 450.0f);
-    int r = (int)(34 * pop);
+    int r = (int)((landscape ? 30 : 34) * pop);
     if (r > 2) {
-      canvas.fillCircle(W / 2, 92, r + 4, blend(hue, TFT_WHITE, 0.35f));
-      canvas.fillCircle(W / 2, 92, r, GROUND);
-      eventIcon(icon, W / 2, 92, (int)(54 * pop), blend(hue, TFT_WHITE, 0.25f), GROUND);
+      canvas.fillCircle(ix, iy, r + 4, blend(hue, TFT_WHITE, 0.35f));
+      canvas.fillCircle(ix, iy, r, GROUND);
+      eventIcon(icon, ix, iy, (int)((landscape ? 48 : 54) * pop), blend(hue, TFT_WHITE, 0.25f), GROUND);
+    }
+    if (landscape) {
+      eventText(title, {F24, F18, F14}, sub, H / 2, INK, blend(INK, bg, 0.15f), true);
+      canvas.pushSprite(0, 0);
+      return;
     }
     const lgfx::IFont* f = fit(title, W - 2 * PAD, {F24, F18, F14});
     String tl[3];
@@ -1138,14 +1458,20 @@ void drawEvent(uint8_t level, const String& title, const String& sub, const Stri
     const uint16_t ink = rgb(0x05, 0x26, 0x22);
     if (in >= 1) {
       float pop = easeOutBack((ms - 260) / 380.0f);
-      int r = (int)(38 * pop);
+      int r = (int)(38 * pop), iy = landscape ? H / 2 - 4 : 84;
       if (r > 2) {
-        canvas.fillCircle(W / 2, 84, r, ink);
-        eventIcon(icon, W / 2, 84, (int)(54 * pop), blend(AGENT, TFT_WHITE, 0.3f), ink);
+        canvas.fillCircle(ix, iy, r, ink);
+        eventIcon(icon, ix, iy, (int)(54 * pop), blend(AGENT, TFT_WHITE, 0.3f), ink);
+      }
+      int bw = (int)((W - 2 * PAD) * (1 - constrain(ms / 4000.0f, 0.0f, 1.0f)));
+      if (landscape) {
+        eventText(title, {F18, F14, F12}, sub, H / 2 - 4, ink, blend(ink, AGENT, 0.25f), false);
+        canvas.fillRoundRect(PAD, H - 8, bw, 4, 2, ink);
+        canvas.pushSprite(0, 0);
+        return;
       }
       centredLines(title, fit(title, W - 2 * PAD, {F18, F14, F12}), 152, 2, ink, 21);
       centredLines(sub, F12, 192, 3, blend(ink, AGENT, 0.25f), 15);
-      int bw = (int)((W - 2 * PAD) * (1 - constrain(ms / 4000.0f, 0.0f, 1.0f)));
       canvas.fillRoundRect(PAD, H - 10, bw, 4, 2, ink);
     }
   } else {
@@ -1154,11 +1480,17 @@ void drawEvent(uint8_t level, const String& title, const String& sub, const Stri
     uint16_t bg = blend(ASK, rgb(0xff, 0xb8, 0x4d), p * 0.6f);
     canvas.fillScreen(bg);
     float pop = easeOutBack(ms / 400.0f);
-    int r = (int)(36 * pop);
+    int r = (int)(36 * pop), iy = landscape ? H / 2 - 6 : 82;
     if (r > 2) {
-      canvas.drawCircle(W / 2, 82, r + 6 + (int)(p * 5), ON_ASK);
-      canvas.fillCircle(W / 2, 82, r, ON_ASK);
-      eventIcon(icon, W / 2, 82, (int)(52 * pop), ASK, ON_ASK);
+      canvas.drawCircle(ix, iy, r + 6 + (int)(p * 5), ON_ASK);
+      canvas.fillCircle(ix, iy, r, ON_ASK);
+      eventIcon(icon, ix, iy, (int)(52 * pop), ASK, ON_ASK);
+    }
+    if (landscape) {
+      eventText(title, {F18, F14, F12}, sub, H / 2 - 8, ON_ASK, rgb(0x4a, 0x2c, 0x05), false);
+      txt("press any button", EV_TX + (W - PAD - EV_TX) / 2, H - 10, F9, ON_ASK, middle_center);
+      canvas.pushSprite(0, 0);
+      return;
     }
     centredLines(title, fit(title, W - 2 * PAD, {F18, F14, F12}), 148, 2, ON_ASK, 21);
     centredLines(sub, F12, 188, 3, rgb(0x4a, 0x2c, 0x05), 15);
@@ -1169,27 +1501,8 @@ void drawEvent(uint8_t level, const String& title, const String& sub, const Stri
 
 // --- Dock: a desk clock while charging -------------------------------------------------
 
-static bool dimmed_ = false;
 constexpr uint16_t NIGHT    = rgb(0x7a, 0x3b, 0x2b);  // deep amber-red, for the dark
 constexpr uint16_t NIGHT_LO = rgb(0x3a, 0x1c, 0x15);
-
-static void applyOrientation(int o) {
-  if (o == orient_) return;
-  orient_ = o;
-  canvas.deleteSprite();
-  M5.Display.setRotation(o == 0 ? (flipped_ ? 2 : 0) : o > 0 ? 1 : 3);
-  W = M5.Display.width();
-  H = M5.Display.height();
-  canvas.createSprite(W, H);
-}
-
-void dockEnd() {
-  applyOrientation(0);
-  if (dimmed_) {
-    dimmed_ = false;
-    if (awake_) M5.Display.setBrightness(brightness);
-  }
-}
 
 static void bolt(int x, int y, uint16_t c) {  // 7 x 11, top-left
   canvas.fillTriangle(x + 5, y, x, y + 6, x + 4, y + 6, c);

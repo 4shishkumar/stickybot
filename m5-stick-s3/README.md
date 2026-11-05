@@ -139,6 +139,16 @@ Portrait layout:
 
 Upside down? Menu → **Flip screen** (saved).
 
+With **Auto-rotate** on (the default) the motion sensor turns the screen to how you
+hold the stick. Held sideways, the screens with text to read (Claude approvals and
+questions, alerts, the agent's replies, Home / Agent / Status, messages) switch to a
+landscape layout; the A answer then sits at the end of the screen next to button A,
+with an arrow. The switch waits until the stick has been still on its new side for
+about half a second, and lying flat keeps the last one. The menu and the firmware
+update screen stay portrait. Menu → **Landscape screens** turns the landscape layouts
+off (portrait only, as before 1.9.0); with Auto-rotate off the screen stays portrait
+and follows **Flip screen**. Serial `screens` (or `screens landscape`) previews them.
+
 - While you hold button A, the screen turns purple: **Listening...**
 - The screen turns off after 20 s idle. Button A still works with the screen
   off (it sends the combo and wakes the screen). Triple-press B to wake it
@@ -160,6 +170,8 @@ The combo is saved in the stick's flash (NVS) and used immediately.
 | Key | next key (hold B to scroll fast); `(none)` = modifier-only |
 | Test combo | sends the combo you're editing |
 | Web settings | turns on the browser settings page (below) |
+| Auto-rotate | turn the screen with the motion sensor |
+| Landscape screens | held sideways, the reading screens turn landscape (needs Auto-rotate) |
 | Flip screen | rotate the screen 180° (saved) |
 | Forget pairing | press twice to confirm; stick restarts |
 | Save & exit / Cancel | |

@@ -8,6 +8,7 @@ namespace motion {
 constexpr uint32_t SAMPLE_MS = 20;
 
 static gestures::Detector det;
+static orientation::Tracker orient;
 static float    a[3] = {0, 0, 1}, g[3] = {0, 0, 0};
 static uint32_t lastSample = 0;
 static bool     ok = false;
@@ -21,6 +22,8 @@ void accel(float& x, float& y, float& z) { x = a[0]; y = a[1]; z = a[2]; }
 void gyro(float& x, float& y, float& z) { x = g[0]; y = g[1]; z = g[2]; }
 int upright() { return det.upright(); }
 int sideways() { return det.sideways(); }
+const orientation::Tracker& facing() { return orient; }
+void resetFacing(orientation::Orient o) { orient.reset(o); }
 
 Event poll() {
   uint32_t now = millis();
@@ -28,6 +31,7 @@ Event poll() {
   lastSample = now;
   if (!M5.Imu.getAccel(&a[0], &a[1], &a[2])) return Event::NONE;
   M5.Imu.getGyro(&g[0], &g[1], &g[2]);
+  orient.feed(now, a, g);
   return det.feed(now, a, g);
 }
 

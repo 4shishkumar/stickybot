@@ -112,6 +112,8 @@ void saveMotion(bool lift, bool faceDown, bool shake) {
 
 bool autoRotate()           { return prefs.getBool("autorot", true); }
 void saveAutoRotate(bool on) { prefs.putBool("autorot", on); }
+bool landscape()            { return prefs.getBool("landscape", true); }
+void saveLandscape(bool on)  { prefs.putBool("landscape", on); }
 
 String macPassword() { return getStr("macpass"); }
 void saveMacPassword(const String& p) {

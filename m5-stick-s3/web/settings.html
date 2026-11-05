@@ -107,6 +107,7 @@ progress{width:100%;margin-top:8px}
     <div class="row"><label style="flex:1"><input type="checkbox" id="m_face"> Face-down for 3 s = standby</label></div>
     <div class="row"><label style="flex:1"><input type="checkbox" id="m_shake"> Shake = Escape (denies a Claude prompt)</label></div>
     <div class="row hide" id="autoRotRow"><label style="flex:1"><input type="checkbox" id="autoRot"> Auto-rotate the screen</label></div>
+    <div class="row hide" id="landscapeRow"><label style="flex:1"><input type="checkbox" id="landscape"> Landscape screens when held sideways (with auto-rotate)</label></div>
   </div>
   <div class="row hide" id="brightRow"><span style="flex:1">Screen brightness</span>
     <select id="brightness" style="flex:0 0 auto;width:auto">
@@ -290,6 +291,8 @@ function render(s, full) {
   if (s.devMode !== undefined) $('devMode').checked = s.devMode;
   $('autoRotRow').classList.toggle('hide', s.autoRotate === undefined);
   if (s.autoRotate !== undefined) $('autoRot').checked = s.autoRotate;
+  $('landscapeRow').classList.toggle('hide', s.landscape === undefined);
+  if (s.landscape !== undefined) $('landscape').checked = s.landscape;
   if (s.motion) { $('m_lift').checked = s.motion.lift; $('m_face').checked = s.motion.face; $('m_shake').checked = s.motion.shake; }
   if (s.standby !== undefined && document.activeElement !== $('standby')) $('standby').value = s.standby;
   $('brightRow').classList.toggle('hide', s.brightness === undefined);
@@ -338,6 +341,7 @@ $('saveName').onclick = () => act('name', {name: $('devname').value.trim()}, 'Re
   act('motion', {lift: $('m_lift').checked ? 1 : 0, face: $('m_face').checked ? 1 : 0, shake: $('m_shake').checked ? 1 : 0}));
 $('devMode').onchange = () => act('devmode', {on: $('devMode').checked ? 1 : 0});
 $('autoRot').onchange = () => act('autorotate', {on: $('autoRot').checked ? 1 : 0});
+$('landscape').onchange = () => act('landscape', {on: $('landscape').checked ? 1 : 0});
 $('saveMacPass').onclick = async () => {
   const p = $('macpass').value;
   if (!p) return msg('Type the password first', true);

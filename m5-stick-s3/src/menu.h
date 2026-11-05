@@ -18,6 +18,7 @@ struct Draft {
   uint16_t enterDelayMs;  // 0 = off
   bool    lift, faceDown, shake;
   bool    autoRotate;
+  bool    landscape;   // landscape screens when held sideways (with auto-rotate)
   bool    devMode;
   bool    sound;
   uint8_t volume;  // 0-255

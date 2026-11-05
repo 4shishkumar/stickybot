@@ -66,6 +66,10 @@ struct MenuView {
 
 void begin();
 void setFlipped(bool flipped);
+// Auto-rotate: flipped = the portrait way up; side 0 = portrait, +1 / -1 = landscape
+// (rotation 1, button A on the right / rotation 3, A on the left) for the screens that
+// have a landscape layout. Takes effect at the next draw.
+void setOrientation(bool flipped, int side);
 void setBrightness(uint8_t pct);
 
 // Screen power. The screen is off by default to save battery: on for a while

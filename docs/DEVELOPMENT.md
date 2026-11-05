@@ -69,7 +69,8 @@ Useful serial commands on the stick (type `help` for all):
 | Command | |
 |---|---|
 | `show` | name, combo, Bluetooth, battery, slots |
-| `screens` | steps through every screen with sample data (~1 min) |
+| `screens` | steps through every screen with sample data, portrait then landscape (~3 min) |
+| `screens landscape` | only the landscape layouts (button A on the right, then on the left) |
 | `sound play <event or tune>` · `sound test` · `sound vol <0-255>` · `sound on/off` | try sounds |
 | `event celebrate\|nice\|headsup <title>\|<sub>\|<icon>` | show an event screen |
 | `@state` | the full state as JSON (machine command) |

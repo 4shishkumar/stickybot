@@ -9,7 +9,7 @@ constexpr uint16_t ENTER_STEPS[]   = {0, 500, 1000, 1500, 2000, 3000};
 
 enum Item {
   MOD_FN, MOD_CTRL, MOD_OPTION, MOD_SHIFT, MOD_CMD, KEY, TEST, ENTER,
-  SLOT, BT, FORGET, STANDBY, SOUND, VOLUME, WMIC, M_LIFT, M_FACE, M_SHAKE, BRIGHT, AUTOROT, FLIP, WEB, DEV, POWER, SAVE, CANCEL, COUNT
+  SLOT, BT, FORGET, STANDBY, SOUND, VOLUME, WMIC, M_LIFT, M_FACE, M_SHAKE, BRIGHT, AUTOROT, LANDSCAPE, FLIP, WEB, DEV, POWER, SAVE, CANCEL, COUNT
 };
 
 static Draft    draft_;
@@ -88,6 +88,7 @@ Action select() {
       draft_.brightnessPct = draft_.brightnessPct >= 100 ? 25 : (draft_.brightnessPct / 25 + 1) * 25;
       return Action::BRIGHTNESS;
     case AUTOROT: draft_.autoRotate = !draft_.autoRotate; return Action::REDRAW;
+    case LANDSCAPE: draft_.landscape = !draft_.landscape; return Action::REDRAW;
     case FLIP:    return Action::FLIP;
     case DEV:     draft_.devMode = !draft_.devMode; return Action::REDRAW;
     case SOUND:   draft_.sound = !draft_.sound; return Action::REDRAW;
@@ -131,6 +132,7 @@ ui::MenuView view() {
   v.lines[M_SHAKE] = String("Shake = Esc: ") + (draft_.shake ? "ON" : "off");
   v.lines[BRIGHT]  = String("Brightness: ") + draft_.brightnessPct + "%";
   v.lines[AUTOROT] = String("Auto-rotate: ") + (draft_.autoRotate ? "ON" : "off");
+  v.lines[LANDSCAPE] = String("Landscape screens: ") + (draft_.landscape ? "ON" : "off");
   v.lines[FLIP]    = "Flip screen";
   v.lines[DEV]     = String("Dev mode: ") + (draft_.devMode ? "ON" : "off");
   v.lines[SOUND]   = String("Sounds: ") + (draft_.sound ? "ON" : "off");
@@ -147,6 +149,7 @@ ui::MenuView view() {
   else if (sel == SLOT && draft_.slot != originalSlot) v.hint = "Save to switch Mac";
   else if (sel == DEV) v.hint = "USB: Wi-Fi on, OTA+logs";
   else if (sel == WMIC) v.hint = "A hold: Wispr mic by BT";
+  else if (sel == LANDSCAPE) v.hint = draft_.autoRotate ? "Held sideways: wide" : "Needs auto-rotate";
   else if (sel == TEST || sel == BT || sel == FLIP || sel == WEB || sel == POWER || sel >= SAVE) v.hint = "A next  B select";
   return v;
 }
