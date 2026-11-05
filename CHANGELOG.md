@@ -12,6 +12,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [1.8.6] - 2026-11-05
+
 The v1.8.5 build stopped on a test that assumed it runs on a Mac; this release has the
 same changes as 1.8.5 (the OpenRouter brain and the setup page).
 
@@ -130,7 +132,8 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/ashish-kumar-noon/stick-key/compare/v1.8.5...HEAD
+[Unreleased]: https://github.com/ashish-kumar-noon/stick-key/compare/v1.8.6...HEAD
+[1.8.6]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.6
 [1.8.5]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.5
 [1.8.4]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.4
 [1.8.3]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.8.3

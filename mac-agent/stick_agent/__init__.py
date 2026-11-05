@@ -5,4 +5,4 @@ Hold B on the stick and speak. The agent turns speech into text on the Mac
 otherwise hands the request to Claude Code (your own login), with permission
 prompts answered on the stick.
 """
-__version__ = "1.8.5"
+__version__ = "1.8.6"
