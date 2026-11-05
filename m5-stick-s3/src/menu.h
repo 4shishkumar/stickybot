@@ -23,6 +23,7 @@ struct Draft {
   bool    sound;
   uint8_t volume;  // 0-255
   bool    wmic;    // wireless Wispr mic
+  uint8_t face;    // the Home face (index in faces::at)
 };
 
 void         open(const Draft& current, bool btOff);

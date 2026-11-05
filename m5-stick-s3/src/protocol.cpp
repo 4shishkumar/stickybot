@@ -11,6 +11,7 @@
 #include "motion.h"
 #include "mic.h"
 #include <Preferences.h>
+#include "faces/faces.h"
 
 namespace protocol {
 
@@ -59,6 +60,7 @@ static String stateJson() {
   j += String(",\"autoRotate\":") + (settings::autoRotate() ? "true" : "false");
   j += String(",\"landscape\":") + (settings::landscape() ? "true" : "false");  // 1.9.0
   j += String(",\"devMode\":") + (settings::devMode() ? "true" : "false");
+  j += ",\"face\":" + q(faces::active().id()) + ",\"faces\":" + faces::json();  // 2.0.0
   j += String(",\"wirelessMic\":") + (settings::wirelessMic() ? "true" : "false");
   j += String(",\"ota\":1,\"otaPending\":") + (ota::pendingVerify() ? "true" : "false");  // Bluetooth update (1.8.0+)
   j += String(",\"usbMounted\":") + (mic::usbMounted() ? "true" : "false");
@@ -220,6 +222,20 @@ Result run(const String& action, const Args& arg) {
     return ok(String("\"landscape\":") + (settings::landscape() ? "true" : "false"));
   }
 
+  if (action == "face") {  // id=<face>: the Home screen's face; demo=<face|all>: a preview on the stick
+    String demo = arg("demo"), id = arg("id");
+    if (demo.length()) {
+      if (!faces::demoStart(demo)) return fail("Unknown face: " + demo);
+      Log.printf("Face demo: %s\n", demo.c_str());
+      return ok("\"demo\":" + q(demo));
+    }
+    if (faces::find(id) < 0) return fail("Unknown face: " + id);
+    settings::saveFace(id);
+    faces::select(id);
+    Log.printf("Face: %s\n", id.c_str());
+    return ok("\"face\":" + q(id));
+  }
+
   if (action == "wmic") {
     String v = arg("on");
     settings::saveWirelessMic(v == "1" || v == "true");
@@ -308,7 +324,8 @@ static void runHuman(const String& line) {
   Result r;
   if (cmd == "help") {
     Log.println("Commands: show | set <combo> | enter off|<ms> | name <text> | slot <1-3> | disconnect | reconnect | "
-                   "forget <1-3|all> | web on | web off | standby <min> | brightness <pct>");
+                   "forget <1-3|all> | web on | web off | standby <min> | brightness <pct> | face <id> | face demo [<id>] | "
+                   "screens [landscape|faces]");
     return;
   } else if (cmd == "show") {
     Log.printf("%s | combo %s | %s | Wi-Fi %s %s\n", hid::name().c_str(),
@@ -416,6 +433,12 @@ static void runHuman(const String& line) {
     M5.Power.M5pm1.setLedEnLevel(rest == "on");
     Log.printf("LED_EN %s\n", rest == "on" ? "high" : "low");
     return;
+  }
+  else if (cmd == "face") {  // face <id> | face demo [<id>]
+    String demo = rest.startsWith("demo") ? rest.substring(4) : String();
+    demo.trim();
+    if (rest.startsWith("demo") && !demo.length()) demo = "all";
+    r = run("face", [=](const char* n) { return String(n) == "demo" ? demo : String(n) == "id" ? rest : String(); });
   }
   else if (cmd == "standby")      r = run("standby", with("min"));
   else if (cmd == "brightness")   r = run("brightness", with("pct"));

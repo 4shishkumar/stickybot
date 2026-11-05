@@ -41,6 +41,7 @@
 #include "sound.h"
 #include "events.h"
 #include "ota.h"
+#include "faces/faces.h"
 #include <HijelHID_BLEKeyboard.h>  // KEY_MOD_* constants
 
 constexpr uint32_t CPU_MHZ           = 80;
@@ -162,6 +163,7 @@ static ui::Dash readDash() {
   d.ampm = buddy::ampm();
   d.date = buddy::date();
   d.longDate = buddy::longDate();
+  d.minute = buddy::minuteOfDay();
   buddy::HomeCard hc = buddy::homeCard();
   d.cardKind = hc.kind;
   d.cardA = hc.a;
@@ -455,6 +457,8 @@ static void onMenu(menu::Action a) {
       settings::saveSoundOn(d.sound);
       settings::saveSoundVolume(d.volume);
       settings::saveWirelessMic(d.wmic);
+      settings::saveFace(faces::at(d.face).id());
+      faces::select(faces::at(d.face).id());
       if (!d.autoRotate) ui::setFlipped(settings::flipped());
       settings::saveStandbyMin(d.standbyMin);
       settings::saveBrightnessPct(d.brightnessPct);
@@ -586,6 +590,7 @@ static void pollSerial() {
     char c = Serial.read();
     if (c == '\n' || c == '\r') {
       if (line == "screens") screenDemo();
+      else if (line == "screens faces") faces::demoStart("all");  // runs in the loop; A or B stops it
       else if (line == "screens landscape") screenDemo(false);
       else if (line.startsWith("event ")) {  // event celebrate|nice|headsup <title>|<sub>|<icon>
         String rest = line.substring(6);
@@ -640,6 +645,8 @@ void setup() {
   Serial.begin(115200);
 
   settings::begin();
+  faces::begin();
+  faces::select(settings::face());
   ui::begin();
   ui::setFlipped(settings::flipped());
   ui::setBrightness(settings::brightnessPct());
@@ -802,9 +809,15 @@ void loop() {
     mev = motion::Event::NONE;
     dirty = true;
   }
+  // Toys for the faces (StickyWorld, Aquarium), on Home only; the gestures still do their jobs
+  const bool onHome = mode == Mode::STATUS && page == ui::Page::HOME && !docked && !comboDown && !agentTalking &&
+                      millis() >= agentShowUntil;
+  if (onHome && mev == motion::Event::SHAKE) faces::toy(world::Kick::SHAKE);
+  if (onHome && mev == motion::Event::LIFT) faces::toy(world::Kick::LIFT);
   if ((mev == motion::Event::FLICK_LEFT || mev == motion::Event::FLICK_RIGHT) && mode == Mode::STATUS && !comboDown) {
     int n = (int)ui::Page::COUNT, step = mev == motion::Event::FLICK_RIGHT ? 1 : n - 1;
     page = (ui::Page)(((int)page + step) % n);
+    if (page == ui::Page::HOME) faces::toy(world::Kick::FLICK);  // flicked back to Home: a backflip
     pageAt = millis();
     lastInput = millis();
     ui::wake(B_SCREEN_MS);
@@ -817,6 +830,7 @@ void loop() {
     orientation::Screen sc =
         orientation::choose(motion::facing(), settings::autoRotate(), settings::landscape(), settings::flipped());
     if (sc != shownScreen) {
+      if (sc.flipped && !shownScreen.flipped && sc.side == 0) faces::toy(world::Kick::UPSIDE_DOWN);  // turned over
       shownScreen = sc;
       ui::setOrientation(sc.flipped, sc.side);
       turned = true;
@@ -824,6 +838,12 @@ void loop() {
       lastFrame = 0;  // an event redraws right away
       if (messageUntil && millis() < messageUntil) ui::drawMessage(msgTitle.c_str(), msgHasSub ? msgSub.c_str() : nullptr, msgBg);
     }
+  }
+  {  // upside down without auto-rotate (the screen doesn't follow): the bot panics
+    static int lastUp = 1;
+    int up = motion::upright();
+    if (!settings::autoRotate() && up == -1 && lastUp != -1) faces::toy(world::Kick::UPSIDE_DOWN);
+    if (up) lastUp = up;
   }
   if (mev == motion::Event::LIFT && settings::liftWakes()) {
     lastInput = millis();
@@ -934,6 +954,45 @@ void loop() {
     }
   }
 
+  // A face demo ("screens faces", the dashboard's Preview): it owns the screen; A or B ends it
+  {
+    static bool demoWas = false;
+    if (faces::demoActive() && (aDown || bDown || mode != Mode::STATUS || comboDown || agentTalking)) {
+      faces::demoStop();
+      if (aDown || bDown) {
+        ignoreAUntilRelease = A.isPressed();
+        swallowB = B.isPressed();
+        aDown = bDown = false;
+      }
+    }
+    if (faces::demoActive()) {
+      demoWas = true;
+      ui::wake(B_SCREEN_MS);
+      ui::keepAwake();
+      if (millis() - lastFrame >= 40) {
+        lastFrame = millis();
+        { float ax, ay, az; motion::accel(ax, ay, az); ui::setTilt(ax, ay); }
+        ui::Dash dd;
+        int side = 0;
+        String caption;
+        if (faces::demoFrame(readDash(), dd, side, caption)) {
+          ui::setOrientation(shownScreen.flipped, side);
+          ui::drawFaceDemo(dd, caption);
+        }
+      }
+      if (faces::demoActive()) {
+        delay(10);
+        return;
+      }
+    }
+    if (demoWas) {  // over: back to how the stick is held
+      demoWas = false;
+      ui::setOrientation(shownScreen.flipped, shownScreen.side);
+      lastInput = millis();
+      dirty = true;
+    }
+  }
+
   if (mev == motion::Event::SHAKE && settings::shakeEscapes() && mode != Mode::MENU && hid::connected()) {
     hid::tapEscape();
     Log.println("-> Escape (shake)");
@@ -976,7 +1035,7 @@ void loop() {
                       settings::enterDelayMs(),
                       settings::liftWakes(), settings::faceDownSleeps(), settings::shakeEscapes(),
                       settings::autoRotate(), settings::landscape(), settings::devMode(), settings::soundOn(), settings::soundVolume(),
-                      settings::wirelessMic()},
+                      settings::wirelessMic(), (uint8_t)max(0, faces::find(settings::face()))},
                      hid::state() == hid::Bt::OFF);
           mode = Mode::MENU;
           dirty = true;
@@ -1033,7 +1092,9 @@ void loop() {
     bool calm = mode == Mode::STATUS && !live && !docked && millis() >= agentShowUntil;
     bool homeAnim = calm && page == ui::Page::HOME && ui::homeAnimating();  // card fade / eyes peeking
     bool idleEyes = calm && page == ui::Page::AGENT;                          // blinking, glancing
-    uint32_t every = live || homeAnim ? 40 : idleEyes ? 80 : docked && battery::charging() ? 150 : 0;
+    // the face on Home asks for its own pace (0 = Classic: only on change); slower on battery
+    uint32_t faceMs = calm && page == ui::Page::HOME ? faces::frameMs(!battery::usbPower(), millis() - lastInput) : 0;
+    uint32_t every = live || homeAnim ? 40 : idleEyes ? 80 : faceMs ? faceMs : docked && battery::charging() ? 150 : 0;
     if (every && ui::awake() && millis() - lastFrame >= every) {
       lastFrame = millis();
       ui::setLevel(mic::live() ? mic::peak() : 0);

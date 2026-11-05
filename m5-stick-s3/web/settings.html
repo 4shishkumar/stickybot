@@ -109,6 +109,9 @@ progress{width:100%;margin-top:8px}
     <div class="row hide" id="autoRotRow"><label style="flex:1"><input type="checkbox" id="autoRot"> Auto-rotate the screen</label></div>
     <div class="row hide" id="landscapeRow"><label style="flex:1"><input type="checkbox" id="landscape"> Landscape screens when held sideways (with auto-rotate)</label></div>
   </div>
+  <div class="row hide" id="faceRow"><span style="flex:1">Home face</span>
+    <select id="face" style="flex:0 0 auto;width:auto"></select><button class="small" id="facePreview">Preview</button></div>
+  <p class="hint hide" id="faceHint"></p>
   <div class="row hide" id="brightRow"><span style="flex:1">Screen brightness</span>
     <select id="brightness" style="flex:0 0 auto;width:auto">
       <option value="25">25%</option><option value="50">50%</option><option value="75">75%</option><option value="100">100%</option>
@@ -295,6 +298,18 @@ function render(s, full) {
   if (s.landscape !== undefined) $('landscape').checked = s.landscape;
   if (s.motion) { $('m_lift').checked = s.motion.lift; $('m_face').checked = s.motion.face; $('m_shake').checked = s.motion.shake; }
   if (s.standby !== undefined && document.activeElement !== $('standby')) $('standby').value = s.standby;
+  $('faceRow').classList.toggle('hide', !s.faces);  // firmware 2.1.0+
+  $('faceHint').classList.toggle('hide', !s.faces);
+  if (s.faces && document.activeElement !== $('face')) {
+    $('face').innerHTML = '';
+    for (const f of s.faces) {
+      const o = document.createElement('option');
+      o.value = f.id; o.textContent = f.title; o.selected = f.id === s.face;
+      $('face').appendChild(o);
+    }
+    const cur = s.faces.find(f => f.id === s.face);
+    $('faceHint').textContent = cur ? cur.about + '. Preview plays a short demo on the stick (A or B ends it).' : '';
+  }
   $('brightRow').classList.toggle('hide', s.brightness === undefined);
   if (s.brightness !== undefined && document.activeElement !== $('brightness')) $('brightness').value = s.brightness;
 }
@@ -351,6 +366,8 @@ $('saveMacPass').onclick = async () => {
 $('clearMacPass').onclick = () => confirm('Remove the saved Mac password from the stick?') && act('macpass', {pass: ''});
 $('standby').onchange = () => act('standby', {min: $('standby').value});
 $('brightness').onchange = () => act('brightness', {pct: $('brightness').value});
+$('face').onchange = () => act('face', {id: $('face').value});
+$('facePreview').onclick = () => act('face', {demo: $('face').value});
 $('wifi').onclick = () => act('wifi', {ssid: $('ssid').value, pass: $('pass').value});
 $('savePass').onclick = async () => { await act('password', {password: $('devpass').value}); $('devpass').value = ''; };
 $('forgetAll').onclick = () => confirm('Forget all Macs? Remove them in each Mac\'s Bluetooth settings too.') && act('forget', {n: 'all'});

@@ -12,6 +12,7 @@
 #include "protocol.h"
 #include "events.h"
 #include "ota.h"
+#include "faces/faces.h"
 
 namespace buddy {
 
@@ -230,9 +231,11 @@ static void handleAgent(JsonDocument& d) {
     ev.icon = e["icon"] | "star";
     ev.sound = e["sound"] | "";
     events::push(ev);
+    faces::onEventKind(e["kind"] | "");  // the faces react too (agents since faces send the kind)
     Log.printf("event (%s): %s\n", e["level"] | "", ev.title.c_str());
     return;
   }
+  if (d["world"].is<JsonObject>()) faces::onWorld(d["world"].as<JsonObjectConst>());  // the faces' data
   if (d["t"].is<long>()) {  // the hello carries the Mac's clock
     timeval tv{(time_t)d["t"].as<long>(), 0};
     settimeofday(&tv, nullptr);
@@ -376,6 +379,11 @@ String clock() {
 int hour() {
   clockfmt::Local t;
   return localNow(t) ? t.hour : -1;
+}
+
+int minuteOfDay() {
+  clockfmt::Local t;
+  return localNow(t) ? t.hour * 60 + t.min : -1;
 }
 
 String longDate() {

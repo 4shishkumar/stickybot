@@ -66,6 +66,7 @@ String linkInfo();                 // "MTU 256, 15 ms" (for logs)
 String clock();                    // local 12-hour time "3:25" from the agent's clock, "" until it has sent it
 String ampm();                     // "AM" / "PM"
 int    hour();                     // local hour 0-23, -1 until the agent has sent the time
+int    minuteOfDay();              // local minutes since midnight 0-1439, -1 until then
 String longDate();                 // "Tuesday 20 October", "" until then
 String date();                     // local "Tue 20 Oct", "" until then
 // The card at the bottom of the home screen, chosen by the agent

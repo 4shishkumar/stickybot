@@ -149,6 +149,45 @@ update screen stay portrait. Menu → **Landscape screens** turns the landscape 
 off (portrait only, as before 1.9.0); with Auto-rotate off the screen stays portrait
 and follows **Flip screen**. Serial `screens` (or `screens landscape`) previews them.
 
+### Faces (firmware 2.1.0)
+
+Home has **faces**: pick one in the menu (**Face**), on the Web settings page, or on the
+dashboard's Stick page (with pictures and a **Preview** button that plays a short demo on
+the stick). Every face keeps the time, the battery / Bluetooth and anything urgent (an
+approval or question waiting, the Mac not connected, Bluetooth off, the battery low) on
+screen. Approvals, questions, alerts and the dock clock still take over as before.
+
+- **Classic** (default): the big clock, the weather and the agent's card.
+- **StickyWorld**: StickyBot (a little stick with the agent's eyes) in a pixel world. The
+  sky follows the time (dawn, day, dusk, night with stars and the moon) and the weather
+  (clouds, rain, snow, fog, a storm's flashes). A city grows along the horizon: one building
+  per merged PR, a tower per release, the same skyline every time (it squeezes, then
+  scrolls, to fit). Moods: alert (it holds up a sign with what waits for you), sad (CI
+  failed), curious (Claude sessions running), sleepy (night), happy (CI green). It eats a
+  snack when a PR merges (a short pop if sounds are on), celebrates releases and level-ups
+  with confetti and hops when CI goes green or Claude finishes. Toys: shake = dizzy, flick
+  back to Home = backflip, upside down = panic, pick it up = it says hi. Along the ground:
+  level + XP, the day streak, the city's size. It earns a hat (5-day streak), sunglasses
+  (10 green builds) and a crown (100 PRs).
+- **Aquarium**: each running Claude Code session is a fish (bigger the longer it runs,
+  coloured by project, its name shown when it arrives); when the session finishes, its fish
+  leaps out. Two ambient fish keep it company. A merged PR is a big bubble that pops with a
+  sparkle, a release a golden one; review requests bring a crab with a tiny sign; failed CI
+  turns the water murky until it's fixed. Tilt the stick and the water stays level, the fish
+  drift to the low side; shake it for a burst of bubbles. At night the fish sleep.
+
+The faces animate at ~25 fps on USB; on battery 15 fps, 7 fps after 20 s without a
+press (the screen sleeps soon after anyway). The data comes from the Mac agent (see
+PROTOCOL.md, *Faces*); the stick keeps the last copy in NVS so they draw without it.
+Serial `screens faces` plays every face's demo (`face demo <id>` one of them; A or B
+stops it); `face <id>` picks one.
+
+Adding a face: one file in `src/faces/` (subclass `faces::Face`, see `classic.cpp`)
+and one `X(myFace)` in the `FACES` list in `src/faces/faces.cpp`. To look at them without
+a stick, `make -C tools/face_shots` draws every demo step with the firmware's own drawing
+code into `tools/face_shots/out/` (PNGs and contact sheets; `SCALE=3` for big pixels);
+`make -C tools/face_shots previews` remakes the dashboard's pictures.
+
 - While you hold button A, the screen turns purple: **Listening...**
 - The screen turns off after 20 s idle. Button A still works with the screen
   off (it sends the combo and wakes the screen). Triple-press B to wake it
@@ -289,6 +328,10 @@ make build     # the stick firmware still builds with the same logic
 | `test_text` | word wrap and "…" cutting (UTF-8 safe) |
 | `test_gestures` | lift, face-down, shake, flick, orientation and sideways detection from synthetic IMU samples |
 | `test_queue` | the event queue (FIFO, drops the oldest when full) |
+| `test_pet` | faces: levels / XP, streak, unlocks, the mood priority, what changed between two world messages |
+| `test_city` | StickyWorld's city: the same buildings from a seed, towers in place, squeeze then scroll to fit |
+| `test_sky` | the sky by time of day and weather, sun and moon arcs |
+| `test_school` | Aquarium: fish per session (swim in, grow, leap out), the full tank, tilt drift, the damped spring |
 
 Hardware-facing code (screens, Bluetooth, audio I/O) isn't covered by these;
 `combo.cpp` checks at compile time that the shared key table matches the
@@ -308,7 +351,8 @@ m5-stick-s3/
     ├── combo.*        combo type, key names, "cmd+opt" parsing
     ├── settings.*     saved settings (NVS flash)
     ├── hid.*          Bluetooth keyboard
-    ├── ui.*           screen drawing, screen sleep
+    ├── ui.*           screen drawing, screen sleep (ui_draw.h: the kit the faces share)
+    ├── faces/         Home faces: registry + world (faces.*), classic, stickyworld, aquarium, demo
     ├── menu.*         on-device settings menu
     ├── web.*          Wi-Fi + settings page server
     └── web_page.h     the settings page (HTML/JS)

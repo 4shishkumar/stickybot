@@ -37,6 +37,7 @@ struct Dash {
   String   agentHeard, agentText;
   String   date;         // "Tue 20 Oct", "" until the agent has sent the time
   String   longDate;     // "Tuesday 20 October" (dock clock)
+  int      minute = -1;  // minutes since local midnight (the faces' sky), -1 until the agent has sent the time
   // bottom card on the home screen (from the agent)
   String   cardKind, cardA, cardB;
   bool     cardUrgent;
@@ -84,6 +85,7 @@ void setLevel(int peak);
 void setTilt(float ax, float ay);   // accelerometer (g), for the eyes following the tilt            // mic level for the live screens (call ~25x/s)
 
 void drawPage(Page p, const Dash& d);
+void drawFaceDemo(const Dash& d, const String& caption);  // a face's demo frame (faces/demo.cpp), with a caption
 void drawHolding(const Combo& c, bool usbMic, bool wirelessMic = false);  // A held: dictation
 void drawMenu(const MenuView& m);
 void drawInfo(const char* title, const String lines[], int count, const char* hint);

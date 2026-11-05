@@ -1,4 +1,6 @@
 #include "ui.h"
+#include "ui_draw.h"
+#include "faces/faces.h"
 #include <M5Unified.h>
 #include "battery.h"
 #include "fonts_vlw.h"
@@ -19,25 +21,6 @@ namespace ui {
 // the background; an approval prompt floods the screen orange; while charging
 // and idle the stick becomes a desk clock (landscape when lying on its side).
 
-static constexpr uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
-  return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-}
-constexpr uint16_t GROUND = rgb(0x11, 0x13, 0x16);
-constexpr uint16_t PANEL  = rgb(0x18, 0x1b, 0x1f);
-constexpr uint16_t CHIP   = rgb(0x22, 0x27, 0x2c);
-constexpr uint16_t LINE   = rgb(0x2b, 0x30, 0x36);
-constexpr uint16_t INK    = rgb(0xe6, 0xe9, 0xec);
-constexpr uint16_t DIM    = rgb(0x98, 0xa1, 0xab);
-constexpr uint16_t FAINT  = rgb(0x5b, 0x63, 0x6d);
-constexpr uint16_t AGENT  = rgb(0x2e, 0xc4, 0xb6);  // teal: the Mac agent
-constexpr uint16_t WISPR  = rgb(0x9b, 0x7b, 0xff);  // purple: dictation (button A)
-constexpr uint16_t ASK    = rgb(0xff, 0x9f, 0x1c);  // orange: needs you
-constexpr uint16_t OK     = rgb(0x3d, 0xdc, 0x84);
-constexpr uint16_t ERR    = rgb(0xff, 0x52, 0x52);
-constexpr uint16_t ON_ASK = rgb(0x1a, 0x12, 0x05);  // text on orange
-
-constexpr int BAR_H = 20;
-constexpr int PAD   = 8;
 
 // Anti-aliased fonts, loaded from flash in begin(). F44 has digits only (the clock).
 struct Vlw {
@@ -49,13 +32,13 @@ struct Vlw {
   }
 };
 static Vlw vlw10, vlw12, vlw14, vlw18, vlw24, vlw44, vlw96;
-static const lgfx::IFont *F9, *F12, *F14, *F18, *F24, *F44, *F96;  // F44/F96: digits only (clocks)
+const lgfx::IFont *F9, *F12, *F14, *F18, *F24, *F44, *F96;  // F44/F96: digits only (clocks)
 
-static M5Canvas canvas(&M5.Display);
+M5Canvas canvas(&M5.Display);
 static uint8_t  brightness = 128;
 static bool     awake_ = true, flipped_ = false;
 static uint32_t lastActivity = 0, awakeFor = 60000;
-static int      W, H;
+int             W, H;
 static float    level_ = 0;  // smoothed mic level 0..1
 
 void begin() {
@@ -160,8 +143,7 @@ void setLevel(int peak) {
 
 // --- Text ------------------------------------------------------------------------
 
-static void txt(const String& s, int x, int y, const lgfx::IFont* f, uint16_t color,
-                textdatum_t datum = middle_left) {
+void txt(const String& s, int x, int y, const lgfx::IFont* f, uint16_t color, textdatum_t datum) {
   canvas.setFont(f);
   canvas.setTextColor(color);
   canvas.setTextDatum(datum);
@@ -169,7 +151,7 @@ static void txt(const String& s, int x, int y, const lgfx::IFont* f, uint16_t co
 }
 
 // Biggest of `fonts` (largest first) in which s fits maxW.
-static const lgfx::IFont* fit(const String& s, int maxW, std::initializer_list<const lgfx::IFont*> fonts) {
+const lgfx::IFont* fit(const String& s, int maxW, std::initializer_list<const lgfx::IFont*> fonts) {
   const lgfx::IFont* last = nullptr;
   for (auto f : fonts) {
     canvas.setFont(f);
@@ -183,13 +165,13 @@ static const lgfx::IFont* fit(const String& s, int maxW, std::initializer_list<c
 static int canvasWidth(const std::string& s, void*) { return canvas.textWidth(s.c_str()); }
 
 // One line that fits maxW with font f, cut with "..." if needed.
-static String ellipsize(const String& s, const lgfx::IFont* f, int maxW) {
+String ellipsize(const String& s, const lgfx::IFont* f, int maxW) {
   canvas.setFont(f);
   return String(text::ellipsize(std::string(s.c_str()), maxW, canvasWidth, nullptr).c_str());
 }
 
 // Greedy word wrap with font f; if it doesn't all fit, the last line ends in "...".
-static int wrap(const String& s, const lgfx::IFont* f, String out[], int max, int maxW) {
+int wrap(const String& s, const lgfx::IFont* f, String out[], int max, int maxW) {
   canvas.setFont(f);
   auto lines = text::wrap(std::string(s.c_str()), max, maxW, canvasWidth, nullptr);
   int n = 0;
@@ -197,7 +179,7 @@ static int wrap(const String& s, const lgfx::IFont* f, String out[], int max, in
   return n;
 }
 
-static int paragraph(const String& s, const lgfx::IFont* f, int x, int y, int maxW, int maxLines, uint16_t color,
+int paragraph(const String& s, const lgfx::IFont* f, int x, int y, int maxW, int maxLines, uint16_t color,
                      int lineH) {
   String lines[12];
   int n = wrap(s, f, lines, min(maxLines, 12), maxW);
@@ -206,7 +188,7 @@ static int paragraph(const String& s, const lgfx::IFont* f, int x, int y, int ma
 }
 
 // Line height for each font in wrapped text.
-static int lineH(const lgfx::IFont* f) {
+int lineH(const lgfx::IFont* f) {
   return f == F9 ? 13 : f == F12 ? 16 : f == F14 ? 18 : f == F18 ? 22 : 26;
 }
 
@@ -246,7 +228,7 @@ static int comboParts(const Combo& c, String out[], int max) {
 
 // --- Icons and pieces ----------------------------------------------------------
 
-static void btIcon(int x, int y, uint16_t c) {  // 7 x 11, top-left at x, y
+void btIcon(int x, int y, uint16_t c) {  // 7 x 11, top-left at x, y
   canvas.drawLine(x + 3, y, x + 3, y + 10, c);
   canvas.drawLine(x + 3, y, x + 6, y + 3, c);
   canvas.drawLine(x + 6, y + 3, x, y + 8, c);
@@ -255,7 +237,7 @@ static void btIcon(int x, int y, uint16_t c) {  // 7 x 11, top-left at x, y
 }
 
 // Battery: an outline filled to the level, a bolt over it while charging.
-static void batteryIcon(int x, int y, int pct, bool charging) {  // 18 x 9, top-left
+void batteryIcon(int x, int y, int pct, bool charging) {  // 18 x 9, top-left
   uint16_t c = pct >= 0 && pct <= 15 && !charging ? ERR : charging ? OK : INK;
   canvas.drawRoundRect(x, y, 16, 9, 2, DIM);
   canvas.fillRect(x + 16, y + 3, 2, 3, DIM);
@@ -329,31 +311,24 @@ static void keyChip(const String& s, int x, int y, int w, int h, uint16_t c, uin
 // --- Colour helpers ----------------------------------------------------------------
 
 // Mixes two RGB565 colours: t = 0 -> a, t = 1 -> b.
-static uint16_t blend(uint16_t a, uint16_t b, float t) {
+uint16_t blend(uint16_t a, uint16_t b, float t) {
   t = constrain(t, 0.0f, 1.0f);
   int ar = a >> 11, ag = (a >> 5) & 63, ab = a & 31, br = b >> 11, bg = (b >> 5) & 63, bb = b & 31;
   return ((int)(ar + (br - ar) * t) << 11) | ((int)(ag + (bg - ag) * t) << 5) | (int)(ab + (bb - ab) * t);
 }
 
-static float smooth(float t) {
+float smooth(float t) {
   t = constrain(t, 0.0f, 1.0f);
   return t * t * (3 - 2 * t);
 }
 
-constexpr uint16_t VIOLET = rgb(0xa6, 0x8c, 0xff);  // thinking
-constexpr uint16_t AMBER  = rgb(0xff, 0xb3, 0x3c);  // working
-constexpr uint16_t BRIGHT = rgb(0x6c, 0xf2, 0xe2);  // listening
-constexpr uint16_t BLUE   = rgb(0x5a, 0xa9, 0xff);  // history
-constexpr uint16_t FACT   = rgb(0xf5, 0xb7, 0x3b);  // fun facts
-constexpr uint16_t PUPIL  = rgb(0x0a, 0x0c, 0x0e);
 
 // --- The eyes ------------------------------------------------------------------------
 
 // The agent's eyes, one look per mood. Each mood has a colour, which also tints
 // the background glow and the text panel on the agent screens.
-enum class Mood : uint8_t { IDLE, LISTEN, THINK, WORK, DONE, ERROR, ASK, OFFLINE, PARTY, COUNT };
 
-static uint16_t moodColor(Mood m) {
+uint16_t moodColor(Mood m) {
   static const uint16_t HUES[] = {WISPR, AGENT, ASK, OK, ERR};
   switch (m) {
     case Mood::LISTEN:  return BRIGHT;
@@ -373,7 +348,11 @@ static uint16_t moodColor(Mood m) {
 static float tiltDX = 0, tiltDY = 0, restX = 0, restY = 1;
 static bool  tiltInit = false;
 
+static float rawX = 0, rawY = 1;  // the last reading, for gravity()
+
 void setTilt(float ax, float ay) {
+  rawX = ax;
+  rawY = ay;
   if (!tiltInit) { restX = ax; restY = ay; tiltInit = true; }
   restX += (ax - restX) * 0.008f;  // ~5 s to drift back to centre at 25 fps
   restY += (ay - restY) * 0.008f;
@@ -382,10 +361,22 @@ void setTilt(float ax, float ay) {
   tiltDY += (dy - tiltDY) * 0.6f;
 }
 
+// Down on the screen, from the stick's axes (orientation.h): portrait x right / y down is
+// (-ax, ay); upside down (ax, -ay); rotation 1 (ay, ax); rotation 3 (-ay, -ax).
+void gravity(float& gx, float& gy) {
+  if (orient_ > 0) { gx = rawY; gy = rawX; }
+  else if (orient_ < 0) { gx = -rawY; gy = -rawX; }
+  else if (flipped_) { gx = rawX; gy = -rawY; }
+  else { gx = -rawX; gy = rawY; }
+}
+
+bool landscapeNow() { return orient_ != 0; }
+
 static float lookX = NAN;  // when set, idle pupils look this way (the home screen's peek)
+void lookAt(float x) { lookX = x; }
 
 // A soft radial glow: stacked circles, faint outside, stronger in the middle.
-static void glow(int cx, int cy, int r, uint16_t c, float strength) {
+void glow(int cx, int cy, int r, uint16_t c, float strength) {
   for (int i = 6; i >= 1; i--) canvas.fillCircle(cx, cy, r * i / 6, blend(GROUND, c, strength * (7 - i) / 6.0f));
 }
 
@@ -400,7 +391,7 @@ static void star(float cx, float cy, float ro, float ri, float rot, uint16_t c) 
 }
 
 // Two big eyes centred on cx, cy; s = scale (1 = 40 x 56 px eyes); bg = what's behind them.
-static void eyes(Mood m, int cx, int cy, float s, uint16_t c, uint16_t bg) {
+void eyes(Mood m, int cx, int cy, float s, uint16_t c, uint16_t bg) {
   const uint32_t t = millis();
   float ew = 40 * s, eh = 56 * s, gap = 30 * s, r = 18 * s;
   // Blink with squash and stretch: squeeze flat and wide, then pop back a little tall
@@ -588,9 +579,6 @@ static String clockOr(const Dash& d, const String& fallback) { return d.clock.le
 
 // --- Weather icons (drawn on a 56-unit grid, scaled to `size` px) -------------
 
-constexpr uint16_t SUN  = rgb(0xff, 0xc9, 0x4d);
-constexpr uint16_t RAIN = rgb(0x6f, 0xb7, 0xff);
-constexpr uint16_t SNOW = rgb(0xdf, 0xe8, 0xf1);
 
 static void cloudShape(int x, int y, float s, uint16_t c) {
   canvas.fillCircle(x + 18 * s, y + 30 * s, 10 * s, c);
@@ -608,7 +596,7 @@ static void sunShape(int cx, int cy, float r, float rays) {
   }
 }
 
-static void weatherIcon(const String& code, bool day, int x, int y, int size) {
+void weatherIcon(const String& code, bool day, int x, int y, int size) {
   const float s = size / 56.0f;
   auto X = [&](float v) { return x + v * s; };
   auto Y = [&](float v) { return y + v * s; };
@@ -801,7 +789,7 @@ static void homeTopWide(const Dash& d) {
   }
 }
 
-static void drawHome(const Dash& d) {
+void drawClassicHome(const Dash& d) {
   statusBar("", &d);
   const bool wide = orient_ != 0;
   cardTop_ = wide ? BAR_H + 4 : CARD_TOP;
@@ -952,12 +940,24 @@ void drawPage(Page p, const Dash& d) {
   wide();  // landscape when held sideways
   canvas.fillScreen(GROUND);
   switch (p) {
-    case Page::HOME:    drawHome(d); break;
+    case Page::HOME:    faces::drawHome(d, orient_ != 0); break;
     case Page::AGENT:   drawAgentPage(d); break;
     case Page::STATUS:  drawStatus(d); break;
     default: break;
   }
   pageDots(p);
+  canvas.pushSprite(0, 0);
+}
+
+void drawFaceDemo(const Dash& d, const String& caption) {
+  wide();
+  canvas.fillScreen(GROUND);
+  faces::drawHome(d, orient_ != 0);
+  const lgfx::IFont* f = fit(caption, W - 16, {F12, F9});
+  canvas.setFont(f);
+  const int w = min(W - 8, (int)canvas.textWidth(caption) + 14), y = H - 22;
+  canvas.fillRoundRect((W - w) / 2, y - 8, w, 17, 8, blend(GROUND, WISPR, 0.55f));
+  txt(ellipsize(caption, f, w - 10), W / 2, y, f, INK, middle_center);
   canvas.pushSprite(0, 0);
 }
 
@@ -1344,7 +1344,7 @@ struct Bit { float x, y, vx, vy, spin; uint16_t c; bool on; };
 static Bit bits[48];
 static uint32_t confettiLast = 0;
 
-static void confettiReset(float x, float y) {  // the burst starts at x, y (the icon)
+void confettiReset(float x, float y) {  // the burst starts at x, y (the icon)
   static const uint16_t COLORS[] = {WISPR, AGENT, ASK, OK, ERR, SUN, RAIN, INK};
   for (int i = 0; i < 48; i++) {
     Bit& b = bits[i];
@@ -1354,7 +1354,7 @@ static void confettiReset(float x, float y) {  // the burst starts at x, y (the 
   confettiLast = millis();
 }
 
-static void confettiDraw(bool rain) {
+void confettiDraw(bool rain) {
   uint32_t now = millis();
   float dt = constrain((now - confettiLast) / 40.0f, 0.2f, 3.0f);  // in 40 ms frames
   confettiLast = now;
@@ -1381,7 +1381,7 @@ static void confettiDraw(bool rain) {
   }
 }
 
-static float easeOutBack(float t) {
+float easeOutBack(float t) {
   t = constrain(t, 0.0f, 1.0f);
   const float c1 = 1.70158f, c3 = c1 + 1;
   return 1 + c3 * powf(t - 1, 3) + c1 * powf(t - 1, 2);

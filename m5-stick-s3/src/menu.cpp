@@ -1,4 +1,5 @@
 #include "menu.h"
+#include "faces/faces.h"
 
 namespace menu {
 
@@ -9,7 +10,7 @@ constexpr uint16_t ENTER_STEPS[]   = {0, 500, 1000, 1500, 2000, 3000};
 
 enum Item {
   MOD_FN, MOD_CTRL, MOD_OPTION, MOD_SHIFT, MOD_CMD, KEY, TEST, ENTER,
-  SLOT, BT, FORGET, STANDBY, SOUND, VOLUME, WMIC, M_LIFT, M_FACE, M_SHAKE, BRIGHT, AUTOROT, LANDSCAPE, FLIP, WEB, DEV, POWER, SAVE, CANCEL, COUNT
+  SLOT, BT, FORGET, STANDBY, SOUND, VOLUME, WMIC, M_LIFT, M_FACE, M_SHAKE, BRIGHT, HOME_FACE, AUTOROT, LANDSCAPE, FLIP, WEB, DEV, POWER, SAVE, CANCEL, COUNT
 };
 
 static Draft    draft_;
@@ -87,6 +88,7 @@ Action select() {
     case BRIGHT:  // preview live, kept only on Save
       draft_.brightnessPct = draft_.brightnessPct >= 100 ? 25 : (draft_.brightnessPct / 25 + 1) * 25;
       return Action::BRIGHTNESS;
+    case HOME_FACE: draft_.face = (draft_.face + 1) % faces::count(); return Action::REDRAW;
     case AUTOROT: draft_.autoRotate = !draft_.autoRotate; return Action::REDRAW;
     case LANDSCAPE: draft_.landscape = !draft_.landscape; return Action::REDRAW;
     case FLIP:    return Action::FLIP;
@@ -131,6 +133,7 @@ ui::MenuView view() {
   v.lines[M_FACE]  = String("Face-down sleep: ") + (draft_.faceDown ? "ON" : "off");
   v.lines[M_SHAKE] = String("Shake = Esc: ") + (draft_.shake ? "ON" : "off");
   v.lines[BRIGHT]  = String("Brightness: ") + draft_.brightnessPct + "%";
+  v.lines[HOME_FACE] = String("Face: ") + faces::at(draft_.face).title();
   v.lines[AUTOROT] = String("Auto-rotate: ") + (draft_.autoRotate ? "ON" : "off");
   v.lines[LANDSCAPE] = String("Landscape screens: ") + (draft_.landscape ? "ON" : "off");
   v.lines[FLIP]    = "Flip screen";
@@ -149,6 +152,7 @@ ui::MenuView view() {
   else if (sel == SLOT && draft_.slot != originalSlot) v.hint = "Save to switch Mac";
   else if (sel == DEV) v.hint = "USB: Wi-Fi on, OTA+logs";
   else if (sel == WMIC) v.hint = "A hold: Wispr mic by BT";
+  else if (sel == HOME_FACE) v.hint = "Home screen look";
   else if (sel == LANDSCAPE) v.hint = draft_.autoRotate ? "Held sideways: wide" : "Needs auto-rotate";
   else if (sel == TEST || sel == BT || sel == FLIP || sel == WEB || sel == POWER || sel >= SAVE) v.hint = "A next  B select";
   return v;

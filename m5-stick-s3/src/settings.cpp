@@ -115,6 +115,9 @@ void saveAutoRotate(bool on) { prefs.putBool("autorot", on); }
 bool landscape()            { return prefs.getBool("landscape", true); }
 void saveLandscape(bool on)  { prefs.putBool("landscape", on); }
 
+String face()                 { return getStr("face", "classic"); }
+void saveFace(const String& id) { prefs.putString("face", id); }
+
 String macPassword() { return getStr("macpass"); }
 void saveMacPassword(const String& p) {
   if (p.isEmpty()) prefs.remove("macpass");
