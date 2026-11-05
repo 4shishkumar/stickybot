@@ -362,7 +362,7 @@ def test_split_new_chat(text, reset, rest):
 # --- the real thing (opt-in) ------------------------------------------------------------
 
 @pytest.mark.slow
-@pytest.mark.skipif(not os.environ.get("STICK_AGENT_REAL_CLAUDE"), reason="set STICK_AGENT_REAL_CLAUDE=1 (uses your login)")
+@pytest.mark.skipif(not os.environ.get("STICK_AGENT_REAL_CLAUDE"), reason="STICK_AGENT_REAL_CLAUDE=1 (your login)")
 async def test_real_claude_session(home, brains):
     """Two tiny requests through the real Claude Code: the second one is warm."""
     set_config(claude_path="")

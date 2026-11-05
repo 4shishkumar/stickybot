@@ -105,7 +105,7 @@ function connectEvents() {
       store.events.push(ev);
       if (store.events.length > 600) store.events.splice(0, store.events.length - 600);
     }
-    if (["prompt", "prompt_done", "link", "config", "sounds"].includes(ev.kind)) refreshStatus();
+    if (["prompt", "prompt_done", "link", "config", "sounds", "reply"].includes(ev.kind)) refreshStatus();
     store.emit("event", ev);
   };
   es.onerror = () => { store.online = false; paintStatus(store.status); };

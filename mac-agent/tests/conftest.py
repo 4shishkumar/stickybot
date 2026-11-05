@@ -158,7 +158,7 @@ class GuardBrain:
     cancelled = False
     proc = None
 
-    async def ask(self, text, on_progress):
+    async def ask(self, text, on_progress, on_text=None):
         raise AssertionError(f"unexpected request to Claude in a test: {text!r}")
 
     def cancel(self):
