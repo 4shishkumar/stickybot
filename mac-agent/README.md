@@ -54,6 +54,33 @@ easier for the speech model than "P R 1234".
 
 Levels per event, quiet hours and the GitHub settings are in the dashboard → **Events**.
 
+### The stick as a pager for any Claude session (MCP)
+The agent runs a small MCP server, **stick**, at `http://127.0.0.1:8660/mcp` (this Mac only,
+needs the agent's token). Claude can use it to reach you on the stick:
+
+| Tool | Does | Asks you first? |
+|---|---|---|
+| `notify(text, level=info\|nice\|celebrate\|heads_up, sound?)` | a toast / alert on the stick | no |
+| `ask(question, options=[A, B], timeout_s=60)` | the question on the stick; A or B answers (shake dismisses) → the label, `timeout`, `dismissed` or `busy: …` | no |
+| `celebrate(text?)` | confetti + fanfare | no |
+| `progress(text, done?, total?)` | a progress line on the home card (gone 10 min after the last update) | no |
+| `pin_home(text, minutes=30)` | pins a line on the home card (`""` removes it) | no |
+| `stick_status()` | connected, battery, USB, what's on screen, last button press, "at the desk?" | no |
+| `speak(text)` | says it on the stick (or the Mac, per *Speech* settings); silent in quiet hours | no |
+| `open_url(url)`, `open_app(name)`, `quick_command(phrase)` | change the Mac (http(s) only / installed apps / your quick commands) | **yes** — Claude Code's permission prompt, on the stick |
+
+- **Voice requests** have them already (the agent's session gets `--mcp-config`, the feedback tools pre-allowed).
+- **Terminal sessions:** run `stick-agent mcp install` once (or dashboard → Settings → *Stick tools for Claude
+  Code* → Install). It shows and then runs Claude Code's own command —
+  `claude mcp add --transport http --scope user stick http://127.0.0.1:8660/mcp --header "Authorization: Bearer <token>" --header "X-Stick-Cwd: ${PWD}"` —
+  so every new Claude Code session has `mcp__stick__*`. Then ask e.g. *"run the tests and notify me on the stick when
+  done"*. `stick-agent mcp status` / `stick-agent mcp uninstall` (`--yes` skips the question). Nothing of ours edits
+  `~/.claude.json`.
+- Alerts are limited to one a second (20 a minute); without the stick every tool answers `stick not connected`.
+  Turn the server off in Settings, or only the alerts in **Events** (*claude_tool* → off). Every call is in **Activity**.
+- Questions wait behind an approval prompt; one question at a time. Firmware 1.7.2 shows the option labels on the
+  buttons; older firmware shows the question as an approval (A yes / B no) with the options in the text.
+
 ### At a glance on the stick
 - **Home:** clock, weather, and a card that rotates through approvals, your last answer, open Claude Code sessions and (optional) facts / Hacker News / Wikipedia.
 - **Agent page:** your last question and answer. **Status page:** battery, connections, last-hour battery chart.
@@ -161,7 +188,7 @@ trouble in Wispr (e.g. `"stick-mic-bt"`); Wispr then needs the ranking again.
 ## Using it
 - **Menu bar** icon: state at a glance, stick volume, sounds on/off, pause, restart, dashboard.
 - **Dashboard:** http://localhost:8660 — activity, history, quick commands, sounds, events, settings, logs. Only reachable from this Mac; every change needs the token in `~/.stick-agent/token` (built into the page).
-- **Terminal:** `stick-agent status | start | stop | restart | logs | open`.
+- **Terminal:** `stick-agent status | start | stop | restart | logs | open`, `stick-agent mcp install | status | uninstall`.
 
 Files: everything lives in `~/.stick-agent/` — `config.json`, `commands.json`,
 `history.jsonl`, `events.jsonl`, `agent.log`, `sounds/` (Kenney CC0 packs),
@@ -181,6 +208,7 @@ Files: everything lives in `~/.stick-agent/` — `config.json`, `commands.json`,
 | `events.py`, `github.py`, `claude_hooks.py` | alerts: GitHub (via `gh`), Claude finished |
 | `home.py`, `feed.py`, `weather.py` | the stick's home screen card, facts/news, weather (Open-Meteo) |
 | `server.py`, `dashboard.html`, `menubar.py` | dashboard API (localhost + token) and menu bar |
+| `mcp_server.py`, `mcp_setup.py` | the stick tools: the MCP endpoint (`/mcp`) and `stick-agent mcp install` (`claude mcp add`) |
 
 ## Not built yet
 Next meeting on the home screen (calendar), wake word, Mac-control tools for

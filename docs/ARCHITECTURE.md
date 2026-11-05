@@ -53,7 +53,8 @@ talks to what, and where every file lives. For the wire formats see
 | `~/.stick-agent/workspace/CLAUDE.md` | the instructions Claude gets for voice requests (its working folder) |
 | `~/.stick-agent/history.jsonl`, `events.jsonl` | what you asked / what it told you |
 | `~/.stick-agent/agent.log` | the log (`stick-agent logs`, dashboard → Logs) |
-| `~/.stick-agent/token` | secret for the dashboard API (the page has it built in) |
+| `~/.stick-agent/token` | secret for the dashboard API (the page has it built in) and the stick tools (MCP) |
+| `~/.stick-agent/mcp-voice.json` | the `--mcp-config` for voice requests (the stick tools, with the token; 0600) |
 | `~/.stick-agent/sounds/` | Kenney sound packs (CC0) for the library |
 | `~/.stick-agent/github_state.json`, `claude_sessions.json` | what the watchers last saw |
 | `~/.cache/huggingface/` | the speech models (~2.5 GB each) |
@@ -107,6 +108,52 @@ Wispr Flow keeps a ranked list of mics and uses the highest-ranked one present, 
 ### 5. The home screen
 Every 8 s the agent's *hello* message carries the time (stick clock), the weather (Open-Meteo, every 30 min) and the **home card** (`home.py`: approval > last answer > Claude Code sessions > facts / news / Wikipedia). The stick draws it — and the eyes peek now and then on its own.
 
+### 6. The stick tools (MCP): any Claude session pages you
+The agent is also an **MCP server** (`mcp_server.py`), mounted on the dashboard's aiohttp server at
+`POST http://127.0.0.1:8660/mcp` — the MCP *Streamable HTTP* transport, one JSON-RPC message per POST.
+Nothing runs in the cloud: Claude Code on this Mac calls it.
+
+```
+ Claude Code (voice session, or any terminal session after `stick-agent mcp install`)
+   │  POST /mcp  Authorization: Bearer <~/.stick-agent/token>   (Host + Origin checked)
+   │  tools/call notify {"text":"Tests passed"}
+   ▼
+ stick-agent: mcp_server.py ── check args, rate limit, stick connected? ── core.Agent
+   │                                                                          │
+   ├─ notify / celebrate → events.notify → {"src":"agent","event":…} ──────▶ toast / confetti + sound
+   ├─ progress / pin_home → home.py slot → {"src":"agent","home":…} ───────▶ the home card
+   ├─ ask → {"src":"cli","prompt":{"kind":"ask","q","a","b"}} ─────────────▶ question screen
+   │        ◀──────────────── {"cmd":"permission","decision":"once"|"deny"|"dismiss"} (A / B / shake)
+   ├─ stick_status → {"cmd":"status"} ─────────────────────────────────────▶ battery, USB ("ack")
+   ├─ speak → speech.py (say → the stick's speaker or the Mac's)
+   └─ open_url / open_app / quick_command → `open …` (argument lists, no shell)
+        └ never pre-allowed: Claude Code's permission prompt → our hook → A / B on the stick first
+```
+
+- **Transport and versions:** dual era. Claude Code 2.1.317 speaks MCP **2026-07-28** (no handshake;
+  `server/discover`; every request carries its version in `_meta`, mirrored in `MCP-Protocol-Version`,
+  `Mcp-Method`, `Mcp-Name` headers, which must match the body). Older clients use `initialize`
+  (2025-03-26 … 2025-11-25). No sessions, no GET stream (405). Replies are JSON; `ask()` answers as a short
+  SSE stream with keep-alives while you decide, and the client closing it cancels the question.
+- **Who's asking:** the voice session's config sends `X-Stick-Client: voice` ("Agent"); the terminal install
+  sends `X-Stick-Cwd: ${PWD}`, which Claude Code expands, so the stick says "loom asks".
+- **Voice requests:** `brain.py` adds `--mcp-config ~/.stick-agent/mcp-voice.json` (0600, has the token) and
+  `mcp__stick__{notify,ask,celebrate,progress,pin_home,stick_status,speak}` to `--allowedTools`; turning the
+  server off (config `mcp_server`) restarts the session without them.
+- **Terminal sessions:** `stick-agent mcp install` (or the dashboard card / installer component `mcp`) runs
+  `claude mcp add --transport http --scope user stick http://127.0.0.1:8660/mcp --header "Authorization: Bearer …" --header "X-Stick-Cwd: ${PWD}"`
+  — Claude Code writes its own config; the agent never edits `~/.claude.json`.
+- **One prompt at a time:** a question waits while an approval is on the stick (its time keeps running) and is
+  refused (`busy: …`) while another question is waiting or you're holding B / dictating.
+- **Limits:** alerts (notify, celebrate, speak) ≥ 1 s apart and ≤ 20 a minute across all sessions; card updates
+  reach the stick at most every 0.5 s (the newest wins); texts are cut to what the stick shows (`stick_text()`).
+
+Sources: [MCP Streamable HTTP (2026-07-28)](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http),
+[versioning / backward compatibility](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning),
+[tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools),
+[lifecycle (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle),
+[Claude Code MCP](https://code.claude.com/docs/en/mcp).
+
 ## Why Claude Code as the brain — and the alternatives
 
 The agent runs **Claude Code** headless: one long-lived `claude -p --input-format stream-json` session (option A+ below), with `claude -p` per request as the fallback.
@@ -122,7 +169,7 @@ The agent runs **Claude Code** headless: one long-lived `claude -p --input-forma
 | | How | Gains | Loses |
 |---|---|---|---|
 | **A. `claude -p`** (the fallback, `brain_mode: "oneshot"`) | spawn per request | simplest | the start-up per request, indirect control |
-| **A+. A persistent `claude -p --input-format stream-json`** (now) | one process, a user message per request, the interrupt control request to cancel | no start-up per request, streaming, interrupt — with no new dependency (the same protocol the Agent SDK speaks) | still indirect control (hooks for approvals, no custom tools yet) |
+| **A+. A persistent `claude -p --input-format stream-json`** (now) | one process, a user message per request, the interrupt control request to cancel; custom tools via our own MCP server (flow 6) | no start-up per request, streaming, interrupt, stick tools — with no new dependency (the same protocol the Agent SDK speaks) | still indirect control (hooks for approvals) |
 | **B. Claude Agent SDK (Python)** — recommended next | `ClaudeSDKClient` kept open inside the agent | same engine and login as Claude Code; **warm session** (no per-request start); **custom tools as Python functions** (open PR, set a stick screen, read the calendar, play a sound) via an in-process MCP server; **`can_use_tool` callback → approvals straight to the stick** (no hook detour); interrupt/cancel built in | a dependency on the SDK's versioning; still Claude-only |
 | **C. A minimal harness like [Pi](https://pi.dev/)** (or our own loop) | the agent runs the tool loop itself against a model API | any model — 20+ providers incl. **local (Ollama)**; tiny, fully ours; lowest latency | needs an **API key** (pay per token, not your subscription); we'd rebuild tools, permissions, safety and sessions that Claude Code already does well |
 
@@ -134,6 +181,9 @@ Note when sharing: each teammate runs the agent with **their own** Claude Code l
 - The dashboard listens on **127.0.0.1 only**; requests must have `Host: localhost`/`127.0.0.1` and changes need the token — a website you visit can't drive the agent.
 - The stick's Mac link requires an **encrypted (paired)** Bluetooth connection; the agent only connects to the stick you picked.
 - Claude runs read-only tools freely; anything else needs your approval.
+- The stick tools (`/mcp`) need the same token (as a bearer token), the same Host check, and an Origin (if any)
+  of the dashboard itself; the ones that change the Mac go through Claude Code's permission prompt, take
+  argument lists (no shell), only `http(s)` URLs and installed app names.
 - The Mac password on the stick is write-only (never read back or logged); typing it is a deliberate double-press.
 
 ## Sources

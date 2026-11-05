@@ -57,7 +57,10 @@ API key? Install the companion app"* — it uses your Claude Code login instead.
 
 ### Phase 4 — Brain upgrade in the companion app
 - Done: a persistent Claude Code session (`claude -p --input-format stream-json --output-format stream-json`) — no start-up per request; the reply streams to the stick and is spoken sentence by sentence (`brain_mode`, `stream_replies`, `speak_stream`).
-- A "stick" MCP server with the shared tools; `--permission-prompt-tool` for approvals straight to the stick.
+- Done: the "stick" MCP server inside the companion app (`/mcp` on the local server): notify, ask (A/B), celebrate,
+  progress, pin_home, stick_status, speak, open_url, open_app, quick_command — for voice requests and, after
+  `stick-agent mcp install`, every terminal Claude Code session; firmware 1.7.2 draws the questions.
+- Next: `--permission-prompt-tool` for approvals straight to the stick (instead of the hook detour).
 - A brain interface: Claude Code / Anthropic API / OpenRouter / Ollama selectable in settings.
 
 ### Later

@@ -166,6 +166,18 @@ user picked (several boards can be in range).
 Buddy messages with `"src":"cli"`; the board answers
 `{"cmd":"permission","id":…,"decision":"once"|"deny"}` from buttons A / B.
 
+**Questions from a Claude session** (the agent's stick tools, `ask()`; firmware 1.7.2 draws them)
+use the same message with extra fields:
+`{"src":"cli","prompt":{"id":"ask-…","tool":"Question","hint":"<question> - A: <a> / B: <b>","from":"loom","kind":"ask","q":"<question>","a":"<label A>","b":"<label B or empty>"}}`.
+1.7.2 shows `q` with the labels on two button rows; A answers `once` (the first option), B `deny`
+(the second; with no `b`, B dismisses) and a **shake** answers `"decision":"dismiss"`. Older firmware
+ignores the extra fields and shows it as an approval (A yes / B no, the options in `hint`; a shake
+then answers `deny`). The agent re-sends it every 3 s like an approval, holds it back while an
+approval is pending (one prompt on the screen at a time) and clears it with `{"src":"cli"}`.
+
+The agent may also send the Hardware Buddy `{"cmd":"status"}` over this link (the stick tools'
+`stick_status()`); the board answers `{"ack":"status","ok":true,"data":{"name","sec","bat":{"pct","mV","usb"},"sys":{"up","heap"}}}`.
+
 **Mac agent** (tools/mac-agent), all messages tagged `"src":"agent"`:
 
 | Direction | Message |
@@ -241,6 +253,8 @@ before 1.7: the key at once, no `prepare`, no Bluetooth audio. The USB mic is na
 Events: sent, answer, approval, approved, denied, error, connected, disconnected, unlock, charging, lowbattery.
 Tunes: built-in Kenney clips (CC0, `tools/make_sounds.py`) and synthesized beeps; `off` = silent.
 The agent's hello may also carry `"home":{"k","a","b","u"}` (home screen card) and `"wx":{"t","hi","lo","i","c","day","at"}` (weather).
+`{"src":"agent","home":{…}}` on its own (no `hello`) updates the card at once — the agent sends it when a Claude
+session's `progress()` / `pin_home()` changes it (at most every 0.5 s); boards since the home card handle it.
 
 **Events** (full-screen screens on the board; StickS3):
 
