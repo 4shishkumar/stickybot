@@ -67,11 +67,11 @@ export async function render(el) {
         h("label", {class: "switch"}, h("input", {type: "checkbox", class: "idle", value: v, checked: (c.idle_content || []).includes(v)}), h("span", null, l)))))),
     card("Wireless Wispr mic",
       field("Wireless mic", toggle("wirelessMic", "Hold A away from USB: the stick's mic reaches Wispr over Bluetooth", !!c.wireless_mic),
-        `While you hold A, a microphone called “${micName(c)}” appears on this Mac and Wispr switches to it; a moment after you let go it disappears and Wispr is back on your usual mic. Plugged in by USB, the stick is its USB mic (“stick-mic-usb”) as before.`),
+        `While you hold A, a microphone called “${micName(c)}” appears on this Mac and Wispr switches to it; a moment after you let go it disappears and Wispr is back on your usual mic. Plugged in by USB, the stick is its USB mic (“${usbMicName(c)}”, firmware 1.8.1+) as before.`),
       h("div", {class: "notice", style: "margin-bottom:12px"}, h("div", {class: "grow"},
         h("b", null, "Once: "),
         h("span", null, `Hold A once (or use the button below); in Wispr Flow → Settings → Microphone, drag “${micName(c)}” to the top of the ranking. Wispr then uses the stick while you hold A and your usual mic otherwise.`),
-        h("div", {class: "small dim", style: "margin-top:4px"}, "You can put “stick-mic-usb” wherever you like in that list — Wispr only sees it while the stick is plugged in. Renamed the mic (here or after an update)? Wispr sees a new device: rank it again."))),
+        h("div", {class: "small dim", style: "margin-top:4px"}, `You can put “${usbMicName(c)}” wherever you like in that list — Wispr only sees it while the stick is plugged in. Renamed the mic (here or after an update)? Wispr sees a new device: rank it again.`))),
       field("Ranking step", showMicButton(c), "Makes the mic appear for 60 s so you can drag it to the top in Wispr's settings. Needs the stick connected by Bluetooth and not plugged in by USB."),
       wirelessMicStatus(),
       h("details", {style: "margin-top:8px"}, h("summary", {class: "small dim"}, "Advanced timings"),
@@ -79,8 +79,8 @@ export async function render(el) {
           "After the mic appears, how long the stick waits before pressing Wispr's shortcut, so Wispr has switched to it. Longer = safer, the key goes down later. The stick presses anyway after 800 ms (creating the mic takes ~100–170 ms on top of this)."),
         slider("wisprTail", "Keep after release", c.wispr_tail_ms ?? 800, 0, 3000, 50,
           "How long the mic stays after the key-up, so Wispr finishes reading it (removing it mid-dictation stops Wispr with “MicDisconnected”). It also waits while Wispr is still reading it, up to 4 s more."),
-        field("Mic name", h("input", {id: "wisprMicName", value: micName(c), style: "max-width:260px"}),
-          "The name Wispr shows (plus “(Aggregate)”). Change it only if this one causes trouble — Wispr then needs the ranking again."))),
+        field("Mic name", h("input", {id: "wisprMicName", value: customMicName(c), placeholder: autoMicName(c), style: "max-width:260px"}),
+          "The name Wispr shows (plus “(Aggregate)”). Empty = named after the stick. Change it only if that causes trouble — Wispr then needs the ranking again."))),
     card("Approvals",
       field("Stick approvals", toggle("stickApprovals", "Claude Code's permission prompts go to the stick and here first", c.stick_approvals !== false),
         "Off: Claude Code asks in the terminal straight away. On: it waits up to 30 s for A / B.")),
@@ -121,7 +121,13 @@ function brainStatus() {
   return field("Speed", line);
 }
 
-const micName = c => (c.wispr_mic_name || "").trim() || "stick-mic-bluetooth";
+// Named after the stick, so two sticks' mics differ (same rule as stick_mic_device.slug / the firmware)
+const slug = s => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+const stickSlug = c => slug(c.stick && c.stick.name);
+const autoMicName = c => stickSlug(c) ? `${stickSlug(c)}-mic-bluetooth` : "stick-mic-bluetooth";
+const customMicName = c => { const n = (c.wispr_mic_name || "").trim(); return n === "stick-mic-bluetooth" ? "" : n; };
+const micName = c => customMicName(c) || autoMicName(c);
+const usbMicName = c => `${stickSlug(c) || "stick"}-mic-usb`;
 
 function slider(id, label, value, min, max, step, help) {
   const out = h("span", {class: "dim", style: "min-width:64px"}, `${value} ms`);
@@ -169,9 +175,9 @@ function wirelessMicStatus() {
     }
     if (!w.enabled) { line.appendChild(h("span", {class: "dim"}, "Off.")); return; }
     const d = w.device_mic || {};
-    const now = w.stick_usb ? pill("", "Stick on USB — Wispr uses stick-mic-usb")
+    const now = w.stick_usb ? pill("", "Stick on USB — Wispr uses the stick's USB mic")
       : d.present ? pill("ok", `“${d.name}” is there${w.streaming ? " — streaming" : ""}`)
-      : pill("", `“${d.name || "stick-mic-bluetooth"}” appears while you hold A`);
+      : pill("", `“${d.name || "the stick's mic"}” appears while you hold A`);
     line.appendChild(h("div", null, now, " ", h("span", {class: "dim"}, `carried by ${w.device || "BlackHole 2ch"}`)));
     if (d.error) line.appendChild(h("div", null, pill("warn", "Mic device"), " ", d.error));
     const l = d.last;
@@ -247,7 +253,7 @@ async function save() {
     wireless_mic: v("wirelessMic").checked,
     wispr_switch_ms: +v("wisprSwitch").value,
     wispr_tail_ms: +v("wisprTail").value,
-    wispr_mic_name: v("wisprMicName").value.trim() || "stick-mic-bluetooth",
+    wispr_mic_name: v("wisprMicName").value.trim(),  // "" = named after the stick
     safe_tools: v("safeTools").value.split(",").map(s => s.trim()).filter(Boolean),
     claude_path: v("claudePath").value.trim(),
     update_channel: v("updChannel").value,

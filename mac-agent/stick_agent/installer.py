@@ -576,14 +576,15 @@ def blackhole_installed():
     return any(p.exists() for p in BLACKHOLE_DRIVERS)
 
 
-RANK_HINT = ("once: hold A, then in Wispr Flow → Settings → Microphone drag \"stick-mic-bluetooth\" to the top "
+RANK_HINT = ("once: hold A, then in Wispr Flow → Settings → Microphone drag \"<stick>-mic-bluetooth\" "
+             "(e.g. stick-key-mic-bluetooth) to the top "
              "(don't pick BlackHole 2ch itself)")
 
 
 class WirelessMic(Component):
     id = "wireless_mic"
     title = "Wireless Wispr mic"
-    description = ("the stick's mic for Wispr without a cable: while A is held a \"stick-mic-bluetooth\" mic appears "
+    description = ("the stick's mic for Wispr without a cable: while A is held a \"<stick>-mic-bluetooth\" mic appears "
                    "(BlackHole 2ch carries the audio, hidden; Wispr is never set to it)")
     default = False
     needs = {"admin": True, "terminal": f"BlackHole 2ch: `{BLACKHOLE_CASK}` in a terminal"}

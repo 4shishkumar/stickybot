@@ -1,11 +1,15 @@
 #include "mic.h"
 #include <M5Unified.h>
 #include <USB.h>
-#include <StickUSBAudio.h>  // arduino-esp32's USBAudioCard, vendored in lib/ to name the mic "stick-mic-usb"
+#include <StickUSBAudio.h>  // arduino-esp32's USBAudioCard, vendored in lib/ to name the mic
+#include <nvs.h>
+#include <nvs_flash.h>
 #include "netlog.h"
 #include "buddy.h"
 #include "logic/adpcm.h"
 #include "logic/wispr.h"
+#include "logic/mic_name.h"
+#include "config.h"
 
 namespace mic {
 
@@ -23,8 +27,25 @@ constexpr size_t   RING         = 48;    // ~1 s of frames: pre-roll + slack
 constexpr int      SEND_PER_CHUNK = 2;   // drain up to 2 frames per 10 ms (catch up 2x; 3x lost frames)
 constexpr uint32_t END_TIMEOUT_MS = 1500;
 
+// The mic's name follows the stick's ("stick-key-mic-usb"). USB starts before setup() and
+// before the core opens NVS, so this reads the saved name itself (renaming restarts the stick).
+static const char* usbMicName() {
+  static char name[48];
+  char stick[32] = DEFAULT_NAME;
+  nvs_flash_init();  // already open: no-op; the core's own init later is fine either way
+  nvs_handle_t h;
+  if (nvs_open("stick", NVS_READONLY, &h) == ESP_OK) {
+    size_t len = sizeof stick;
+    if (nvs_get_str(h, "name", stick, &len) != ESP_OK) strlcpy(stick, DEFAULT_NAME, sizeof stick);
+    nvs_close(h);
+  }
+  micname::usb(stick, name, sizeof name);
+  return name;
+}
+
 // A global so it registers its USB interface before the USB stack starts
 // (the core starts USB before setup(), like the serial port).
+[[maybe_unused]] static const bool namedUac = (StickUSBAudio::setNameProvider(usbMicName), true);
 static StickUSBAudio uac(RATE, UAC_BPS_16, UAC_SPK_NONE, UAC_MIC_MONO, "stick-mic-usb");
 
 struct Frame { uint8_t len; uint8_t data[HEADER + MAX_SAMPLES / 2]; };

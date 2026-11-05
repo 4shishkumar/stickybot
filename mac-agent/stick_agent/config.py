@@ -48,10 +48,10 @@ DEFAULT_CONFIG = {
     # given to voice requests; terminal sessions: `stick-agent mcp install`
     "mcp_server": True,
     # Wireless Wispr mic: an A hold away from USB streams the stick's mic over Bluetooth; the agent
-    # plays it into BlackHole 2ch and, just for the hold, shows it as the "stick-mic-bluetooth" mic
+    # plays it into BlackHole 2ch and, just for the hold, shows it as the "<stick>-mic-bluetooth" mic
     # (rank it first in Wispr's microphone list once). `stick-agent setup --with wireless_mic`
     "wireless_mic": False,
-    "wispr_mic_name": "stick-mic-bluetooth",  # the device's name (changing it: rank it in Wispr again)
+    "wispr_mic_name": "",  # "" = after the stick ("stick-key-mic-bluetooth"); changing it: rank it in Wispr again
     "wispr_switch_ms": 250,   # after the device appears: time for Wispr to switch to it before the key goes down
     "wispr_tail_ms": 800,     # after the key-up: keep the device while Wispr finishes (then the usual mic again)
     # Events on the stick (see events.py): kind -> "celebrate" | "nice" | "headsup" | "off";

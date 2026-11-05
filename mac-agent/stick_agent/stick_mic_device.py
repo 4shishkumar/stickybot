@@ -30,7 +30,27 @@ import time
 
 log = logging.getLogger("wispr")
 
-NAME = "stick-mic-bluetooth"
+NAME = "stick-mic-bluetooth"  # the old fixed name (and the fallback before a stick is picked)
+
+
+def slug(stick_name):
+    """'Arbaaz StickS3' -> 'arbaaz-sticks3' (same rule as the firmware's USB mic name)."""
+    out, dash = [], False
+    for c in str(stick_name or "").lower():
+        if c.isascii() and c.isalnum():
+            out.append(c)
+            dash = False
+        elif out and not dash:
+            out.append("-")
+            dash = True
+    return "".join(out).strip("-")
+
+
+def name_for(stick_name):
+    """The Bluetooth mic's name for this stick: '<stick>-mic-bluetooth' ('stick-key-mic-bluetooth'),
+    so two sticks' mics differ; the USB mic is '<stick>-mic-usb'."""
+    s = slug(stick_name)
+    return f"{s}-mic-bluetooth" if s else NAME
 UID = "com.stickkey.wireless-mic"
 CARRIER = "BlackHole 2ch"  # the driver underneath; Wispr never needs to be set to it
 

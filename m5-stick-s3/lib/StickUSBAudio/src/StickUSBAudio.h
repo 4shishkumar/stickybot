@@ -123,6 +123,10 @@ public:
                 const char *name = "stick-mic-usb");
   ~StickUSBAudio();
 
+  // [stick-key change] a function that gives the name when USB starts (before setup(); the string
+  // must stay valid). Overrides the constructor's name when it returns a non-empty one.
+  static void setNameProvider(const char *(*fn)());
+
   /** @brief Allocates buffers and starts the speaker receive task if a speaker path exists.
    *  @return @c true on success, @c false if allocation or task creation failed.
    */

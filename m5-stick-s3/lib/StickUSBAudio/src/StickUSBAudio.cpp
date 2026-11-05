@@ -42,11 +42,22 @@ static int32_t *_spk_buf = NULL;  //[CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ / 4]
 static arduino_usb_audio_card_data_handler_t _cb = NULL;
 static StickUSBAudio *_uac = NULL;
 static const char *_name = "stick-mic-usb";  // [stick-key change] the name macOS shows for the mic
+static const char *(*_nameFn)() = NULL;      // [stick-key change] asked for the name when USB starts
+
+// [stick-key change] the name now: from the provider if there is one (it may read the settings)
+static const char *micName() {
+  const char *n = _nameFn ? _nameFn() : NULL;
+  return (n && *n) ? n : _name;
+}
+
+void StickUSBAudio::setNameProvider(const char *(*fn)()) {
+  _nameFn = fn;
+}
 
 uint16_t tusb_audio_load_descriptor(uint8_t *dst, uint8_t *itf) {
   _itf_num = *itf;
 #if TUD_OPT_HIGH_SPEED
-  uint8_t str_index = tinyusb_add_string_descriptor(_name);  // [stick-key change] was "TinyUSB UAC2"
+  uint8_t str_index = tinyusb_add_string_descriptor(micName());  // [stick-key change] was "TinyUSB UAC2"
   if (_spk_channels == 2 && _mic_channels > 0) {
     // Stereo Headset
     uint8_t ep_num = tinyusb_get_free_duplex_endpoint();
@@ -127,7 +138,7 @@ uint16_t tusb_audio_load_descriptor(uint8_t *dst, uint8_t *itf) {
     return TUD_AUDIO20_MICROPHONE_DESC_LEN;
   }
 #else
-  uint8_t str_index = tinyusb_add_string_descriptor(_name);  // [stick-key change] was "TinyUSB UAC1"
+  uint8_t str_index = tinyusb_add_string_descriptor(micName());  // [stick-key change] was "TinyUSB UAC1"
   if (_spk_channels == 2 && _mic_channels > 0) {
     // Stereo Headset
     uint8_t ep_num = tinyusb_get_free_duplex_endpoint();

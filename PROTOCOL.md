@@ -187,7 +187,7 @@ The agent may also send the Hardware Buddy `{"cmd":"status"}` over this link (th
 | board → Mac | `{"src":"agent","evt":"talk","state":"start","rate":16000,"codec":"ima-adpcm"}` when B becomes a hold |
 | board → Mac | `{"src":"agent","evt":"talk","state":"stop"}` after the last audio frame |
 | Mac → board | `"wmic":true\|false` in the hello (and on its own, `{"src":"agent","wmic":…}`, when it changes) — the agent can play the wireless Wispr mic (its `wireless_mic` is on and BlackHole 2ch was found) |
-| Mac → board | `"wready":true` in the hello (agent 1.7.1+) — it answers `prepare` with `ready` (makes the *stick-mic-bluetooth* device) |
+| Mac → board | `"wready":true` in the hello (agent 1.7.1+) — it answers `prepare` with `ready` (makes the *<stick>-mic-bluetooth* device) |
 | board → Mac | `{"src":"agent","evt":"wispr","state":"prepare","id":n,"rate":16000,"codec":"ima-adpcm"}` when A goes down for Wispr away from USB and the agent said `wready` (firmware 1.7.1+); audio frames follow at once |
 | Mac → board | `{"src":"agent","wispr":"ready","id":n}` — the device is there and Wispr has had its switch time: press the key. `"device":false` = no device (stick on USB, no BlackHole, CoreAudio error): press anyway |
 | board → Mac | `{"src":"agent","evt":"wispr","state":"start","rate":16000,"codec":"ima-adpcm"}` instead of `prepare`, to an agent without `wready` (firmware 1.7.0 always) |
@@ -215,7 +215,7 @@ of silence). The speaker stays quiet meanwhile (the codec is half-duplex: cues w
 until the mic is off). Older agents never send `wmic`, so the board never streams to them.
 
 *The mic device* (firmware 1.7.1 + agent with `wready`): Wispr is not set to BlackHole.
-The agent shows a public CoreAudio aggregate device named **stick-mic-bluetooth**
+The agent shows a public CoreAudio aggregate device named **<stick>-mic-bluetooth**
 (config `wispr_mic_name`; UID `com.stickkey.wireless-mic`; its only sub-device is
 BlackHole 2ch, so what the agent plays is its input) only around a hold, and the user
 ranks it first in Wispr's microphone list once; Wispr switches to the highest-ranked
@@ -242,7 +242,7 @@ off, on exit / SIGTERM / restart, and (left over from a crash) at start.
 **USB wins**: while the board is plugged into a computer (TinyUSB mounted *and* VBUS
 present — a charger-only cable never mounts), A is the USB microphone exactly as
 before 1.7: the key at once, no `prepare`, no Bluetooth audio. The USB mic is named
-**stick-mic-usb** (its audio interface string; firmware 1.7.1+, before: "TinyUSB UAC1").
+**<stick>-mic-usb**, named after the stick ("Arbaaz StickS3" → *arbaaz-sticks3-mic-usb*: lower case, other characters → "-"; its audio interface string; firmware 1.8.1+, 1.7.1–1.8.0: *stick-mic-usb*, before: "TinyUSB UAC1"). The agent names the Bluetooth one *<stick>-mic-bluetooth* the same way.
 
 **Sounds** (`"src":"agent"`):
 

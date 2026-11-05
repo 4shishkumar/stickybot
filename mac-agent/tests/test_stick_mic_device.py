@@ -266,7 +266,7 @@ def readies(agent):
 
 async def test_config_defaults(home):
     cfg = config.load()
-    assert cfg["wispr_mic_name"] == "stick-mic-bluetooth"
+    assert cfg["wispr_mic_name"] == ""  # named after the stick
     assert cfg["wispr_switch_ms"] == 250 and cfg["wispr_tail_ms"] == 800
     assert "wispr_fallback_mic" not in cfg
 
@@ -339,6 +339,39 @@ async def test_rename_from_the_settings(wired, no_core_audio):
     await wired.holds.show(60)
     assert [no_core_audio.list[d][0] for d in no_core_audio.ours()] == ["stick-mic-bt"]
     await wired.holds.drop("test")
+
+
+def test_names_follow_the_stick():
+    from stick_agent import stick_mic_device as m
+    assert m.slug("Arbaaz StickS3") == "arbaaz-sticks3"
+    assert m.slug("  stick-key ") == "stick-key" and m.slug("Ana's  key!") == "ana-s-key" and m.slug("") == ""
+    assert m.name_for("stick-key") == "stick-key-mic-bluetooth"
+    assert m.name_for("Arbaaz StickS3") == "arbaaz-sticks3-mic-bluetooth"
+    assert m.name_for(None) == m.name_for("!!") == "stick-mic-bluetooth"  # no stick picked yet
+
+
+async def test_the_mic_is_named_after_the_picked_stick(wired, no_core_audio):
+    wired.cfg["stick"] = {"address": "X", "name": "Arbaaz StickS3"}
+    wired.cfg["wispr_mic_name"] = "stick-mic-bluetooth"  # the old default, saved in older configs: automatic
+    assert wired._mic_name() == "arbaaz-sticks3-mic-bluetooth"
+    wired.cfg["wispr_mic_name"] = "my mic"
+    assert wired._mic_name() == "my mic"
+
+
+async def test_a_renamed_stick_renames_its_mic(wired, no_core_audio):
+    wired.cfg["stick"] = {"address": "X", "name": "stick-key"}
+    wired.mic_dev.name = wired._mic_name()
+    assert {"src": "agent", "proto": "@state", "id": "name"} in wired.link.sent  # asked on connect
+    await wired.holds.show(60)
+    wired._on_message({"id": "name", "ok": True, "board": "m5-sticks3", "name": "Desk Stick", "fw": "1.8.1"})
+    assert wired.cfg["stick"] == {"address": "X", "name": "Desk Stick"}
+    assert config.load()["stick"]["name"] == "Desk Stick"
+    assert await wait_for(lambda: not no_core_audio.ours())  # the old one goes
+    await wired.holds.show(60)
+    assert [no_core_audio.list[d][0] for d in no_core_audio.ours()] == ["desk-stick-mic-bluetooth"]
+    await wired.holds.drop("test")
+    wired._on_message({"src": "agent", "evt": "wispr", "name": "ignored"})  # not a @state reply
+    assert wired.cfg["stick"]["name"] == "Desk Stick"
 
 
 async def test_bad_timings_in_the_config_are_clamped(wired):

@@ -135,7 +135,26 @@ class Agent:
     # --- the stick-mic-bluetooth device -----------------------------------------
 
     def _mic_name(self):
-        return str(self.cfg.get("wispr_mic_name") or "").strip() or mic_device.NAME
+        """wispr_mic_name if set, else named after the picked stick ("stick-key-mic-bluetooth")."""
+        name = str(self.cfg.get("wispr_mic_name") or "").strip()
+        if name and name != mic_device.NAME:  # the old fixed default means "automatic" too
+            return name
+        return mic_device.name_for((self.cfg.get("stick") or {}).get("name"))
+
+    def _note_name(self, msg):
+        """A @state reply: remember the stick's current name (the mic is named after it)."""
+        stick, name = self.cfg.get("stick"), msg.get("name")
+        if stick and isinstance(name, str) and name and msg.get("board") and name != stick.get("name"):
+            log.info("the stick is now called %r (was %r)", name, stick.get("name"))
+            self.cfg["stick"] = {**stick, "name": name}  # not update_config: that reconnects the link
+            config.save(self.cfg)
+            self._rename_mic("the stick was renamed")
+
+    def _rename_mic(self, why):
+        """The stick or the setting changed: the device is made again under the new name next hold."""
+        if self._mic_name() != self.mic_dev.name:
+            self.mic_dev.name = self._mic_name()
+            asyncio.ensure_future(self.holds.drop(why))
 
     def mic_device_unavailable(self):
         """"" if the stick-mic-bluetooth device may exist now, else why not."""
@@ -222,6 +241,8 @@ class Agent:
         self.updates.link_changed(state)
         if state == "connected":
             asyncio.ensure_future(self.sound({"get": 1}))
+            # its name now (renamed on the stick?): the reply comes back through _on_message
+            asyncio.ensure_future(self.link.send({"src": "agent", "proto": "@state", "id": "name"}))
             if getattr(self.brain, "prewarm", None):
                 asyncio.ensure_future(self.brain.prewarm())  # Claude Code ready before the first request
             self.wispr.warm()  # ready before the first key-down
@@ -236,6 +257,7 @@ class Agent:
     def _on_message(self, msg):
         for listen in list(self.listeners):  # e.g. firmware_api waiting for a "proto" reply
             listen(msg)
+        self._note_name(msg)
         if msg.get("cmd") == "permission" or (msg.get("src") == "agent" and (
                 msg.get("evt") in ("talk", "cancel") or (msg.get("evt") == "wispr" and msg.get("state") != "stop"))):
             self.last_input = time.time()  # a button press or a gesture (for stick_status)
@@ -648,9 +670,8 @@ class Agent:
         config.save(self.cfg)
         if "stick" in changes:
             self.link.set_target(self.cfg["stick"])
-        if "wispr_mic_name" in changes and self._mic_name() != self.mic_dev.name:
-            self.mic_dev.name = self._mic_name()
-            asyncio.ensure_future(self.holds.drop("renamed: made again under the new name next time"))
+        if "stick" in changes or "wispr_mic_name" in changes:
+            self._rename_mic("renamed: made again under the new name next time")
         if "wireless_mic" in changes:
             self.wispr.set_enabled(self.cfg.get("wireless_mic"))
             if not self.wispr.enabled:

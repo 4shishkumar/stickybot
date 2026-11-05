@@ -12,6 +12,14 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Changed
+- **Mic names follow the stick's name**, so two sticks' mics differ: the USB mic is
+  `<stick>-mic-usb` (firmware 1.8.1) and the Bluetooth one `<stick>-mic-bluetooth`, e.g.
+  `stick-key-mic-usb` / `arbaaz-sticks3-mic-bluetooth`. Wispr sees new devices: rank them
+  once more (hold A away from USB for the Bluetooth one; plug the stick in for the USB one).
+  A custom *Mic name* in Settings still wins. Renaming the stick renames its mics.
+- The home screen shows the stick's name (not "stick-key") until the Mac sends the time.
+
 ## [1.8.2] - 2026-11-05
 
 ### Added

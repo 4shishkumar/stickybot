@@ -26,7 +26,7 @@ Two parts: **you** flash and name their stick on your Mac (about 3 minutes), the
 
 ### Wispr only (no software)
 1. **Pair:** System Settings → Bluetooth → *priya-key* → **Connect** → press **A** on the stick when it shows the code.
-2. **Wispr:** hold **A** to dictate. To use the stick's mic, plug it in by USB: it is the mic **stick-mic-usb** (firmware 1.7.1+; older: *TinyUSB UAC1*) — rank it in Wispr → Settings → Microphone wherever you like; Wispr only sees it while the stick is plugged in (unplugged, Wispr uses the Mac's mic). Without a cable it needs the agent: with the *Wireless Wispr mic* on, hold **A** once and drag **stick-mic-bluetooth** to the **top** of that ranking — it only exists while A is held, so Wispr uses the stick then and their usual mic otherwise. Never pick *BlackHole 2ch* itself. See *Wireless Wispr mic* in `mac-agent/README.md`.
+2. **Wispr:** hold **A** to dictate. To use the stick's mic, plug it in by USB: it is the mic **<stick>-mic-usb** (firmware 1.7.1+; older: *TinyUSB UAC1*) — rank it in Wispr → Settings → Microphone wherever you like; Wispr only sees it while the stick is plugged in (unplugged, Wispr uses the Mac's mic). Without a cable it needs the agent: with the *Wireless Wispr mic* on, hold **A** once and drag **<stick>-mic-bluetooth** to the **top** of that ranking — it only exists while A is held, so Wispr uses the stick then and their usual mic otherwise. Never pick *BlackHole 2ch* itself. See *Wireless Wispr mic* in `mac-agent/README.md`.
 3. **Unlock (optional):** set their Mac password on the USB settings page (step 4 above, on their Mac); then double-press **B** on the lock screen.
 
 That also gives them B click = Enter and the stick's own screens, sounds and menu.

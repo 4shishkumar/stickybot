@@ -645,7 +645,7 @@ static void drawHome(const Dash& d) {
     txt(d.ampm, x + cw + 3, 78, F12, DIM, baseline_left);
     txt(d.date, W / 2, 98, F12, DIM, middle_center);
   } else {
-    txt("stick-key", W / 2, 62, F24, INK, middle_center);
+    txt(d.name, W / 2, 62, fit(d.name, W - 12, {F24, F12}), INK, middle_center);  // no time yet
     txt("time comes from the Mac agent", W / 2, 92, F9, FAINT, middle_center);
   }
 
@@ -1227,7 +1227,7 @@ void drawDock(const Dash& d, int side, bool night) {
       txt(d.clock, W / 2, 54, fit(d.clock, W - 12, {F96, F44}), ink, middle_center);
       txt(d.ampm, W - 8, 10, F12, dim, top_right);
     } else {
-      txt("stick-key", W / 2, 52, F24, ink, middle_center);
+      txt(d.name, W / 2, 52, fit(d.name, W - 12, {F24, F12}), ink, middle_center);
     }
     // date + weather on one line
     String date = d.longDate.length() ? d.longDate : d.date;
@@ -1265,7 +1265,7 @@ void drawDock(const Dash& d, int side, bool night) {
       txt(d.clock.substring(colon + 1), W / 2, 150, F96, ink, middle_center);
       txt(d.ampm + "  -  " + d.date, W / 2, 202, F12, dim, middle_center);
     } else {
-      txt("stick-key", W / 2, 100, F24, ink, middle_center);
+      txt(d.name, W / 2, 100, fit(d.name, W - 12, {F24, F12}), ink, middle_center);
     }
     if (d.wxValid) {
       String temp = String(d.wxTemp) + "°";
