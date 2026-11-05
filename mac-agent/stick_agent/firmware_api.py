@@ -199,6 +199,7 @@ async def onboarding_state(agent, stick):
 
 def routes(agent):
     stick = Stick(agent)
+    agent.stick_api = stick  # the update check asks it for the connected stick's version
     jobs = {}
 
     async def firmware(_):

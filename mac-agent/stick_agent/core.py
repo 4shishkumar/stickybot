@@ -7,7 +7,7 @@ import os
 import time
 import uuid
 
-from . import brain, clips, commands, config, events, feed, github, home, link, stt, weather, wispr_mic
+from . import brain, clips, commands, config, events, feed, github, home, link, stt, updates, weather, wispr_mic
 from . import stick_mic_device as mic_device
 from .adpcm import Recording
 from .speech import Sentences, Speaker
@@ -105,6 +105,7 @@ class Agent:
         self.feed = feed.Feed()
         self.notifier = events.Events(self)  # (self.events is the dashboard feed)
         self.github = github.GitHub(self)
+        self.updates = updates.Updates(self)  # newer releases / firmware (dashboard, menu bar, stick)
         self.home = home.Home()
         self.link_state = "starting"
         self.state = "starting"          # ready | listening | transcribing | thinking | working | error | ...
@@ -194,6 +195,8 @@ class Agent:
                 "mcp": self.cfg.get("mcp_server", True),
                 "model": self.cfg.get("model"), "weather": self.weather.now, "github": self.github.status(),
                 "stick_approvals": self.cfg.get("stick_approvals", True), "wireless_mic": self.wireless_status(),
+                "update": {k: v for k, v in self.updates.status().items()
+                           if k in ("available", "title", "agent_update", "firmware_update", "checking")},
                 "brain": self.brain.status() if getattr(self.brain, "status", None) else None}
 
     def _history(self, entry):
@@ -205,6 +208,7 @@ class Agent:
     def _on_link(self, state):
         self.link_state = state
         self.emit("link", state=state)
+        self.updates.link_changed(state)
         if state == "connected":
             asyncio.ensure_future(self.sound({"get": 1}))
             if getattr(self.brain, "prewarm", None):
@@ -628,6 +632,7 @@ class Agent:
     # --- settings ---------------------------------------------------------------
 
     def update_config(self, changes):
+        recheck = any(k in changes and changes[k] != self.cfg.get(k) for k in ("update_channel", "update_check"))
         self.cfg.update(changes)
         config.save(self.cfg)
         if "stick" in changes:
@@ -644,6 +649,8 @@ class Agent:
                 asyncio.ensure_future(self.link.send({"src": "agent", "wmic": self.wispr.ready}))
         if "idle_content" in changes:
             self.feed._next = 0
+        if recheck and self.cfg.get("update_check", True) is not False and self.loop:
+            asyncio.ensure_future(self.updates.check())  # e.g. the new channel's latest release
         if "weather" in changes or "weather_location" in changes:
             asyncio.ensure_future(self.weather.refresh(self.cfg, force=True))
         self.emit("config", config=self.cfg)
@@ -663,6 +670,7 @@ class Agent:
                 await asyncio.sleep(60)
         asyncio.create_task(weather_loop())
         asyncio.create_task(self.github.run())
+        asyncio.create_task(self.updates.run())
         self.set_state("starting", "loading speech model")
         try:
             await self.loop.run_in_executor(self.stt.thread, self.stt.load,

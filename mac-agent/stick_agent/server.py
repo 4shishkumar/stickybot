@@ -14,7 +14,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import clips, commands, components_api, config, firmware_api, link, mcp_server, mcp_setup
+from . import clips, commands, components_api, config, firmware_api, link, mcp_server, mcp_setup, updates
 from . import events as evmod
 
 log = logging.getLogger("server")
@@ -258,6 +258,7 @@ def make_app(agent):
     app.add_routes(firmware_api.routes(agent))
     app.add_routes(components_api.routes(agent))
     app.add_routes(mcp_server.routes(agent))
+    app.add_routes(updates.routes(agent))
     app.add_routes([
         web.get("/api/mcp", mcp_status), web.post("/api/mcp/terminal/{action:install|uninstall}", mcp_terminal),
         web.post("/api/mcp/answer", mcp_answer),

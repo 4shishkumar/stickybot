@@ -42,6 +42,9 @@ class Menu(rumps.App):
         self.shown = None
         self.agent = agent
         self.status_item = rumps.MenuItem("Starting…")
+        # "Update available: v1.8.0" (updates.py) — hidden until there is one
+        self.update_item = rumps.MenuItem("", callback=lambda _: webbrowser.open(f"http://localhost:{config.PORT}/#settings"))
+        self.update_shown = None
         self.pause_item = rumps.MenuItem("Pause", callback=self.toggle_pause)
         # Stick speaker: volume levels + sounds on/off (saved on the stick)
         self.volume_menu = rumps.MenuItem("Stick volume")
@@ -51,7 +54,7 @@ class Menu(rumps.App):
             self.volume_items[pct] = item
             self.volume_menu.add(item)
         self.sounds_item = rumps.MenuItem("Sounds on the stick", callback=self.toggle_sounds)
-        self.menu = [self.status_item, None,
+        self.menu = [self.status_item, self.update_item, None,
                      rumps.MenuItem("Open dashboard", callback=lambda _: webbrowser.open(f"http://localhost:{config.PORT}")),
                      self.volume_menu, self.sounds_item, None,
                      self.pause_item, rumps.MenuItem("Restart", callback=self.restart), None,
@@ -87,6 +90,19 @@ class Menu(rumps.App):
             for pct, item in self.volume_items.items():
                 item.state = 1 if abs(vol - pct) < 13 and (pct > 0 or vol == 0) else 0
         self.sounds_item.state = 1 if snd.get("on") else 0
+        self.show_update()
+
+    def show_update(self):
+        updates = getattr(self.agent, "updates", None)
+        title = updates.status().get("title", "") if updates else ""
+        if title == self.update_shown:
+            return
+        self.update_shown = title
+        self.update_item.title = f"{title} — open the dashboard" if title else ""
+        try:
+            self.update_item._menuitem.setHidden_(not title)
+        except AttributeError:  # (rumps internals moved) — an empty title still says nothing
+            pass
 
     def _stick(self, payload):
         """Runs a sound command on the agent's loop (we're on the menu-bar thread)."""

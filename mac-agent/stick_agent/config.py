@@ -60,6 +60,10 @@ DEFAULT_CONFIG = {
     "quiet_hours": {"on": False, "from": "19:00", "to": "09:00"},  # events show, but silently
     "claude_done_min_s": 120,  # "Claude finished" only for tasks at least this long
     "github": {"on": True, "interval_s": 120, "primary_repo": "wvrdz/loom"},  # PR watcher (gh CLI)
+    # Updates (updates.py): look for a newer stick-key release at start-up and every 24 h;
+    # "stable" = releases only, "beta" = prereleases (vX.Y.Z-beta.N) too
+    "update_check": True,
+    "update_channel": "stable",
 }
 
 

@@ -36,6 +36,7 @@ KINDS = {
     # notify() / celebrate() from a Claude session (the stick tools, mcp_server.py): the session picks
     # the level; "off" here silences them all
     "claude_tool":       ("nice",      "claude", "Tests passed",              "from loom"),
+    "update":            ("nice",      "star",   "Update v1.8.0 ready",       "see the dashboard"),  # updates.py
     "test":              ("nice",      "bell",   "Test event",                "from the dashboard"),
 }
 DEFAULT_RULES = {k: v[0] for k, v in KINDS.items()}
