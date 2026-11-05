@@ -59,8 +59,20 @@ export async function render(el) {
         h("label", {class: "switch"}, h("input", {type: "checkbox", class: "idle", value: v, checked: (c.idle_content || []).includes(v)}), h("span", null, l)))))),
     card("Wireless Wispr mic",
       field("Wireless mic", toggle("wirelessMic", "Hold A away from USB: the stick's mic reaches Wispr over Bluetooth", !!c.wireless_mic),
-        "The agent plays it into the BlackHole 2ch virtual mic. Set Wispr Flow's microphone to “BlackHole 2ch”. On USB the stick is a normal USB mic as before."),
-      wirelessMicStatus()),
+        `While you hold A, a microphone called “${micName(c)}” appears on this Mac and Wispr switches to it; a moment after you let go it disappears and Wispr is back on your usual mic. Plugged in by USB, the stick is its USB mic (“stick-mic-usb”) as before.`),
+      h("div", {class: "notice", style: "margin-bottom:12px"}, h("div", {class: "grow"},
+        h("b", null, "Once: "),
+        h("span", null, `Hold A once (or use the button below); in Wispr Flow → Settings → Microphone, drag “${micName(c)}” to the top of the ranking. Wispr then uses the stick while you hold A and your usual mic otherwise.`),
+        h("div", {class: "small dim", style: "margin-top:4px"}, "You can put “stick-mic-usb” wherever you like in that list — Wispr only sees it while the stick is plugged in. Renamed the mic (here or after an update)? Wispr sees a new device: rank it again."))),
+      field("Ranking step", showMicButton(c), "Makes the mic appear for 60 s so you can drag it to the top in Wispr's settings. Needs the stick connected by Bluetooth and not plugged in by USB."),
+      wirelessMicStatus(),
+      h("details", {style: "margin-top:8px"}, h("summary", {class: "small dim"}, "Advanced timings"),
+        slider("wisprSwitch", "Switch time", c.wispr_switch_ms ?? 250, 0, 1000, 25,
+          "After the mic appears, how long the stick waits before pressing Wispr's shortcut, so Wispr has switched to it. Longer = safer, the key goes down later. The stick presses anyway after 800 ms (creating the mic takes ~100–170 ms on top of this)."),
+        slider("wisprTail", "Keep after release", c.wispr_tail_ms ?? 800, 0, 3000, 50,
+          "How long the mic stays after the key-up, so Wispr finishes reading it (removing it mid-dictation stops Wispr with “MicDisconnected”). It also waits while Wispr is still reading it, up to 4 s more."),
+        field("Mic name", h("input", {id: "wisprMicName", value: micName(c), style: "max-width:260px"}),
+          "The name Wispr shows (plus “(Aggregate)”). Change it only if this one causes trouble — Wispr then needs the ranking again."))),
     card("Approvals",
       field("Stick approvals", toggle("stickApprovals", "Claude Code's permission prompts go to the stick and here first", c.stick_approvals !== false),
         "Off: Claude Code asks in the terminal straight away. On: it waits up to 30 s for A / B.")),
@@ -71,31 +83,81 @@ export async function render(el) {
   );
 }
 
-export function leave() { root = null; if (unsub) unsub(); unsub = null; }
+export function leave() { root = null; if (unsub) unsub(); unsub = null; wmListeners.clear(); }
 
-// Device found / streaming, from /api/status (wireless_mic) and live "wispr_mic" events.
+const micName = c => (c.wispr_mic_name || "").trim() || "stick-mic-bluetooth";
+
+function slider(id, label, value, min, max, step, help) {
+  const out = h("span", {class: "dim", style: "min-width:64px"}, `${value} ms`);
+  const input = h("input", {type: "range", id, min, max, step, value, style: "flex:1;max-width:320px",
+    oninput: () => { out.textContent = `${input.value} ms`; }});
+  return field(label, h("div", {class: "row"}, input, out), help);
+}
+
+// The live wireless-mic state: /api/status (wireless_mic) and the "wispr_mic" / "stick_mic" events.
+let wm = null;
+const wmListeners = new Set();
+function wmUpdate(w) { wm = w; for (const fn of wmListeners) fn(wm); }
+
+// "Create the device now for 60 s": for the one-time ranking in Wispr. Off while it can't exist.
+function showMicButton(c) {
+  const why = h("span", {class: "small dim"});
+  const btn = h("button", {class: "btn", type: "button", onclick: async () => {
+    btn.disabled = true;
+    const r = await post("/api/wireless-mic/show", {secs: 60});
+    if (report(r, `“${r.name || micName(c)}” is there for ${r.secs || 60} s — rank it first in Wispr → Settings → Microphone`)) refreshStatus();
+    else btn.disabled = false;
+  }}, `Show “${micName(c)}” for 60 s`);
+  const paint = w => {
+    const unavailable = !w ? "This version of the agent can't do it." : w.unavailable;
+    const showing = w && w.device_mic && w.device_mic.showing_s;
+    btn.disabled = !!unavailable || !!showing;
+    why.textContent = unavailable ? `Not now: ${unavailable}.` : showing ? `There now — ${showing} s left.` : "";
+  };
+  wmListeners.add(paint);
+  paint(wm);
+  return h("div", {class: "row"}, btn, why);
+}
+
 function wirelessMicStatus() {
-  const line = h("div", {class: "small"});
+  const line = h("div", {class: "small", style: "display:flex;flex-direction:column;gap:6px"});
+  const pill = (cls, text) => h("span", {class: `pill ${cls}`}, h("span", {class: "dot"}), text);
   const paint = w => {
     clear(line);
     if (!w) { line.appendChild(h("span", {class: "dim"}, "This version of the agent doesn't report it.")); return; }
     if (w.error) {
-      line.append(h("span", {class: "pill warn"}, h("span", {class: "dot"}), "Needs attention"), " ", w.error.includes("brew")
+      line.append(h("div", null, pill("warn", "Needs attention"), " ", w.error.includes("brew")
         ? h("span", null, "Install BlackHole 2ch in a terminal: ", h("code", null, "brew install --cask blackhole-2ch"), " (asks for your Mac password).")
-        : w.error);
+        : w.error));
       return;
     }
     if (!w.enabled) { line.appendChild(h("span", {class: "dim"}, "Off.")); return; }
-    const parts = [h("span", {class: "pill ok"}, h("span", {class: "dot"}), w.streaming ? "Streaming to Wispr" : "Ready"),
-      " ", h("span", {class: "dim"}, `Playing into ${w.device || "BlackHole 2ch"}`)];
-    if (w.last) parts.push(h("span", {class: "dim"}, ` · last: ${w.last.secs}s, ${w.last.lost} lost frame${w.last.lost === 1 ? "" : "s"}, ${w.last.underruns} gap${w.last.underruns === 1 ? "" : "s"}`));
-    line.append(...parts);
+    const d = w.device_mic || {};
+    const now = w.stick_usb ? pill("", "Stick on USB — Wispr uses stick-mic-usb")
+      : d.present ? pill("ok", `“${d.name}” is there${w.streaming ? " — streaming" : ""}`)
+      : pill("", `“${d.name || "stick-mic-bluetooth"}” appears while you hold A`);
+    line.appendChild(h("div", null, now, " ", h("span", {class: "dim"}, `carried by ${w.device || "BlackHole 2ch"}`)));
+    if (d.error) line.appendChild(h("div", null, pill("warn", "Mic device"), " ", d.error));
+    const l = d.last;
+    if (l) {
+      const bits = [l.made === "created" ? `created in ${l.create_ms} ms` : l.made === "present" ? "already there" : "couldn't be created",
+        `key pressed ${l.ready_ms} ms after A`];
+      if (l.released_early) bits.push("released before that");
+      if (l.wispr_open_ms != null) bits.push(`Wispr opened it ${l.wispr_open_ms} ms later`);
+      if (l.wispr_closed_ms != null) bits.push(`closed it ${l.wispr_closed_ms} ms after the stream`);
+      if (l.kept_ms != null) bits.push(`removed after ${l.kept_ms} ms`);
+      line.appendChild(h("div", {class: "dim"}, `Last hold: ${bits.join(" · ")}`));
+    }
+    if (w.last) line.appendChild(h("div", {class: "dim"}, `Last stream: ${w.last.secs}s, ${w.last.lost} lost frame${w.last.lost === 1 ? "" : "s"}, ${w.last.underruns} gap${w.last.underruns === 1 ? "" : "s"}`));
   };
-  paint((store.status || {}).wireless_mic);
+  wmListeners.add(paint);
+  wmUpdate((store.status || {}).wireless_mic || null);
   if (unsub) unsub();
   unsub = store.on((type, data) => {
-    if (type === "status") paint(data.wireless_mic);
-    else if (type === "event" && data && data.kind === "wispr_mic") paint(data);
+    if (type === "status") wmUpdate(data.wireless_mic || null);
+    else if (type === "event" && data && data.kind === "wispr_mic") wmUpdate({...(wm || {}), ...data});
+    else if (type === "event" && data && data.kind === "stick_mic") wmUpdate({...(wm || {}), device_mic: data});
+    else if (type === "event" && data && data.kind === "link") refreshStatus();
   });
   return field("Status", line);
 }
@@ -141,6 +203,9 @@ async function save() {
     idle_content: [...document.querySelectorAll(".idle")].filter(c => c.checked).map(c => c.value),
     stick_approvals: v("stickApprovals").checked,
     wireless_mic: v("wirelessMic").checked,
+    wispr_switch_ms: +v("wisprSwitch").value,
+    wispr_tail_ms: +v("wisprTail").value,
+    wispr_mic_name: v("wisprMicName").value.trim() || "stick-mic-bluetooth",
     safe_tools: v("safeTools").value.split(",").map(s => s.trim()).filter(Boolean),
     claude_path: v("claudePath").value.trim(),
   });

@@ -558,10 +558,15 @@ def blackhole_installed():
     return any(p.exists() for p in BLACKHOLE_DRIVERS)
 
 
+RANK_HINT = ("once: hold A, then in Wispr Flow → Settings → Microphone drag \"stick-mic-bluetooth\" to the top "
+             "(don't pick BlackHole 2ch itself)")
+
+
 class WirelessMic(Component):
     id = "wireless_mic"
     title = "Wireless Wispr mic"
-    description = "the stick's mic for Wispr without a cable: the agent plays it into the BlackHole 2ch virtual mic"
+    description = ("the stick's mic for Wispr without a cable: while A is held a \"stick-mic-bluetooth\" mic appears "
+                   "(BlackHole 2ch carries the audio, hidden; Wispr is never set to it)")
     default = False
     needs = {"admin": True, "terminal": f"BlackHole 2ch: `{BLACKHOLE_CASK}` in a terminal"}
 
@@ -569,7 +574,7 @@ class WirelessMic(Component):
         bh = blackhole_installed()
         on = bool(config.load().get("wireless_mic"))
         if bh and on:
-            return "installed", "on · BlackHole 2ch found — set Wispr's microphone to BlackHole 2ch"
+            return "installed", f"on · BlackHole 2ch found — {RANK_HINT}"
         if on:
             return "partial", f"on, but BlackHole 2ch isn't installed — run: {BLACKHOLE_CASK}"
         return "missing", "off · BlackHole 2ch found" if bh else f"off · needs BlackHole 2ch ({BLACKHOLE_CASK})"
@@ -585,8 +590,8 @@ class WirelessMic(Component):
         if not blackhole_installed():
             # Never run it ourselves: the cask installs a system audio driver and asks for the admin password
             raise NotAvailable(f"BlackHole 2ch isn't installed yet — in a terminal run: {BLACKHOLE_CASK} "
-                               "(it asks for your Mac password), then set Wispr's microphone to BlackHole 2ch")
-        ui.say("BlackHole 2ch found — in Wispr Flow's settings, set the microphone to BlackHole 2ch")
+                               "(it asks for your Mac password)")
+        ui.say(f"BlackHole 2ch found — {RANK_HINT}")
 
     def uninstall(self, ui):
         cfg = config.load()

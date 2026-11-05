@@ -111,6 +111,17 @@ def make_app(agent):
         agent.update_config(allowed)
         return web.json_response(agent.cfg)
 
+    async def show_mic(request):
+        """The stick-mic-bluetooth device for a minute, so it can be ranked in Wispr's settings."""
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        secs = min(300, max(5, int(body.get("secs") or 60)))
+        why = await agent.holds.show(secs)
+        return web.json_response({"ok": not why, "error": why or None, "secs": secs, "name": agent.mic_dev.name},
+                                 status=409 if why else 200)
+
     async def scan(_):
         return web.json_response(await link.scan())
 
@@ -197,7 +208,10 @@ def make_app(agent):
 
     async def restart(_):
         log.info("restart requested from the dashboard")
-        asyncio.get_running_loop().call_later(0.3, lambda: os.execv(sys.executable, [sys.executable] + sys.argv))
+        def again():
+            agent.shutdown()  # execv skips atexit: remove the stick mic device first
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        asyncio.get_running_loop().call_later(0.3, again)
         return web.json_response({"ok": True})
 
     app = web.Application(middlewares=[guard])
@@ -217,6 +231,7 @@ def make_app(agent):
         web.get("/api/events/kinds", event_kinds), web.post("/api/claude-event", claude_event),
         web.get("/api/clips", clip_list), web.post("/api/clips/play", clip_play),
         web.get("/api/voices", voices), web.post("/api/voice/test", test_voice),
+        web.post("/api/wireless-mic/show", show_mic),
         web.post("/api/pause", pause), web.post("/api/new-chat", new_chat), web.post("/api/restart", restart),
     ])
     return app

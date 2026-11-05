@@ -8,6 +8,7 @@ import time
 import uuid
 
 from . import brain, clips, commands, config, events, feed, github, home, link, stt, weather, wispr_mic
+from . import stick_mic_device as mic_device
 from .adpcm import Recording
 
 log = logging.getLogger("agent")
@@ -59,6 +60,44 @@ class Agent:
         self.voice = None  # the `say` process while speaking
         self.wispr = wispr_mic.WisprMic(emit=self.emit)  # A held away from USB: the stick's mic into BlackHole
         self.wispr.set_enabled(self.cfg.get("wireless_mic"))
+        # ...heard by Wispr through the "stick-mic-bluetooth" device, which exists only around an A hold
+        self.stick_usb = None  # the stick is plugged into a computer by USB (it says so; None = unknown / older)
+        self.mic_dev = mic_device.StickMicDevice(name=self._mic_name())
+        self.holds = mic_device.Holds(self.mic_dev, send=lambda msg: self.link.send(msg),
+                                            allowed=self.mic_device_unavailable, settings=self._hold_settings,
+                                            emit=self.emit_soon)
+
+    # --- the stick-mic-bluetooth device -----------------------------------------
+
+    def _mic_name(self):
+        return str(self.cfg.get("wispr_mic_name") or "").strip() or mic_device.NAME
+
+    def mic_device_unavailable(self):
+        """"" if the stick-mic-bluetooth device may exist now, else why not."""
+        if not self.wispr.enabled:
+            return "the wireless Wispr mic is off"
+        if not self.link.connected:
+            return "the stick isn't connected by Bluetooth"
+        if self.stick_usb:
+            return "the stick is plugged in by USB: Wispr uses its USB mic"
+        return ""
+
+    def _hold_settings(self):
+        def ms(key, default, hi):
+            try:
+                return min(hi, max(0, int(self.cfg.get(key, default))))
+            except (TypeError, ValueError):
+                return default
+        return (ms("wispr_switch_ms", mic_device.LEAD_MS, 2000),
+                ms("wispr_tail_ms", mic_device.TAIL_MS, 5000))
+
+    def wireless_status(self):
+        return {**self.wispr.status(), "device_mic": self.holds.status(), "stick_usb": self.stick_usb,
+                "unavailable": self.mic_device_unavailable()}
+
+    def shutdown(self):
+        """Exit / SIGTERM / restart: never leave the device behind (it outlives us otherwise)."""
+        self.holds.shutdown()
 
     # --- events for the dashboard / menu bar --------------------------------
 
@@ -69,6 +108,17 @@ class Agent:
             q.put_nowait(ev)
         return ev
 
+    def emit_soon(self, kind, **data):
+        """emit() from any thread (the stick mic reports from its worker)."""
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if self.loop is not None and running is not self.loop and self.loop.is_running():
+            self.loop.call_soon_threadsafe(lambda: self.emit(kind, **data))
+        else:
+            self.emit(kind, **data)
+
     def set_state(self, state, detail=""):
         self.state, self.detail = state, detail
         self.emit("state", state=state, detail=detail)
@@ -78,7 +128,7 @@ class Agent:
                 "stt_ready": self.stt_ready, "busy": self.brain.busy, "mtu": self.link.mtu, "stats": self.stats,
                 "prompts": [{"id": k, **{x: v[x] for x in ("tool", "hint", "from")}} for k, v in self.prompts.items()],
                 "model": self.cfg.get("model"), "weather": self.weather.now, "github": self.github.status(),
-                "stick_approvals": self.cfg.get("stick_approvals", True), "wireless_mic": self.wispr.status()}
+                "stick_approvals": self.cfg.get("stick_approvals", True), "wireless_mic": self.wireless_status()}
 
     def _history(self, entry):
         with config.HISTORY.open("a") as f:
@@ -95,6 +145,8 @@ class Agent:
         else:
             self.wispr.stop()
             self.wispr.close()
+            self.stick_usb = None
+            asyncio.ensure_future(self.holds.drop("the stick disconnected"))
         if self.state in ("starting", "ready", "no-stick", "searching", "paused") and self.stt_ready:
             self.set_state("ready" if state == "connected" else state)
 
@@ -119,10 +171,22 @@ class Agent:
                 rec, self.rec = self.rec, None
                 asyncio.ensure_future(self._handle_talk(rec))
         elif msg.get("src") == "agent" and msg.get("evt") == "wispr":  # A held: the mic for Wispr, not a request
-            if msg.get("state") == "start":
+            if msg.get("state") == "prepare":  # 1.7.1+: the key waits for our "ready"
+                self.wispr.start(msg.get("rate") or wispr_mic.RATE)  # the output stream is open before "ready"
+                asyncio.ensure_future(self.holds.prepare(msg.get("id")))
+            elif msg.get("state") == "start":  # 1.7.0: the key is already down, too late for the device
                 self.wispr.start(msg.get("rate") or wispr_mic.RATE)
             elif msg.get("state") == "stop":
                 self.wispr.stop()
+                self.holds.stop()
+        elif msg.get("src") == "agent" and msg.get("evt") == "usb":  # plugged into / out of a computer by USB
+            usb = bool(msg.get("mounted"))
+            if usb != self.stick_usb:
+                log.info("the stick is %s USB", "on" if usb else "off")
+            self.stick_usb = usb
+            if usb:
+                asyncio.ensure_future(self.holds.drop("the stick is on USB"))
+            self.emit("wispr_mic", **self.wireless_status())
         elif msg.get("src") == "agent" and msg.get("evt") == "cancel":
             log.info("cancelled on the stick")
             self.brain.cancel()
@@ -141,7 +205,8 @@ class Agent:
         card = dict(self.home.card(self))
         card["a"] = stick_text(card.get("a", ""))[:60]
         card["b"] = stick_text(card.get("b", ""))[:140]
-        extra = {"home": card, "wmic": self.wispr.ready}
+        # wready: we answer the stick's "prepare" with "ready" (it holds the key until then)
+        extra = {"home": card, "wmic": self.wispr.ready, "wready": True}
         if self.weather.now:
             extra["wx"] = {**self.weather.now, "at": stick_text(self.weather.now.get("at", ""))}
         return extra
@@ -344,8 +409,13 @@ class Agent:
         config.save(self.cfg)
         if "stick" in changes:
             self.link.set_target(self.cfg["stick"])
+        if "wispr_mic_name" in changes and self._mic_name() != self.mic_dev.name:
+            self.mic_dev.name = self._mic_name()
+            asyncio.ensure_future(self.holds.drop("renamed: made again under the new name next time"))
         if "wireless_mic" in changes:
             self.wispr.set_enabled(self.cfg.get("wireless_mic"))
+            if not self.wispr.enabled:
+                asyncio.ensure_future(self.holds.drop("turned off"))
             if self.link.connected:
                 self.wispr.warm()
                 asyncio.ensure_future(self.link.send({"src": "agent", "wmic": self.wispr.ready}))
@@ -359,6 +429,7 @@ class Agent:
 
     async def run(self):
         self.loop = asyncio.get_running_loop()
+        await self.loop.run_in_executor(None, self.mic_dev.cleanup_stale)  # left by an agent that crashed
         self.link.set_target(self.cfg.get("stick"))
         link_task = asyncio.create_task(self.link.run())
 

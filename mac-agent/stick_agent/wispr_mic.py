@@ -1,10 +1,11 @@
 """Wireless Wispr mic: the stick's mic, played into the BlackHole 2ch virtual device.
 
 While A holds the Wispr shortcut away from USB, the stick streams its mic as
-the same ADPCM frames as a B talk, between {"evt":"wispr","state":"start"} and
-{"evt":"wispr","state":"stop"} (PROTOCOL.md, "Mac link"). Wispr Flow's
-microphone is set to "BlackHole 2ch", so whatever we play into BlackHole's
-output is what Wispr hears — no cable.
+the same ADPCM frames as a B talk, between {"evt":"wispr","state":"prepare"} and
+{"evt":"wispr","state":"stop"} (PROTOCOL.md, "Mac link"). Whatever we play into
+BlackHole's output is the input of the "stick-mic-bluetooth" device that
+stick_mic_device.py shows around each hold, which Wispr ranks first — no cable,
+and Wispr is never set to BlackHole itself.
 
 Wispr starts recording on key-down, so latency matters: frames are decoded as
 they arrive, put in order by seq (a lost frame becomes 20 ms of silence),

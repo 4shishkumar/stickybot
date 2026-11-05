@@ -75,12 +75,29 @@ class EventLog(logging.Handler):
             pass
 
 
+def clean_exit(agent):
+    """The stick mic device outlives the process that made it, so every way out removes it:
+    a normal exit / Ctrl-C (atexit) and SIGTERM (launchd stop, `kill`). The handler runs on the
+    main thread: within 0.5 s under the menu bar (its refresh timer runs Python code)."""
+    import atexit
+    import signal
+    atexit.register(agent.shutdown)
+
+    def on_term(*_):
+        logging.getLogger("main").info("SIGTERM: removing the stick mic device, exiting")
+        agent.shutdown()
+        logging.shutdown()
+        os._exit(128 + signal.SIGTERM)  # as if killed by it (launchd's KeepAlive treats it the same)
+    signal.signal(signal.SIGTERM, on_term)
+
+
 def run(menubar=True):
     setup_logging()
     from . import core, server
     agent = core.Agent()
     logging.getLogger().addHandler(EventLog(agent))
     logging.getLogger("main").info("stick-agent starting (pid %d)", os.getpid())
+    clean_exit(agent)
 
     async def main():
         await server.serve(agent)

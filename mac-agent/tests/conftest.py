@@ -13,7 +13,7 @@ os.environ["STICK_AGENT_PORT"] = "18660"
 
 import pytest  # noqa: E402
 
-from stick_agent import clips, config, events, github, wispr_mic  # noqa: E402
+from stick_agent import clips, config, events, github, stick_mic_device, wispr_mic  # noqa: E402
 
 
 class FakeStream:
@@ -66,6 +66,54 @@ def no_real_audio(monkeypatch):
     """Tests never open a real audio device: the wireless mic sees no devices unless a test adds one."""
     fake = FakeSoundDevice()
     monkeypatch.setattr(wispr_mic, "_sounddevice", lambda: fake)
+    return fake
+
+
+REAL_CORE_AUDIO = stick_mic_device.CoreAudioDevices  # for the opt-in end-to-end test only
+
+
+class FakeCoreAudio:
+    """Stands in for stick_mic_device.CoreAudioDevices: a device list, aggregates made and
+    destroyed in memory, and who reads which device. Never touches the real CoreAudio."""
+
+    def __init__(self):
+        self.list = {120: ("BlackHole 2ch", "BlackHole2ch_UID"), 115: ("MacBook Pro Microphone", "BuiltInMic"),
+                     108: ("MacBook Pro Speakers", "BuiltInSpeaker")}
+        self.readers = {}         # device id -> [pid]
+        self.created = []         # (name, uid, sub uid)
+        self.destroyed = []
+        self.fail_create = 0      # OSStatus to return
+        self.per_process = True   # macOS 14.2+
+        self._next = 300
+
+    def devices(self):
+        return [(d, name, uid) for d, (name, uid) in self.list.items()]
+
+    def create_aggregate(self, name, uid, sub_uid):
+        self.created.append((name, uid, sub_uid))
+        if self.fail_create:
+            return self.fail_create, 0
+        self._next += 1
+        self.list[self._next] = (name, uid)
+        return 0, self._next
+
+    def destroy_aggregate(self, dev):
+        self.destroyed.append(dev)
+        self.list.pop(dev, None)
+        return 0
+
+    def input_users(self, dev):
+        return list(self.readers.get(dev, [])) if self.per_process else None
+
+    def ours(self, uid="com.stickkey.wireless-mic"):
+        return [d for d, (_n, u) in self.list.items() if u == uid]
+
+
+@pytest.fixture(autouse=True)
+def no_core_audio(monkeypatch):
+    """...and never create a real CoreAudio device (or remove the live agent's)."""
+    fake = FakeCoreAudio()
+    monkeypatch.setattr(stick_mic_device, "CoreAudioDevices", lambda: fake)
     return fake
 
 

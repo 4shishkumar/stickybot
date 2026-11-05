@@ -105,6 +105,7 @@ class Menu(rumps.App):
         self.agent.loop.call_soon_threadsafe(self.agent.link.pause, not self.agent.link.paused)
 
     def restart(self, _):
+        self.agent.shutdown()  # execv skips atexit: remove the stick mic device first
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
     def quit(self, _):

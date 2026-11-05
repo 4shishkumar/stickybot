@@ -36,9 +36,13 @@ DEFAULT_CONFIG = {
     "idle_content": ["facts", "hn", "onthisday", "wikipedia"],
     "onboarding": {},         # wizard steps the user ticked by hand (see firmware_api.py)
     "stick_approvals": True,  # Claude Code permission prompts go to the stick + dashboard first
-    # Wireless Wispr mic: an A hold away from USB streams the stick's mic over Bluetooth and the
-    # agent plays it into BlackHole 2ch (set Wispr's microphone to it). `stick-agent setup --with wireless_mic`
+    # Wireless Wispr mic: an A hold away from USB streams the stick's mic over Bluetooth; the agent
+    # plays it into BlackHole 2ch and, just for the hold, shows it as the "stick-mic-bluetooth" mic
+    # (rank it first in Wispr's microphone list once). `stick-agent setup --with wireless_mic`
     "wireless_mic": False,
+    "wispr_mic_name": "stick-mic-bluetooth",  # the device's name (changing it: rank it in Wispr again)
+    "wispr_switch_ms": 250,   # after the device appears: time for Wispr to switch to it before the key goes down
+    "wispr_tail_ms": 800,     # after the key-up: keep the device while Wispr finishes (then the usual mic again)
     # Events on the stick (see events.py): kind -> "celebrate" | "nice" | "headsup" | "off";
     # kinds not listed use events.DEFAULT_RULES
     "event_rules": {},
@@ -66,6 +70,7 @@ def load():
         cfg.update(json.loads(CONFIG.read_text()))
     except (OSError, ValueError):
         pass
+    cfg.pop("wispr_fallback_mic", None)  # the smart mic's fallback (removed)
     return cfg
 
 
