@@ -39,6 +39,7 @@
 #include "logic/prompt.h"
 #include "sound.h"
 #include "events.h"
+#include "ota.h"
 #include <HijelHID_BLEKeyboard.h>  // KEY_MOD_* constants
 
 constexpr uint32_t CPU_MHZ           = 80;
@@ -247,7 +248,8 @@ static void unlockMac() {
 
 static bool canStandby() {
   uint8_t m = settings::standbyMin();
-  return m && !onUsbPower && mode == Mode::STATUS && !comboDown && !web::active() &&
+  return m && !onUsbPower && mode == Mode::STATUS && !comboDown && !web::active() && !ota::active() &&
+         !ota::pendingVerify() &&  // waking from standby is a reset: it would roll a new firmware back
          !hid::pairingCode() && millis() - lastInput > (uint32_t)m * 60000;
 }
 
@@ -347,6 +349,42 @@ static void comboRelease() {
   uint32_t tail = wispr::keyUpDelayMs(wisprMic);
   if (tail) keyUpAt = millis() + tail;
   else comboUp();
+}
+
+// --- Firmware update over Bluetooth ------------------------------------------------
+
+// Why an update can't start right now (the agent shows it), nullptr = it can.
+static const char* otaBusy() {
+  if (comboDown || mic::wisprStreaming()) return "dictation";
+  if (agentTalking) return "talk";
+  if (buddy::hasPrompt()) return "approval";
+  if (hid::pairingCode()) return "pairing";
+  if (mode == Mode::MENU) return "menu";
+  if (web::busy()) return "wifi-update";
+  return nullptr;
+}
+
+// While an update runs it owns the screen and the buttons: B cancels, A does nothing.
+static bool otaLoop() {
+  static bool was = false;
+  ota::loop();
+  if (ota::active()) {
+    was = true;
+    if (M5.BtnB.wasPressed()) {
+      ota::cancelByUser();
+      swallowB = true;  // that press isn't an Enter
+    }
+    return true;
+  }
+  if (was) {
+    was = false;
+    ignoreAUntilRelease = M5.BtnA.isPressed();
+    swallowB = swallowB || M5.BtnB.isPressed();
+    dirty = true;
+  }
+  String notice;
+  if (ota::takeNotice(notice)) showMessage(notice.c_str(), "Nothing changed on the stick", COLOR_WARN, 3000);
+  return false;
 }
 
 // --- Menu ------------------------------------------------------------------------
@@ -565,6 +603,8 @@ void setup() {
   ignoreAUntilRelease = fromStandby;  // the press that woke us isn't a combo press
   lastInput = millis();
   status = readStatus();
+  ota::setBusyCheck(otaBusy);
+  ota::bootCheck();  // last: it may start the loop watchdog until a new firmware is confirmed
   Log.printf("ready %s fw %s — combo %s%s. Type 'help' for commands.\n", hid::name().c_str(),
                 FW_VERSION, comboToString(settings::combo()).c_str(), fromStandby ? " (woke from standby)" : "");
 }
@@ -579,6 +619,10 @@ void loop() {
   mic::loop();
   sound::loop();
   pollSerial();
+  if (otaLoop()) {
+    delay(2);  // the update screen: no other screens, buttons or standby meanwhile
+    return;
+  }
 
   // Developer mode: on USB power keep Wi-Fi (home network) on for OTA + logs.
   {
@@ -841,7 +885,7 @@ void loop() {
   // Face-down = standby, also on USB and with developer-mode Wi-Fi in the
   // background; only skipped while a menu / settings screen / key is in use.
   if (mev == motion::Event::FACE_DOWN && settings::faceDownSleeps() && mode == Mode::STATUS && !comboDown &&
-      !web::shown()) {
+      !web::shown() && !ota::pendingVerify()) {
     Log.println("Face-down: going to standby");
     standby();
   }

@@ -11,6 +11,7 @@
 #include "sound.h"
 #include "protocol.h"
 #include "events.h"
+#include "ota.h"
 
 namespace buddy {
 
@@ -19,6 +20,7 @@ static const char* NUS_RX  = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";  // desktop
 static const char* NUS_TX  = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";  // stick -> desktop
 static const char* AUDIO   = "6e400004-b5a3-f393-e0a9-e50e24dcca9e";  // stick -> agent: ADPCM frames
 static const char* AUDIO_IN = "6e400005-b5a3-f393-e0a9-e50e24dcca9e"; // agent -> stick: sound clips
+static const char* OTA_DATA = "6e400006-b5a3-f393-e0a9-e50e24dcca9e"; // agent -> stick: firmware image (1.8.0+)
 
 constexpr uint32_t LINK_TIMEOUT_MS = 30000;
 constexpr uint32_t AGENT_TIMEOUT_MS = 25000;  // agent sends a hello every 10 s
@@ -47,6 +49,15 @@ class AudioInCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo&) override {
     std::string v = c->getValue();
     sound::clipPacket((const uint8_t*)v.data(), v.size());
+  }
+};
+
+// Firmware image packets; WRITE_ENC already needs the encrypted (paired) link
+class OtaCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& info) override {
+    if (!info.isEncrypted()) return;
+    std::string v = c->getValue();
+    ota::onPacket((const uint8_t*)v.data(), v.size());
   }
 };
 
@@ -86,6 +97,10 @@ void attach() {
       AUDIO_IN, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_ENC);
   static AudioInCallbacks audioInCb;
   audioIn->setCallbacks(&audioInCb);
+  NimBLECharacteristic* otaData = svc->createCharacteristic(
+      OTA_DATA, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_ENC);
+  static OtaCallbacks otaCb;
+  otaData->setCallbacks(&otaCb);
   static RxCallbacks rxCb;
   rx->setCallbacks(&rxCb);
   server->start();  // re-registers all services (keyboard + buddy)
@@ -176,6 +191,10 @@ static void handleAgent(JsonDocument& d) {
   if (d["wispr"] == "ready") {  // the mic device is there: the key can go down
     readyId_ = d["id"] | 0;
     readyPending_ = true;
+    return;
+  }
+  if (d["ota"].is<JsonObject>()) {  // firmware update over this link (ota.cpp)
+    ota::control(d["ota"].as<JsonObjectConst>());
     return;
   }
   if (fresh || !usbSent_ || millis() - usbSentAt_ > 20000) sendUsb();
@@ -408,6 +427,17 @@ void fastLink() {
   // guidelines); keyboards normally idle slower.
   uint16_t h = connHandle();
   if (h != BLE_HS_CONN_HANDLE_NONE) NimBLEDevice::getServer()->updateConnParams(h, 12, 24, 0, 400);
+}
+
+void sendLine(const String& json) { send(json); }
+
+void fastData() {
+  fastLink();
+  uint16_t h = connHandle();
+  if (h == BLE_HS_CONN_HANDLE_NONE) return;
+  NimBLEServer* server = NimBLEDevice::getServer();
+  server->setDataLen(h, 251);  // long link-layer packets (usually on already)
+  server->updatePhy(h, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK, 0);  // 2M PHY if the Mac agrees
 }
 
 void agentCancel() { send("{\"src\":\"agent\",\"evt\":\"cancel\"}"); }

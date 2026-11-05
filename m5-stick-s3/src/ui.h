@@ -84,6 +84,7 @@ void drawHolding(const Combo& c, bool usbMic, bool wirelessMic = false);  // A h
 void drawMenu(const MenuView& m);
 void drawInfo(const char* title, const String lines[], int count, const char* hint);
 void drawMessage(const char* title, const char* sub, uint16_t bg);
+void drawUpdate(int pct, const String& version, const char* line);  // firmware update over Bluetooth
 void drawPairing(uint32_t code);
 void drawPrompt(const String& tool, const String& hint, const String& from);
 // A question from a Claude session (1.7.2): the question, then A / B with their labels

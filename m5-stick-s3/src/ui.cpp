@@ -961,6 +961,29 @@ void drawMessage(const char* title, const char* sub, uint16_t accent) {
 }
 
 
+// Firmware update over Bluetooth: the percentage, a bar, and how to cancel.
+void drawUpdate(int pct, const String& version, const char* line) {
+  dockEnd();  // normal screens are portrait
+  canvas.fillScreen(GROUND);
+  pct = constrain(pct, 0, 100);
+  txt("Updating", W / 2, 40, F18, INK, middle_center);
+  if (version.length()) txt("to " + version, W / 2, 62, F12, DIM, middle_center);
+  String n(pct);
+  canvas.setFont(F44);
+  int nw = canvas.textWidth(n.c_str());
+  canvas.setFont(F18);
+  int pw = canvas.textWidth("%");
+  int x0 = (W - nw - pw - 2) / 2;
+  txt(n, x0, 118, F44, AGENT, middle_left);
+  txt("%", x0 + nw + 2, 126, F18, AGENT, middle_left);
+  int bx = PAD + 2, bw = W - 2 * (PAD + 2), by = 156;
+  canvas.fillRoundRect(bx, by, bw, 8, 4, CHIP);
+  if (pct) canvas.fillRoundRect(bx, by, max(8, bw * pct / 100), 8, 4, AGENT);
+  if (line) paragraph(line, F12, PAD, 182, W - 2 * PAD, 2, DIM, 16);
+  txt("B: cancel", W / 2, H - 12, F9, FAINT, middle_center);
+  canvas.pushSprite(0, 0);
+}
+
 // --- Event screens (celebrate / nice / headsup) -----------------------------------
 
 // Big icons drawn with primitives, centred on cx, cy, about `size` px across.
