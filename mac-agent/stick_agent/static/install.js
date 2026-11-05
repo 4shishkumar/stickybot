@@ -6,6 +6,9 @@ import {h, clear, get, post, toast, report, remember} from "./lib.js";
 import {streamJob} from "./updates.js";
 import * as wizard from "./wizard.js";
 
+// el.append(), but leaving out null / undefined / false (append() would show them as text, e.g. "null")
+const append = (el, ...kids) => el.append(...kids.filter(k => k !== null && k !== undefined && k !== false));
+
 export const title = "Set up Stick Agent";
 export const subtitle = "";
 
@@ -140,7 +143,7 @@ function paint() {
   const i = ids().indexOf(cur);
   const body = h("section", {class: "card inst-card"});
   const [pc, pl] = PILL[step.state] || ["", step.state];
-  body.append(
+  append(body,
     h("div", {class: "eyebrow"}, `Step ${i + 1} of ${ids().length}` + (KIND[step.kind] ? ` · ${KIND[step.kind]}` : "")),
     h("div", {class: "row"}, h("h2", {class: "step-title"}, step.title),
       step.id !== "done" ? h("span", {class: "pill " + pc}, h("span", {class: "dot"}), pl) : null),
@@ -248,7 +251,7 @@ const RENDER = {
       el.appendChild(note("", "Already downloading in the background",
         `${(d.bytes / 1e9).toFixed(1)} GB so far. Press Download to see the progress.`));
     }
-    el.append(h("p", {class: "small dim"}, `${d.repo} — about 2.5 GB, downloaded once from Hugging Face. A few minutes on a good connection.`),
+    append(el, h("p", {class: "small dim"}, `${d.repo} — about 2.5 GB, downloaded once from Hugging Face. A few minutes on a good connection.`),
       actionRow(h("button", {class: "btn primary", type: "button", onclick: e => { e.target.disabled = true; runJob(out); }}, "Download the speech model")), out);
     if (s.job) runJob(out);
   },
@@ -257,7 +260,7 @@ const RENDER = {
     const d = s.data || {};
     if (!d.installed) {
       const out = jobBox();
-      el.append(h("p", {class: "small dim"}, "Not installed yet. The button runs Anthropic's official installer (it installs into ~/.local/bin, no password needed):"),
+      append(el, h("p", {class: "small dim"}, "Not installed yet. The button runs Anthropic's official installer (it installs into ~/.local/bin, no password needed):"),
         copyable(d.install_cmd),
         actionRow(h("button", {class: "btn primary", type: "button", onclick: e => { e.target.disabled = true; runJob(out); }}, "Install Claude Code")), out,
         h("p", {class: "small faint"}, "Already use Claude Code somewhere else? Set its path in Settings → Claude later."));
@@ -265,7 +268,7 @@ const RENDER = {
       return;
     }
     if (!d.logged_in) {
-      el.append(note("warn", "One thing to do in Terminal: log in",
+      append(el, note("warn", "One thing to do in Terminal: log in",
         "Open Terminal, run the command below, and log in with your Claude account (a browser window opens). No API key is needed.",
         "This page notices by itself when you're logged in."), copyable("claude"),
         h("div", {class: "row small dim"}, h("span", {class: "spinner", "aria-hidden": "true"}), "Waiting for the login…"));
@@ -283,7 +286,7 @@ const RENDER = {
     }
     if (!d.claude_installed) el.appendChild(note("", "Claude Code isn't installed yet", "You can still add them: they start working once it is."));
     const out = jobBox();
-    el.append(h("p", {class: "small dim"}, "This adds three hooks to ", h("code", null, d.path),
+    append(el, h("p", {class: "small dim"}, "This adds three hooks to ", h("code", null, d.path),
       ". A dated backup of the file is saved first; your other settings and hooks stay as they are. Nothing changes until you press the button."),
       h("details", {open: true}, h("summary", {class: "small"}, "Exactly what gets added"), h("pre", {class: "log"}, JSON.stringify(d.preview, null, 2))),
       h("ul", {class: "small dim inst-ul"},
@@ -296,13 +299,13 @@ const RENDER = {
   mcp(el, s) {
     const d = s.data || {};
     if (s.state === "unavailable") {
-      el.append(note("warn", "Not available yet", s.detail), d.conflict ? null :
+      append(el, note("warn", "Not available yet", s.detail), d.conflict ? null :
         actionRow(h("button", {class: "btn", type: "button", onclick: () => go("claude")}, "Go to Claude Code")));
       return;
     }
     if (s.state === "done") { el.appendChild(note("ok", "Added to Claude Code", `${s.detail}. New sessions have the mcp__stick__* tools.`)); return; }
     const out = jobBox();
-    el.append(h("p", {class: "small dim"}, "Then you can ask any Claude Code session things like “run the tests and notify me on the stick when done”. ",
+    append(el, h("p", {class: "small dim"}, "Then you can ask any Claude Code session things like “run the tests and notify me on the stick when done”. ",
       "The button runs Claude Code's own command (your token is filled in; it stays on this Mac):"),
       d.command ? h("pre", {class: "log"}, d.command) : null,
       actionRow(h("button", {class: "btn primary", type: "button", onclick: e => { e.target.disabled = true; runJob(out); }}, "Add the stick tools")), out);
@@ -312,7 +315,7 @@ const RENDER = {
   github(el, s) {
     const d = s.data || {};
     if (!d.gh) {
-      el.append(note("", "First, the GitHub CLI (gh)", "Install it in Terminal, then press Check again."),
+      append(el, note("", "First, the GitHub CLI (gh)", "Install it in Terminal, then press Check again."),
         d.brew ? null : h("p", {class: "small dim"}, "No Homebrew yet? Install it first (it asks for your password):"),
         d.brew ? null : copyable(d.brew_install),
         copyable(d.brew_cmd),
@@ -323,7 +326,7 @@ const RENDER = {
       const out = jobBox();
       const codeBox = h("div", {class: "inst-code-box"});
       const showCode = (code, url) => {
-        clear(codeBox).append(
+        append(clear(codeBox), 
           h("div", {class: "small dim"}, "Your one-time code"),
           h("div", {class: "inst-code"}, code),
           actionRow(
@@ -336,7 +339,7 @@ const RENDER = {
         e.target.disabled = true;
         runJob(out, {onEvent: m => { if (m.code) showCode(m.code, m.url); }});
       }}, "Log in to GitHub");
-      el.append(h("p", {class: "small dim"}, "gh is installed but not logged in. The button starts GitHub's own login: you get a one-time code to enter on github.com."),
+      append(el, h("p", {class: "small dim"}, "gh is installed but not logged in. The button starts GitHub's own login: you get a one-time code to enter on github.com."),
         actionRow(start), codeBox, out,
         h("p", {class: "small faint"}, "Prefer Terminal? Run ", h("code", null, "gh auth login"), " there — this page notices by itself."));
       if (d.login && d.login.code) showCode(d.login.code, d.login.url);
@@ -347,7 +350,7 @@ const RENDER = {
     const save = async () => { if (await wizard.saveRepo(repo.value.trim(), true)) refresh(); };
     repo.addEventListener("keydown", e => { if (e.key === "Enter") save(); });
     if (s.state === "done") el.appendChild(note("ok", "GitHub alerts are on", `Watching ${d.repo} and your own PRs.`));
-    el.append(h("p", {class: "small dim"}, s.state === "done" ? "Change the main repo:" : "Logged in. Which repo do you work on most? Alerts watch it first, and “PR 1234” on the stick opens its pull requests."),
+    append(el, h("p", {class: "small dim"}, s.state === "done" ? "Change the main repo:" : "Logged in. Which repo do you work on most? Alerts watch it first, and “PR 1234” on the stick opens its pull requests."),
       actionRow(repo, h("button", {class: "btn primary", type: "button", onclick: save}, s.state === "done" ? "Save" : "Turn on alerts")));
   },
 
@@ -355,7 +358,7 @@ const RENDER = {
     const d = s.data || {};
     const out = jobBox();
     if (!d.blackhole) {
-      el.append(h("p", {class: "small dim"}, "The stick's mic reaches Wispr Flow through ", h("b", null, "BlackHole 2ch"),
+      append(el, h("p", {class: "small dim"}, "The stick's mic reaches Wispr Flow through ", h("b", null, "BlackHole 2ch"),
         ", a free audio driver by Existential Audio. It stays hidden: Wispr is never set to it."),
         h("ol", {class: "small dim inst-ul"},
           h("li", null, `Stick Agent downloads the tested version ${d.pinned} from existential.audio,`),
@@ -368,7 +371,7 @@ const RENDER = {
       return;
     }
     if (!d.on) {
-      el.append(h("p", {class: "small dim"}, s.detail + "."),
+      append(el, h("p", {class: "small dim"}, s.detail + "."),
         actionRow(h("button", {class: "btn primary", type: "button", onclick: e => { e.target.disabled = true; runJob(out); }}, "Turn on the wireless mic")), out);
       if (s.job) runJob(out);
       return;
@@ -378,7 +381,7 @@ const RENDER = {
       if (report(r, `“${r.name || d.mic}” is there for ${r.secs || 60} s — rank it now`)) showBtn.disabled = true;
       setTimeout(() => { showBtn.disabled = false; }, 60000);
     }}, "Show the mic for 60 s");
-    el.append(note("ok", "The wireless mic is on", s.detail),
+    append(el, note("ok", "The wireless mic is on", s.detail),
       h("p", {class: "small"}, h("b", null, "Once: rank it in Wispr. ")),
       h("ol", {class: "small dim inst-ul"},
         h("li", null, "Press the button below (or hold A on the stick, away from USB) so the mic appears."),
@@ -393,7 +396,7 @@ const RENDER = {
     el.appendChild(h("div", {class: "list"}, Object.entries(labels).filter(([k]) => k in (d.steps || {})).map(([k, label]) => h("div", {class: "item"},
       h("div", {class: "what"}, h("b", null, label)),
       h("span", {class: "pill " + (d.steps[k] ? "ok" : "")}, h("span", {class: "dot"}), d.steps[k] ? "Done" : "Not yet")))));
-    el.append(
+    append(el, 
       h("p", {class: "small dim"}, s.state === "done" ? `Using ${d.stick ? d.stick.name : "your stick"}${d.connected ? " — connected" : ""}.` :
         "The stick setup walks you through Bluetooth pairing, picking it, naming it, the firmware (USB or Bluetooth) and a first try."),
       actionRow(h("button", {class: "btn" + (s.state === "done" ? "" : " primary"), type: "button", onclick: () => wizard.open(() => refresh())},
@@ -410,7 +413,7 @@ const RENDER = {
         h("span", {class: "pill " + pc}, h("span", {class: "dot"}), pl),
         x.state === "todo" || x.state === "skipped" ? h("button", {class: "btn sm", type: "button", onclick: () => go(x.id)}, x.state === "skipped" ? "Do it now" : "Open") : null);
     })));
-    el.append(
+    append(el, 
       h("p", {class: "small dim"}, "Change any of this later in ", h("a", {href: "#settings"}, "Settings → Components"),
         ", or come back here with ", h("code", null, "stick-agent install-page"), " or the menu bar's Finish setup…."),
       h("p", {class: "small dim"}, "More: ", h("a", {href: DOCS, target: "_blank", rel: "noopener"}, "what the stick can do"), " · ",
