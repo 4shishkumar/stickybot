@@ -97,7 +97,8 @@ async function refresh(full = true) {
 function schedule() {
   clearTimeout(timer);
   if (!alive || !step) return;
-  const waits = step.state === "todo" && ["claude", "github", "stick", "model"].includes(step.id);
+  const waits = step.state === "todo" && (["claude", "github", "stick", "model"].includes(step.id) ||
+    (step.id === "wispr" && step.data && step.data.tap_mode && step.data.on));  // waiting for the permission
   if (waits) timer = setTimeout(() => refresh(false), POLL_MS);
 }
 
@@ -165,6 +166,7 @@ function needs(n) {
   if (n.admin) bits.push(["Mac password", "macOS asks in its own window"]);
   if (n.terminal) bits.push(["Terminal", n.terminal]);
   if (n.browser) bits.push(["Browser", n.browser]);
+  if (n.permission) bits.push(["Permission", n.permission]);
   if (!bits.length) return null;
   return h("div", {class: "row inst-needs"}, bits.map(([k, v]) => h("span", {class: "tag"}, h("b", null, k), " " + v)));
 }
@@ -228,6 +230,79 @@ async function runJob(out, {body, onEvent, after} = {}) {
 function jobBox() { return h("div", {class: "inst-job", hidden: true}); }
 
 function actionRow(...kids) { return h("div", {class: "row inst-actions"}, ...kids); }
+
+// ---------- the wireless mic ----------
+// Once on: rank it in Wispr ("Show the mic for 60 s" makes it appear without a hold).
+function rankSteps(d, blackhole) {
+  const showBtn = h("button", {class: "btn", type: "button", onclick: async () => {
+    const r = await post("/api/wireless-mic/show", {secs: 60});
+    if (report(r, `“${r.name || d.mic}” is there for ${r.secs || 60} s — rank it now`)) showBtn.disabled = true;
+    setTimeout(() => { showBtn.disabled = false; }, 60000);
+  }}, "Show the mic for 60 s");
+  return h("div", null,
+    h("p", {class: "small"}, h("b", null, "Once: rank it in Wispr. ")),
+    h("ol", {class: "small dim inst-ul"},
+      h("li", null, "Press the button below (or hold A on the stick, away from USB) so the mic appears."),
+      h("li", null, "In Wispr Flow → Settings → Microphone, drag ", h("b", null, `“${d.mic}”`), " to the top."),
+      h("li", null, blackhole ? "Don't pick BlackHole 2ch itself. The rest of the time Wispr uses your usual mic."
+        : "The rest of the time Wispr uses your usual mic.")),
+    actionRow(showBtn));
+}
+
+async function checkTap(btn) {
+  if (btn) btn.disabled = true;
+  const r = await post("/api/wireless-mic/check", {});
+  if (r.ok) toast("The Apple audio tap works");
+  else toast(r.detail || r.error || "The Apple audio tap isn't allowed yet", "err");
+  refresh();
+}
+
+function useTapInstead(out) {
+  return h("details", null, h("summary", {class: "small"}, "No driver needed: use the Apple audio tap instead"),
+    h("p", {class: "small dim"}, "This Mac can carry the stick's audio with an Apple audio tap of the helper app's own sound (macOS 14.2+), so BlackHole isn't needed."),
+    actionRow(h("button", {class: "btn sm", type: "button", onclick: e => { e.target.disabled = true; runJob(out, {body: {carrier: "tap"}}); }}, "Use the Apple audio tap")));
+}
+
+function wisprTap(el, s, d, out) {
+  const tap = d.tap || {};
+  const prompt = h("div", {class: "notice", style: "margin:8px 0"}, h("div", {class: "grow"},
+    h("b", null, "macOS will ask once: "),
+    h("span", null, "allow “System Audio Recording” for ", h("b", null, "Python"), " — that's the helper app. It only taps its own sound (the stick's audio it plays), muted, never other apps.")));
+  const blackholeInstead = h("details", null, h("summary", {class: "small"}, "Use BlackHole instead"),
+    h("p", {class: "small dim"}, `BlackHole 2ch is a free audio driver by Existential Audio. Stick Agent downloads the tested version ${d.pinned}, checks its checksum and signature, then macOS asks for your Mac password.`),
+    actionRow(h("button", {class: "btn sm", type: "button", onclick: e => { e.target.disabled = true; runJob(out, {body: {carrier: "blackhole"}}); }},
+      d.blackhole ? "Use BlackHole 2ch" : "Install BlackHole 2ch")));
+  if (!d.on) {
+    append(el, h("p", {class: "small dim"}, "This Mac needs no extra driver: an Apple audio tap of the helper app's own sound carries the stick's mic to Wispr Flow."),
+      prompt,
+      actionRow(h("button", {class: "btn primary", type: "button", onclick: e => { e.target.disabled = true; runJob(out, {body: {carrier: "tap"}}); }}, "Turn on")), out,
+      blackholeInstead);
+    if (s.job) runJob(out);
+    return;
+  }
+  if (s.state === "done" && tap.carrier === "tap") {
+    append(el, note("ok", "The wireless mic is on", "Carried by the Apple audio tap — no driver."), rankSteps(d, false), blackholeInstead);
+    return;
+  }
+  if (s.state === "done") {  // auto: BlackHole carries it while the tap isn't allowed
+    append(el, note("ok", "The wireless mic is on", s.detail), rankSteps(d, true),
+      h("p", {class: "small dim"}, "To use the Apple audio tap instead (no driver): ", tap.hint, ", then press Check."),
+      actionRow(h("button", {class: "btn sm", type: "button", onclick: e => checkTap(e.target)}, "Check")));
+    return;
+  }
+  const checking = tap.state === "checking" || tap.state == null;
+  append(el, checking ? note("", "Checking the Apple audio tap…", "An inaudible check. If macOS asks about System Audio Recording, press Allow.")
+    : note("warn", "Allow System Audio Recording", tap.state === "failed" ? tap.hint + "." : tap.detail),
+    prompt,
+    h("ol", {class: "small dim inst-ul"},
+      h("li", null, "If macOS showed a prompt, press Allow."),
+      h("li", null, "Otherwise open System Settings → Privacy & Security → Screen & System Audio Recording, and under “System Audio Recording Only” turn on Python (add it with + if it isn't listed)."),
+      h("li", null, "Then press Check.")),
+    actionRow(h("button", {class: "btn primary", type: "button", disabled: tap.state === "checking", onclick: e => checkTap(e.target)}, "Check"),
+      h("a", {class: "btn ghost sm", href: "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture", target: "_blank", rel: "noopener"}, "Open System Settings")),
+    out, blackholeInstead);
+  if (s.job) runJob(out);
+}
 
 // ---------- the steps ----------
 const RENDER = {
@@ -357,6 +432,7 @@ const RENDER = {
   wispr(el, s) {
     const d = s.data || {};
     const out = jobBox();
+    if (d.tap_mode) { wisprTap(el, s, d, out); return; }
     if (!d.blackhole) {
       append(el, h("p", {class: "small dim"}, "The stick's mic reaches Wispr Flow through ", h("b", null, "BlackHole 2ch"),
         ", a free audio driver by Existential Audio. It stays hidden: Wispr is never set to it."),
@@ -366,28 +442,19 @@ const RENDER = {
           h("li", null, "then macOS asks for your Mac password in its own window (Stick Agent never sees it).")),
         actionRow(h("button", {class: "btn primary", type: "button", onclick: e => { e.target.disabled = true; runJob(out); }}, "Install BlackHole 2ch")), out,
         d.brew ? h("details", null, h("summary", {class: "small"}, "Prefer Homebrew?"), copyable(d.brew_cmd),
-          actionRow(h("button", {class: "btn sm", type: "button", onclick: refresh}, "Check again"))) : null);
+          actionRow(h("button", {class: "btn sm", type: "button", onclick: refresh}, "Check again"))) : null,
+        d.tap_supported ? useTapInstead(out) : null);
       if (s.job) runJob(out);
       return;
     }
     if (!d.on) {
       append(el, h("p", {class: "small dim"}, s.detail + "."),
-        actionRow(h("button", {class: "btn primary", type: "button", onclick: e => { e.target.disabled = true; runJob(out); }}, "Turn on the wireless mic")), out);
+        actionRow(h("button", {class: "btn primary", type: "button", onclick: e => { e.target.disabled = true; runJob(out, {body: {carrier: "blackhole"}}); }}, "Turn on the wireless mic")), out,
+        d.tap_supported ? useTapInstead(out) : null);
       if (s.job) runJob(out);
       return;
     }
-    const showBtn = h("button", {class: "btn", type: "button", onclick: async () => {
-      const r = await post("/api/wireless-mic/show", {secs: 60});
-      if (report(r, `“${r.name || d.mic}” is there for ${r.secs || 60} s — rank it now`)) showBtn.disabled = true;
-      setTimeout(() => { showBtn.disabled = false; }, 60000);
-    }}, "Show the mic for 60 s");
-    append(el, note("ok", "The wireless mic is on", s.detail),
-      h("p", {class: "small"}, h("b", null, "Once: rank it in Wispr. ")),
-      h("ol", {class: "small dim inst-ul"},
-        h("li", null, "Press the button below (or hold A on the stick, away from USB) so the mic appears."),
-        h("li", null, "In Wispr Flow → Settings → Microphone, drag ", h("b", null, `“${d.mic}”`), " to the top."),
-        h("li", null, "Don't pick BlackHole 2ch itself. The rest of the time Wispr uses your usual mic.")),
-      actionRow(showBtn));
+    append(el, note("ok", "The wireless mic is on", s.detail), rankSteps(d, true), d.tap_supported ? useTapInstead(out) : null);
   },
 
   stick(el, s) {

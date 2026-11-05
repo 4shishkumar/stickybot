@@ -123,14 +123,65 @@ class Agent:
         self.listeners = []  # extra callbacks for every message from the stick
         self.speaker = Speaker(lambda: self.link, self._speech_output,
                                       lambda: self.cfg.get("speak_voice") or "")
-        self.wispr = wispr_mic.WisprMic(emit=self.emit_soon)  # A held away from USB: the stick's mic into BlackHole
+        # A held away from USB: the stick's mic into the carrier (the Apple audio tap or BlackHole)
+        self.wispr = wispr_mic.WisprMic(emit=self.emit_soon)
         self.wispr.set_enabled(self.cfg.get("wireless_mic"))
         # ...heard by Wispr through the "stick-mic-bluetooth" device, which exists only around an A hold
         self.stick_usb = None  # the stick is plugged into a computer by USB (it says so; None = unknown / older)
         self.mic_dev = mic_device.StickMicDevice(name=self._mic_name())
         self.holds = mic_device.Holds(self.mic_dev, send=lambda msg: self.link.send(msg),
                                             allowed=self.mic_device_unavailable, settings=self._hold_settings,
-                                            emit=self.emit_soon)
+                                            emit=self.emit_soon, removed=lambda: self.wispr.release())
+        if self.wispr.enabled:
+            self._apply_carrier()
+
+    # --- the carrier: the Apple audio tap or BlackHole ------------------------------
+
+    def _carrier_pref(self):
+        pref = self.cfg.get("wireless_mic_carrier") or "auto"
+        return pref if pref in mic_device.CARRIER_PREFS else "auto"
+
+    def _tap_wanted(self):
+        """The tap may be used (and so is worth checking): macOS 14.2+ and not set to BlackHole."""
+        return mic_device.macos_supports_tap() and self._carrier_pref() != mic_device.BLACKHOLE
+
+    def _apply_carrier(self):
+        """Picks the carrier from the setting, the macOS version, the tap check and BlackHole;
+        a change removes a device made with the old one."""
+        state = "checking" if self.holds.checking else self.mic_dev.check.get("state")
+        bh = self.wispr.has_blackhole()
+        carrier, why = mic_device.pick_carrier(self._carrier_pref(), mic_device.macos_supports_tap(), state, bh)
+        old = self.mic_dev.mode
+        if carrier:
+            self.mic_dev.mode = carrier
+        gate = (lambda: self.mic_dev.tap_live) if carrier == mic_device.TAP else None
+        self.wispr.set_carrier(carrier, why, gate)
+        if carrier and carrier != old and self.mic_dev.present and self.loop is not None:
+            asyncio.ensure_future(self.holds.drop(f"now carried by {mic_device.CARRIER_TITLES[carrier]}"))
+        return carrier
+
+    async def check_tap(self, force=False):
+        """Runs the tap check (inaudible; never during a hold), then picks the carrier again and tells
+        the stick whether to stream. -> the check's result, or None when it didn't run."""
+        if not force and not self._tap_wanted():
+            return None
+        if not mic_device.macos_supports_tap():
+            return None
+        res = await self.holds.check()
+        if self.wispr.enabled:
+            self._apply_carrier()
+            if self.link.connected:
+                self.wispr.warm()
+                await self.link.send({"src": "agent", "wmic": self.wispr.ready})
+        self.emit("wispr_mic", **self.wireless_status())
+        return res
+
+    async def show_mic(self, secs):
+        """The device for `secs` from the dashboard (the ranking step); tap mode: our output stream
+        plays silence through it. -> "" or why not."""
+        if self.wispr.enabled and self.wispr.carrier:
+            self.wispr.open()
+        return await self.holds.show(secs)
 
     # --- the stick-mic-bluetooth device -----------------------------------------
 
@@ -160,6 +211,8 @@ class Agent:
         """"" if the stick-mic-bluetooth device may exist now, else why not."""
         if not self.wispr.enabled:
             return "the wireless Wispr mic is off"
+        if not self.wispr.carrier:
+            return self.wispr.unavailable or "nothing can carry the audio"
         if not self.link.connected:
             return "the stick isn't connected by Bluetooth"
         if self.stick_usb:
@@ -176,8 +229,14 @@ class Agent:
                 ms("wispr_tail_ms", mic_device.TAIL_MS, 5000))
 
     def wireless_status(self):
+        check = self.mic_dev.check
         return {**self.wispr.status(), "device_mic": self.holds.status(), "stick_usb": self.stick_usb,
-                "unavailable": self.mic_device_unavailable()}
+                "unavailable": self.mic_device_unavailable(), "carrier_pref": self._carrier_pref(),
+                "carrier_title": mic_device.CARRIER_TITLES.get(self.wispr.carrier),
+                "tap": {"supported": mic_device.macos_supports_tap(), "state": "checking" if self.holds.checking
+                        else check.get("state"), "detail": check.get("detail"), "at": check.get("at"),
+                        "create_ms": check.get("create_ms"), "first_ms": check.get("first_ms"),
+                        "ms": check.get("ms"), "hint": mic_device.PERMISSION_HINT}}
 
     def shutdown(self):
         """Exit / SIGTERM / restart: never leave the device behind (it outlives us otherwise)."""
@@ -672,10 +731,14 @@ class Agent:
             self.link.set_target(self.cfg["stick"])
         if "stick" in changes or "wispr_mic_name" in changes:
             self._rename_mic("renamed: made again under the new name next time")
-        if "wireless_mic" in changes:
+        if "wireless_mic" in changes or "wireless_mic_carrier" in changes:
             self.wispr.set_enabled(self.cfg.get("wireless_mic"))
             if not self.wispr.enabled:
                 asyncio.ensure_future(self.holds.drop("turned off"))
+            else:
+                self._apply_carrier()
+                if self._tap_wanted() and self.mic_dev.check.get("state") != "ok" and self.loop is not None:
+                    asyncio.ensure_future(self.check_tap())  # the first one makes macOS ask for the permission
             if self.link.connected:
                 self.wispr.warm()
                 asyncio.ensure_future(self.link.send({"src": "agent", "wmic": self.wispr.ready}))
@@ -696,6 +759,8 @@ class Agent:
     async def run(self):
         self.loop = asyncio.get_running_loop()
         await self.loop.run_in_executor(None, self.mic_dev.cleanup_stale)  # left by an agent that crashed
+        if self.wispr.enabled and self._tap_wanted():
+            asyncio.ensure_future(self.check_tap())  # is the Apple audio tap allowed? (inaudible)
         self.link.set_target(self.cfg.get("stick"))
         link_task = asyncio.create_task(self.link.run())
 

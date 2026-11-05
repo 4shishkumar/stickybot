@@ -73,6 +73,9 @@ export async function render(el) {
         h("b", null, "Once: "),
         h("span", null, `Hold A once (or use the button below); in Wispr Flow → Settings → Microphone, drag “${micName(c)}” to the top of the ranking. Wispr then uses the stick while you hold A and your usual mic otherwise.`),
         h("div", {class: "small dim", style: "margin-top:4px"}, `You can put “${usbMicName(c)}” wherever you like in that list — Wispr only sees it while the stick is plugged in. Renamed the mic (here or after an update)? Wispr sees a new device: rank it again.`))),
+      field("Carried by", h("select", {id: "wisprCarrier"}, [["auto", "Automatic (the Apple audio tap if allowed, else BlackHole)"], ["tap", "Apple audio tap (macOS 14.2+, no driver)"], ["blackhole", "BlackHole 2ch (audio driver)"]]
+        .map(([v, l]) => h("option", {value: v, selected: (c.wireless_mic_carrier || "auto") === v}, l))),
+        "What gets the stick's audio into that mic. The Apple audio tap needs no driver: macOS asks once to allow “System Audio Recording” for Python (the helper app; it only taps its own sound). The mic's name stays the same, so Wispr's ranking survives a switch."),
       field("Ranking step", showMicButton(c), "Makes the mic appear for 60 s so you can drag it to the top in Wispr's settings. Needs the stick connected by Bluetooth and not plugged in by USB."),
       wirelessMicStatus(),
       h("details", {style: "margin-top:8px"}, h("summary", {class: "small dim"}, "Advanced timings"),
@@ -176,10 +179,33 @@ function wirelessMicStatus() {
   const paint = w => {
     clear(line);
     if (!w) { line.appendChild(h("span", {class: "dim"}, "This version of the agent doesn't report it.")); return; }
+    const tap = w.tap || {};
+    const checkBtn = () => tap.supported && w.carrier_pref !== "blackhole" ? h("button", {class: "btn sm", type: "button", disabled: tap.state === "checking", onclick: async e => {
+      e.target.disabled = true;
+      const r = await post("/api/wireless-mic/check", {});
+      if (r.ok) toast("The Apple audio tap works"); else toast(r.detail || r.error || "Not allowed yet", "err");
+      refreshStatus();
+    }}, "Check again") : null;
+    const tapLine = () => {
+      if (!tap.supported || w.carrier_pref === "blackhole") return null;
+      const st = tap.state === "ok" ? pill("ok", "Apple audio tap allowed")
+        : tap.state === "checking" ? pill("", "Checking the Apple audio tap…")
+        : tap.state === "failed" ? pill("warn", "Apple audio tap not allowed")
+        : tap.state === "error" ? pill("warn", "Apple audio tap unavailable") : pill("", "Apple audio tap not checked yet");
+      const bits = [st, " "];
+      if (tap.state === "failed") bits.push(h("span", null, `${tap.hint}. `));
+      else if (tap.state === "error") bits.push(h("span", null, `${tap.detail}. `));
+      else if (tap.state === "ok" && tap.ms != null) bits.push(h("span", {class: "dim"}, `checked in ${Math.round(tap.ms)} ms. `));
+      const b = checkBtn();
+      if (b) bits.push(b);
+      return h("div", null, ...bits);
+    };
     if (w.error) {
       line.append(h("div", null, pill("warn", "Needs attention"), " ", w.error.includes("brew")
         ? h("span", null, "Install BlackHole 2ch in a terminal: ", h("code", null, "brew install --cask blackhole-2ch"), " (asks for your Mac password).")
         : w.error));
+      const t = w.enabled ? tapLine() : null;
+      if (t) line.appendChild(t);
       return;
     }
     if (!w.enabled) { line.appendChild(h("span", {class: "dim"}, "Off.")); return; }
@@ -187,7 +213,10 @@ function wirelessMicStatus() {
     const now = w.stick_usb ? pill("", "Stick on USB — Wispr uses the stick's USB mic")
       : d.present ? pill("ok", `“${d.name}” is there${w.streaming ? " — streaming" : ""}`)
       : pill("", `“${d.name || "the stick's mic"}” appears while you hold A`);
-    line.appendChild(h("div", null, now, " ", h("span", {class: "dim"}, `carried by ${w.device || "BlackHole 2ch"}`)));
+    const via = w.carrier === "tap" ? `carried by the Apple audio tap (playing on ${w.device || "the default output"}, muted)` : `carried by ${w.device || "BlackHole 2ch"}`;
+    line.appendChild(h("div", null, now, " ", h("span", {class: "dim"}, via)));
+    const t = tapLine();
+    if (t) line.appendChild(t);
     if (d.error) line.appendChild(h("div", null, pill("warn", "Mic device"), " ", d.error));
     const l = d.last;
     if (l) {
@@ -264,6 +293,7 @@ async function save() {
     stick_approvals: v("stickApprovals").checked,
     mcp_server: v("mcpServer").checked,
     wireless_mic: v("wirelessMic").checked,
+    wireless_mic_carrier: v("wisprCarrier").value,
     wispr_switch_ms: +v("wisprSwitch").value,
     wispr_tail_ms: +v("wisprTail").value,
     wispr_mic_name: v("wisprMicName").value.trim(),  // "" = named after the stick
