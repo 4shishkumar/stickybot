@@ -41,8 +41,8 @@ export function firmwarePanel(opts = {}) {
     const onStick = fw.connected && fw.connected.version;
     const newer = bundled && onStick && bundled.version !== onStick;
     box.appendChild(h("div", {class: "kv"},
-      h("span", null, "Ready on this Mac"), h("span", {class: "num"}, bundled ? `${bundled.version} · ${sourceLabel(bundled)}${bundled.built ? " · built " + builtDate(bundled.built) : ""}` : "none yet"),
-      h("span", null, "On your stick"), h("span", {class: "num"}, onStick ? `${onStick}${fw.connected.name ? " · " + fw.connected.name : ""}` : "unknown (stick not connected)")));
+      h("span", null, "Firmware on this Mac"), h("span", {class: "num"}, bundled ? `${bundled.version} · ${sourceLabel(bundled)}${bundled.built ? " · built " + builtDate(bundled.built) : ""}` : "none yet"),
+      h("span", null, "Firmware on your stick"), h("span", {class: "num"}, onStick ? `${onStick}${fw.connected.name ? " · " + fw.connected.name : ""}` : "unknown (stick not connected)")));
     if (!bundled) {
       const check = h("button", {class: "btn sm", type: "button", onclick: async () => {
         check.disabled = true;
@@ -56,9 +56,9 @@ export function firmwarePanel(opts = {}) {
         check));
     }
     const bleOk = !!(fw.connected && fw.connected.ota);
-    if (newer) box.appendChild(h("div", {class: "notice warn"}, h("div", {class: "grow"}, h("b", null, `Version ${bundled.version} is available`),
+    if (newer) box.appendChild(h("div", {class: "notice warn"}, h("div", {class: "grow"}, h("b", null, `Stick firmware ${bundled.version} is available`),
       h("span", {class: "dim"}, bleOk ? "Update it over Bluetooth below, or plug it in with a USB-C cable." : "Plug the stick in with a USB-C cable to update it."))));
-    else if (bundled && onStick) box.appendChild(h("div", {class: "notice ok"}, h("div", {class: "grow"}, h("b", null, "Your stick is up to date"))));
+    else if (bundled && onStick) box.appendChild(h("div", {class: "notice ok"}, h("div", {class: "grow"}, h("b", null, `Your stick is up to date (firmware ${onStick})`))));
 
     // Over Bluetooth: firmware 1.8.0+ on a connected stick
     if (bundled && onStick) {

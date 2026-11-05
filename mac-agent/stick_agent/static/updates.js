@@ -46,8 +46,8 @@ function reloadWhenBack(stage) {
 function versionsLine(u) {
   const bits = [];
   const lat = u.latest || {};
-  if (u.agent_update) bits.push(`stick-agent ${u.current.agent} → ${lat.version}`);
-  if (u.firmware_update) bits.push(`stick firmware ${u.current.firmware} → ${lat.firmware}`);
+  if (u.agent_update) bits.push(`Helper app v${u.current.agent} → v${lat.version}`);
+  if (u.firmware_update) bits.push(`Stick firmware ${u.current.firmware} → ${lat.firmware}`);
   return bits.join(" · ");
 }
 
@@ -122,10 +122,16 @@ export function updatesPanel(c) {
     if (!u) { info.appendChild(h("span", {class: "dim"}, "Checking…")); return; }
     if (u.error && u.missing) { info.appendChild(h("span", {class: "dim"}, "This version of the agent can't check for updates.")); return; }
     const lat = u.latest;
+    // Two numbers on purpose: every release has its own (the helper app's); the stick firmware's
+    // only changes when a release changes the stick, so most releases need no stick update.
+    const state = (have, latest, newer) => !latest || !have ? "" : newer ? ` → ${latest} available` : " · latest";
     info.appendChild(h("div", {class: "kv"},
-      h("span", null, "This agent"), h("span", {class: "num"}, `${u.current.agent}${u.install ? " · " + installLabel(u.install) : ""}`),
-      h("span", null, "Your stick"), h("span", {class: "num"}, u.current.firmware ? `firmware ${u.current.firmware}` : "not connected"),
-      h("span", null, `Latest (${u.channel})`), h("span", {class: "num"}, lat ? `${lat.tag}${lat.firmware ? " · firmware " + lat.firmware : ""}` : (u.note || "—")),
+      h("span", null, "Helper app"), h("span", {class: "num"},
+        `v${u.current.agent}${state(u.current.agent, lat && "v" + lat.version, u.agent_update)}${u.install ? " · " + installLabel(u.install) : ""}`),
+      h("span", null, "Stick firmware"), h("span", {class: "num"}, u.current.firmware
+        ? `${u.current.firmware}${state(u.current.firmware, lat && lat.firmware, u.firmware_update)}` : "stick not connected"),
+      h("span", null, `Latest release (${u.channel})`), h("span", {class: "num"},
+        lat ? `${lat.tag}${lat.firmware ? " · with stick firmware " + lat.firmware : ""}` : (u.note || "—")),
       h("span", null, "Last checked"), h("span", null, u.checking ? "checking now…" : u.checked_at ? fmtAgo(u.checked_at) : "not yet")));
     if (u.error) info.appendChild(h("div", {class: "notice err"}, h("div", {class: "grow"}, h("b", null, "Couldn't check"), h("span", {class: "dim"}, u.error))));
     if (u.available) {
@@ -133,7 +139,7 @@ export function updatesPanel(c) {
       const canClick = !u.agent_update || (u.install && u.install.can_update);
       info.appendChild(h("div", {class: "notice ok"}, h("div", {class: "grow"}, h("b", null, u.title), h("span", {class: "dim"}, versionsLine(u))), canClick ? btn : null));
     } else if (lat && !u.error) {
-      info.appendChild(h("div", {class: "dim"}, "You're up to date."));
+      info.appendChild(h("div", {class: "dim"}, "You're up to date: the helper app and the stick firmware are both the latest."));
     }
     if (u.install && !u.install.can_update && u.agent_update) info.appendChild(instructions(u.install));
     const notes = notesBlock(lat, false);
@@ -157,7 +163,7 @@ export function updatesPanel(c) {
       .map(([v, l]) => h("option", {value: v, selected: (c.update_channel || "stable") === v}, l))),
       "Beta also offers prereleases (vX.Y.Z-beta.N). Switching checks again right away."),
     field("Check automatically", toggle("updCheck", "At start-up and once a day (a small request to GitHub)", c.update_check !== false)),
-    h("div", {class: "row"}, checkBtn, h("span", {class: "small dim"}, "Releases come from GitHub; firmware is checked against its sha256 before it's used.")),
+    h("div", {class: "row"}, checkBtn, h("span", {class: "small dim"}, "Releases come from GitHub; firmware is checked against its sha256 before it's used. The helper app and the stick firmware have separate version numbers — the firmware only changes when a release changes the stick.")),
     info, out);
   refresh();
   return box;

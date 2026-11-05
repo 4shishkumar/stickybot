@@ -101,7 +101,7 @@ class Updates:
         if agent_update:
             title = f"Update available: {tag}"
         elif firmware_update:
-            title = f"Firmware {fw} available"
+            title = f"Stick firmware {fw} available"
         else:
             title = ""
         out = {"enabled": cfg.get("update_check", True) is not False, "channel": channel(cfg),

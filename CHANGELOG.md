@@ -12,6 +12,11 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Changed
+- The dashboard labels the two version numbers: **Helper app** (each release's number) and
+  **Stick firmware** (changes only when a release changes the stick), each marked *latest*
+  or with the version available.
+
 ## [1.8.3] - 2026-11-05
 
 ### Changed

@@ -136,7 +136,7 @@ async def test_the_same_version_is_no_update(up, gh):
 async def test_newer_firmware_than_the_connected_stick(up, gh, agent):
     gh.rel, gh.fw = release(f"v{__version__}", fw="1.8.0"), "1.8.0"
     st = await up.check()
-    assert st["firmware_update"] and not st["agent_update"] and st["title"] == "Firmware 1.8.0 available"
+    assert st["firmware_update"] and not st["agent_update"] and st["title"] == "Stick firmware 1.8.0 available"
     agent.stick_api.version = "1.8.0"
     await up.refresh_stick(force=True)
     assert not up.status()["available"]
