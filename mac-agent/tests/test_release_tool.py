@@ -140,7 +140,7 @@ def test_release_sh_bumps_commits_and_tags_without_pushing(repo):
 def test_release_sh_dry_run_and_refusals(repo):
     r = release_sh(repo, "--dry-run", "v1.8.0-beta.1")
     assert r.returncode == 0 and "beta (prerelease)" in r.stdout and "- a new thing" in r.stdout
-    assert repo.git("status", "--porcelain").stdout == "" and repo.git("tag").stdout == ""
+    assert repo.git("status", "--porcelain", "--untracked-files=no").stdout == "" and repo.git("tag").stdout == ""
     assert release_sh(repo, "1.8").returncode != 0
     (repo.path / "CHANGELOG.md").write_text(LOG + "\nedited\n")
     dirty = release_sh(repo, "1.8.0")

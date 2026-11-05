@@ -35,11 +35,11 @@ class STT:
         log.info("speech model ready in %.1fs", time.time() - t)
 
     def transcribe(self, audio: np.ndarray) -> str:
-        import mlx.core as mx
-        from parakeet_mlx.audio import get_logmel
         if self.model is None:
             raise RuntimeError("speech model not loaded yet")
         if len(audio) < 1600:  # under 0.1 s
             return ""
+        import mlx.core as mx  # (after the checks: the release workflow's Linux tests have no MLX)
+        from parakeet_mlx.audio import get_logmel
         mel = get_logmel(mx.array(audio), self.model.preprocessor_config)
         return self.model.generate(mel)[0].text.strip()

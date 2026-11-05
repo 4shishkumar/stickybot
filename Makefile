@@ -27,6 +27,7 @@ check: lint test
 
 lint:
 	cd mac-agent && $(RUFF) check .
+	$(RUFF) check --config mac-agent/pyproject.toml tools/release_tool.py m5-stick-s3/tools/make_release.py
 	@if command -v shellcheck >/dev/null; then shellcheck -s sh install.sh tools/release.sh; else echo "(shellcheck not installed — skipping the shell scripts)"; fi
 
 # Formatting is configured but the existing code keeps its hand-aligned style;
