@@ -1,4 +1,4 @@
-# M5StickS3 — Bluetooth macro button (M1)
+# StickyBot — the M5StickS3 firmware
 
 Turns an M5StickS3 into a Bluetooth keyboard with one programmable key combo,
 a status screen, and settings you can change **without reflashing** — from a
@@ -10,13 +10,13 @@ Default combo: **⌥ Option + ⌘ Command** (e.g. to trigger Wispr Flow).
 |---|---|
 | Single press | combo once |
 | Double press | combo twice |
-| Hold         | combo held until you let go (screen shows **Listening...**); over USB the stick's mic streams to the Mac as a USB microphone meanwhile (pick **TinyUSB UAC1** as the mic in Wispr Flow) |
+| Hold         | combo held until you let go (screen shows **Listening...**); over USB the stick's mic streams to the Mac as a USB microphone meanwhile (pick **<name>-usb-mic**, e.g. *stickybot-usb-mic*, as the mic in Wispr Flow) |
 
 | Button B (side) | |
 |---|---|
 | Click | Enter |
 | Double press | unlock the Mac (types the saved Mac password + Return) |
-| Hold | talk to the Mac agent (`tools/mac-agent`): speak, release — works over Bluetooth, no cable |
+| Hold | talk to the StickyBot Mac app (`../mac-agent`): speak, release — works over Bluetooth, no cable |
 | Triple press | open the settings menu (wakes the screen first if it's off; closes web settings) |
 
 The stick's third button (power/reset, on the other side) is handled by the
@@ -102,7 +102,7 @@ Re-flashing keeps your saved combo, Wi-Fi and Mac pairing. Only
 ## 4. Pair with the Mac (first time only)
 
 1. **System Settings → Bluetooth**.
-2. Click **Connect** next to **StickS3 Macro**.
+2. Click **Connect** next to **StickyBot** (or the name you gave it).
 3. If the Keyboard Setup Assistant pops up, close it.
 
 The top bar on the stick turns green: **Connected**. From then on it reconnects
@@ -185,12 +185,12 @@ Turn it on from the menu (**Web settings**). Wi-Fi stays off the rest of the
 time to save battery, and switches itself off after 10 min with no page use.
 
 - **First time (no home Wi-Fi saved):** the stick creates its own hotspot. The
-  screen shows its name (**StickS3-Setup**) and a password. Join that network
+  screen shows its name (**stickybot-setup**) and the password (**macro-setup** until you change it). Join that network
   on your Mac, then open **http://192.168.4.1**. Your Mac is off the internet
   while joined; switch back afterwards.
 - **Easier after that:** on the page, save your home Wi-Fi under *Home Wi-Fi*.
   Next time you open Web settings the stick joins your network instead, and
-  the page is at **http://sticks3.local** (the IP is also on the screen).
+  the page is at **http://stickybot.local** (the IP is also on the screen).
   If joining fails within 15 s it falls back to the hotspot.
 
 On the page: pick modifiers + key, or type a combo like `cmd+shift+4`,
@@ -226,11 +226,11 @@ key. Use a regular combo for Wispr Flow (e.g. ⌥⌘, the default).
 `pio device monitor` also shows what's happening:
 
 ```
-StickS3 Macro started — combo Option+Cmd. Type 'help' for commands.
+ready StickyBot fw 1.9.0 — combo Option+Cmd. Type 'help' for commands.
 Mac connected
 -> Option+Cmd down
 -> Option+Cmd up
-Web: hotspot StickS3-Setup / 48213977 -> http://192.168.4.1
+Web: hotspot stickybot-setup -> http://192.168.4.1
 Web: combo set to Ctrl+Space
 ```
 
@@ -246,12 +246,12 @@ Quit with **Ctrl+C**. Opening the monitor may restart the stick.
 | Screen black after flashing | Press the power/reset button once. |
 | Screen upside down | Menu → **Flip screen**. |
 | "Not connected" when pressing A | Pair it (step 4). If it was paired before, see "Re-pair from scratch". |
-| `sticks3.local` doesn't open | Use the IP shown on the stick's screen. |
-| Page unreachable on the hotspot | Make sure the Mac joined **StickS3-Setup**, then open http://192.168.4.1. |
+| `stickybot.local` doesn't open | Use the IP shown on the stick's screen. |
+| Page unreachable on the hotspot | Make sure the Mac joined **stickybot-setup**, then open http://192.168.4.1. |
 
 ### Re-pair from scratch
 
-1. Mac: **System Settings → Bluetooth** → **StickS3 Macro** → **(i)** → **Forget This Device**.
+1. Mac: **System Settings → Bluetooth** → **StickyBot** → **(i)** → **Forget This Device**.
 2. Stick: menu → **Forget pairing** (press B twice), or serial `forget`.
 3. Pair again (step 4).
 

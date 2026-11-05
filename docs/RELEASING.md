@@ -1,6 +1,6 @@
 # Releasing
 
-stick-key has **one release version**, `vX.Y.Z`: the Mac agent's version
+StickyBot has **one release version**, `vX.Y.Z`: the Mac agent's version
 (`mac-agent/stick_agent/__init__.py` and `mac-agent/pyproject.toml`). The stick
 firmware keeps its own `FW_VERSION` (`m5-stick-s3/src/config.h`). It changes only when
 the firmware does, and each release's `manifest.json` lists both versions.
@@ -44,7 +44,7 @@ Ordering follows SemVer: `1.8.0-beta.2 < 1.8.0-beta.10 < 1.8.0-rc.1 < 1.8.0`.
    - `m5-stick-s3/tools/make_release.py --out dist`: `bootloader.bin`, `partitions.bin`,
      `boot_app0.bin`, `app.bin` + `manifest.json` (firmware and agent versions, git commit,
      every part's offset / size / sha256, the flash parameters)
-   - creates the GitHub release with those 5 assets and the changelog entry as notes,
+   - creates the GitHub release "StickyBot vX.Y.Z" with those 5 assets and the changelog entry as notes,
      as a prerelease when the tag has a `-` suffix
 
    Only the built-in `GITHUB_TOKEN` is used. If the workflow fails, fix the problem, delete
@@ -79,6 +79,9 @@ git push origin v1.7.2
     progress in the banner. A failed step puts the old checkout back. A developer checkout
     (the agent runs from a clone somewhere else) is never touched: the dashboard shows the
     commands to run instead.
+    Before fetching it points an install clone's `origin` that still names
+    `ashish-kumar-noon/stick-key` at `ashish-kumar-noon/stickybot` (install.sh does the same).
+    The new code then builds StickyBot.app if Python changed or it isn't built yet.
   - *Stick firmware*: Stick → Firmware → **Update via USB**. Other ways, such as Bluetooth
     OTA, plug in through `updates.register_firmware_updater()` and appear next to it.
 - **Re-running install.sh** moves a release install to the newest stable release after it.

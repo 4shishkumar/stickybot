@@ -39,14 +39,14 @@ API key? Install the companion app"* — it uses your Claude Code login instead.
 - Static site (GitHub Pages or Cloudflare Pages once the remote exists; runs locally until then).
 - **Flash:** ESP Web Tools install button with a manifest per release. *New stick:* clean install. *Update:* writes only bootloader / partitions / boot_app0 / app, so settings and pairing survive (never a merged image over NVS).
 - **Set up over USB (Web Serial):** name, combo, Enter-after-hold, Mac password (write-only), sounds/volume, motion, slots — reusing the stick's existing serial protocol (PROTOCOL.md).
-- **Pairing guide:** System Settings → Bluetooth → stick-key → accept with A; then "Hold A in Wispr" test and picking the stick's mic in Wispr.
+- **Pairing guide:** System Settings → Bluetooth → StickyBot → accept with A; then "Hold A in Wispr" test and picking the stick's mic in Wispr.
 - Firmware binaries published as GitHub Release assets: done (the release workflow, see docs/RELEASING.md).
 
 ### Phase 2 — Companion app installer (level 3)
-- `install.sh` using **uv** (standalone Python manager — no Homebrew/system Python): installs Python + stick-agent into `~/.stick-agent`, the login item, the Claude Code hooks (asks first), opens the local dashboard.
+- `install.sh` using **uv** (standalone Python manager — no Homebrew/system Python): installs Python + StickyBot into `~/.stick-agent`, the login item, the Claude Code hooks (asks first), opens the local dashboard.
 - Checks / guides Claude Code installation and login (Anthropic's official installer).
 - The site detects the running app (`localhost:8660/api/health` with CORS + Private Network Access headers limited to the site's origin) and ticks the steps; then hands over to the setup wizard.
-- `stick-agent uninstall` to remove everything cleanly.
+- `stickybot uninstall` to remove everything cleanly.
 
 ### Phase 3 — Web edition (level 2)
 - Web Bluetooth to the stick's Mac-link service (the keyboard part stays with macOS).
@@ -59,13 +59,13 @@ API key? Install the companion app"* — it uses your Claude Code login instead.
 - Done: a persistent Claude Code session (`claude -p --input-format stream-json --output-format stream-json`) — no start-up per request; the reply streams to the stick and is spoken sentence by sentence (`brain_mode`, `stream_replies`, `speak_stream`).
 - Done: the "stick" MCP server inside the companion app (`/mcp` on the local server): notify, ask (A/B), celebrate,
   progress, pin_home, stick_status, speak, open_url, open_app, quick_command — for voice requests and, after
-  `stick-agent mcp install`, every terminal Claude Code session; firmware 1.7.2 draws the questions.
+  `stickybot mcp install`, every terminal Claude Code session; firmware 1.7.2 draws the questions.
 - Next: `--permission-prompt-tool` for approvals straight to the stick (instead of the hook detour).
 - A brain interface: Claude Code / Anthropic API / OpenRouter / Ollama selectable in settings.
 
 ### Later
 Signed `.app` (if the command-line install is a hurdle), wake word, calendar on the home screen, local model.
-(Done: the wireless Wispr mic — firmware 1.7.1 + the `wireless_mic` component: a "<stick>-mic-bluetooth" device that exists only while A is held, so Wispr is never pinned to it.)
+(Done: the wireless Wispr mic — firmware 1.7.1 + the `wireless_mic` component: a "<stick>-bt-mic" device that exists only while A is held, so Wispr is never pinned to it.)
 
 ## Risks and notes
 - **Web Bluetooth:** Chrome-family only; the user may need to pick the stick once per session; macOS Bluetooth quirks (re-pair as a fix).

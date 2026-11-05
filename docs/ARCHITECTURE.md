@@ -11,7 +11,7 @@ talks to what, and where every file lives. For the wire formats see
  │  buttons · mic · speaker · screen · IMU · battery │◀──────▶│  macOS Bluetooth ── keyboard (HID): A = Wispr combo,       │
  │                                                   │  HID   │                     B = Enter, BB = unlock                │
  │  Mac link (Nordic UART service, same connection): │        │                                                           │
- │    RX  ← JSON from the agent (status, screen,     │  BLE   │  stick-agent  (Python, login item, one process)           │
+ │    RX  ← JSON from the agent (status, screen,     │  BLE   │  StickyBot  (Python, login item, one process)             │
  │          sounds, events, approvals)               │◀──────▶│    link ─ stt ─ commands ─ brain ─ events ─ server/menu  │
  │    TX  → JSON to the agent (talk start/stop,      │  NUS   │      │      │        │         │                         │
  │          approve/deny, acks)                      │        │      │   Parakeet   open/    claude -p ──▶ Claude (cloud)  │
@@ -29,32 +29,67 @@ talks to what, and where every file lives. For the wire formats see
 | Piece | What it is | Runs where | Source |
 |---|---|---|---|
 | Stick firmware | Arduino/C++ on the ESP32-S3: a BLE keyboard + the Mac link + screens/sounds | on the stick | `m5-stick-s3/src/` |
-| stick-agent | one Python process: Bluetooth link, speech-to-text, quick commands, Claude runner, events, dashboard server, menu bar | your Mac, started at login by launchd | `mac-agent/stick_agent/` |
+| StickyBot (the Mac app) | one Python process (StickyBot.app): Bluetooth link, speech-to-text, quick commands, Claude runner, events, dashboard server, menu bar | your Mac, started at login by launchd | `mac-agent/stick_agent/` |
 | Claude Code | Anthropic's CLI, run headless — one long-lived `claude -p --input-format stream-json` session (or `claude -p` per request) — the default "brain" | your Mac (the model itself runs in the cloud) | installed separately |
 | OpenRouter (optional) | the other brain: any model on openrouter.ai, with your own API key (pay per use) | the cloud (OpenRouter and the model's provider) | `mac-agent/stick_agent/openai_brain.py` |
 | Hooks | tiny scripts Claude Code runs at certain moments; they forward to the agent | started by Claude Code | `mac-agent/stick_agent/hook.py`, `claude_hooks.py` |
 | Dashboard | a web page served by the agent | your browser → `localhost:8660` | `mac-agent/stick_agent/dashboard.html` |
 
-### Inside the stick-agent process
+### Inside the StickyBot process
 | Thread / task | Does |
 |---|---|
-| main thread | the menu-bar icon (rumps / AppKit) |
+| main thread | the menu-bar icon (rumps / AppKit) and the dashboard window (WKWebView) |
 | `agent` thread → asyncio loop | everything else, cooperatively: Bluetooth (bleak), the web server (aiohttp), the talk pipeline, events, GitHub polling, weather, feed |
 | `stt` thread | Parakeet speech-to-text (MLX keeps its GPU streams per thread, so the model always runs on this one) |
-| `stick-mic` thread | creates / removes the <stick>-mic-bluetooth CoreAudio device and checks who reads it (one at a time, off the event loop) |
+| `stick-mic` thread | creates / removes the <stick>-bt-mic CoreAudio device and checks who reads it (one at a time, off the event loop) |
 | subprocesses | the Claude Code session (`claude -p --input-format stream-json …`, kept running; or one per request), `say` per spoken sentence (+ `afplay` for the Mac's speakers), `open`/`osascript` for quick commands, `gh api` for GitHub |
+
+### StickyBot.app: why the agent has its own app bundle
+
+macOS names a process after the bundle of its main executable. Run as `venv/bin/python`
+the agent was "Python" (`org.python.python`) in permission prompts, Privacy & Security,
+Activity Monitor and Force Quit, and a launcher that `exec()`s python doesn't change that.
+So the installer builds `~/Applications/StickyBot.app` on this Mac (`stick_agent/app.py`):
+
+| Part | What |
+|---|---|
+| `Contents/MacOS/StickyBot` | a **copy of the venv's real interpreter**: Homebrew's framework build → `Python.app/Contents/MacOS/Python` (the real one; `bin/python3.X` only spawns it), relinked to the stable `opt/` path so `brew upgrade` doesn't break it; uv's python-build-standalone → `bin/python3.X` (statically linked) |
+| `Contents/Info.plist` | `com.stickybot.app`, `LSUIElement` (menu bar app), the Bluetooth / System Audio Recording / microphone usage texts, `LSEnvironment`, and the `StickyBotBuild` stamp (the interpreter's sha256, the bundle format) |
+| `Contents/Resources/` | `StickyBot.icns`, and `boot/sitecustomize.py` (only used when the app is opened from Finder) |
+
+- **How the copy finds its libraries:** `__PYVENV_LAUNCHER__=<venv>/bin/python` — what a
+  framework build's own `bin/python3` sets for Python.app. CPython then treats the venv's
+  python as `sys.executable`, so the stdlib comes from the base install and site-packages
+  from the venv (`pyvenv.cfg`), and it removes the variable from the environment. The login
+  item sets it, and `LSEnvironment` does for a Finder launch.
+- **Signed ad hoc** (`codesign --force --deep -s -`), no Developer ID. Built locally, so it
+  isn't quarantined and Gatekeeper never asks.
+- **The login item runs the bundle's executable directly** (`StickyBot -m stick_agent run`,
+  `AssociatedBundleIdentifiers` = `com.stickybot.app`; KeepAlive as before). A
+  launchd-started bundle executable is its own TCC client: its main bundle is the app and
+  its Bluetooth permission is separate from Python's (checked with a test bundle), so macOS
+  asks for and lists **StickyBot**.
+- **Rebuilt only when the interpreter or the bundle format changes.** An ad-hoc signature
+  is a new identity each build, so a rebuild means macOS asks for its permissions again;
+  code updates (`.py`) never touch the bundle. `stickybot setup`, `install.sh` and the
+  dashboard update check it; `stickybot app rebuild` forces one.
+- **Opened from Finder / Spotlight:** a running agent gets a "reopen" and shows its window;
+  otherwise the boot script starts the login item and then asks it for the window.
+- **Fallback:** if building or signing fails (or `STICK_AGENT_NO_APP=1`), the login item runs
+  plain python as before and the installer says so. `STICK_AGENT_APP` moves the bundle (tests).
 
 ## Where things live
 
 | Path | What |
 |---|---|
-| `~/Library/LaunchAgents/com.stickkey.agent.plist` | the login item (`stick-agent start` writes it) |
-| `~/.stick-agent/venv/` | the agent's Python + libraries (`stick-agent` command is in `bin/`) |
+| `~/Library/LaunchAgents/com.stickkey.agent.plist` | the login item (`stickybot start` writes it; it runs StickyBot.app) |
+| `~/Applications/StickyBot.app` | the app bundle around the venv's Python (below; `stickybot app`) |
+| `~/.stick-agent/venv/` | the agent's Python + libraries (`stickybot` command is in `bin/`) |
 | `~/.stick-agent/config.json` | settings (model, stick, sounds/speech, weather, events, GitHub…) |
 | `~/.stick-agent/commands.json` | your quick commands |
 | `~/.stick-agent/workspace/CLAUDE.md` | the instructions Claude gets for voice requests (its working folder) |
 | `~/.stick-agent/history.jsonl`, `events.jsonl` | what you asked / what it told you |
-| `~/.stick-agent/agent.log` | the log (`stick-agent logs`, dashboard → Logs) |
+| `~/.stick-agent/agent.log` | the log (`stickybot logs`, dashboard → Logs) |
 | login Keychain, service `com.stickkey.agent`, account `openrouter` | your OpenRouter API key (only if you use that brain; never in config.json) |
 | `~/.stick-agent/token` | secret for the dashboard API (the page has it built in) and the stick tools (MCP) |
 | `~/.stick-agent/mcp-voice.json` | the `--mcp-config` for voice requests (the stick tools, with the token; 0600) |
@@ -89,12 +124,12 @@ Claude Code wants to run something not pre-allowed → runs the **PermissionRequ
 - **Events** have a level per kind (dashboard → Events): celebrate / nice / headsup / off → the stick shows the full-screen screen + sound and acks.
 
 ### 4. Wireless Wispr mic (hold A away from USB)
-Wispr Flow keeps a ranked list of mics and uses the highest-ranked one present, re-checking whenever the device list changes. The agent makes a mic, **<stick>-mic-bluetooth**, exist only around an A hold; ranked first once, it is what Wispr records from while A is held, and the user's usual mic otherwise.
+Wispr Flow keeps a ranked list of mics and uses the highest-ranked one present, re-checking whenever the device list changes. The agent makes a mic, **<stick>-bt-mic**, exist only around an A hold; ranked first once, it is what Wispr records from while A is held, and the user's usual mic otherwise.
 
 ```
  stick                          agent (stick_mic_device.py, wispr_mic.py)            CoreAudio / Wispr
  A down ── prepare id=n ──────▶ wispr_mic.start (output open: default output / BlackHole)
-   │  stream ADPCM ───────────▶ ensure_present(): aggregate "<stick>-mic-bluetooth" ─▶ device appears (~100-170 ms)
+   │  stream ADPCM ───────────▶ ensure_present(): aggregate "<stick>-bt-mic" ─▶ device appears (~100-170 ms)
    │                            (public; tap: + our process tap, sub-device the      Wispr: devicechange → ranks it first
    │                             default output · BlackHole: sub-device BlackHole)
    │                            wait wispr_switch_ms (250)
@@ -104,7 +139,7 @@ Wispr Flow keeps a ranked list of mics and uses the highest-ranked one present, 
                                 Wispr still reads it (≤ 4 s) → remove() ─────────▶ gone: Wispr back to the usual mic
 ```
 
-1. **Press A** (firmware 1.7.1, not plugged into a computer — TinyUSB mounted + VBUS means *USB*: the key at once, the USB mic *<stick>-mic-usb*, nothing over Bluetooth). If the agent's hello said `"wmic":true,"wready":true`, the stick sends `wispr prepare` with an id and streams 20 ms ADPCM frames on AUDIO right away, but holds the key.
+1. **Press A** (firmware 1.7.1, not plugged into a computer — TinyUSB mounted + VBUS means *USB*: the key at once, the USB mic *<stick>-usb-mic*, nothing over Bluetooth). If the agent's hello said `"wmic":true,"wready":true`, the stick sends `wispr prepare` with an id and streams 20 ms ADPCM frames on AUDIO right away, but holds the key.
 2. **Agent** — `Holds.prepare()` creates the aggregate on its `stick-mic` worker thread, waits the switch time and answers `ready`; the stick presses the key on it (or after 800 ms anyway). Released before that = no key. Meanwhile `wispr_mic.py` decodes the frames, puts them in order by seq (lost → silence), resamples to the output's rate (soxr) and plays them from an ~80 ms jitter buffer by a PortAudio stream (sounddevice) into the **carrier** (below). Nothing is transcribed by the agent.
 3. **Release A** — the stick keeps streaming 250 ms, then the key goes up and `wispr stop` follows; the agent plays out what's left, keeps the device for the tail (and while CoreAudio shows another process still reading BlackHole, ≤ 4 s), then removes it. A new `prepare` in that time finds it present and gets `ready` at once.
 4. **Safety** — the device is removed at once when the stick disconnects or reports `usb mounted`, when the feature is turned off, and on exit / SIGTERM / restart; at start the agent removes any left over (an aggregate — and a public tap — outlives the process that made it: leftovers are found by UID / tap name). A 1.7.0 stick sends `wispr start` instead: the agent streams as before but makes no device.
@@ -113,7 +148,7 @@ Wispr Flow keeps a ranked list of mics and uses the highest-ranked one present, 
 
 | | Apple audio tap (macOS 14.2+) | BlackHole 2ch |
 |---|---|---|
-| install | nothing; macOS asks once for *System Audio Recording* (shown as “Python”, the helper app) | the pinned 0.7.1 pkg + the Mac's password dialog |
+| install | nothing; macOS asks once for *System Audio Recording* (shown as “StickyBot”; “Python” if the app bundle isn't built) | the pinned 0.7.1 pkg + the Mac's password dialog |
 | the aggregate | sub-device = the default output (clock) + a **public, muting, stereo-mixdown process tap of the agent's own process** in its tap list (`CATapDescription` through the Objective-C runtime via ctypes — every selector checked with `respondsToSelector:` first; `AudioHardwareCreateProcessTap`) | sub-device = BlackHole 2ch |
 | the agent plays into | the default output — the tap mutes all of the agent's own sound and hands it to the aggregate (`say` / `afplay` are separate processes, so not affected) | BlackHole's output |
 | lifetime | tap + device per hold (~90–150 ms), so the agent's audio is only muted then | device per hold |
@@ -129,11 +164,11 @@ The agent is also an **MCP server** (`mcp_server.py`), mounted on the dashboard'
 Nothing runs in the cloud: Claude Code on this Mac calls it.
 
 ```
- Claude Code (voice session, or any terminal session after `stick-agent mcp install`)
+ Claude Code (voice session, or any terminal session after `stickybot mcp install`)
    │  POST /mcp  Authorization: Bearer <~/.stick-agent/token>   (Host + Origin checked)
    │  tools/call notify {"text":"Tests passed"}
    ▼
- stick-agent: mcp_server.py ── check args, rate limit, stick connected? ── core.Agent
+ StickyBot: mcp_server.py ── check args, rate limit, stick connected? ── core.Agent
    │                                                                          │
    ├─ notify / celebrate → events.notify → {"src":"agent","event":…} ──────▶ toast / confetti + sound
    ├─ progress / pin_home → home.py slot → {"src":"agent","home":…} ───────▶ the home card
@@ -155,7 +190,7 @@ Nothing runs in the cloud: Claude Code on this Mac calls it.
 - **Voice requests:** `brain.py` adds `--mcp-config ~/.stick-agent/mcp-voice.json` (0600, has the token) and
   `mcp__stick__{notify,ask,celebrate,progress,pin_home,stick_status,speak}` to `--allowedTools`; turning the
   server off (config `mcp_server`) restarts the session without them.
-- **Terminal sessions:** `stick-agent mcp install` (or the dashboard card / installer component `mcp`) runs
+- **Terminal sessions:** `stickybot mcp install` (or the dashboard card / installer component `mcp`) runs
   `claude mcp add --transport http --scope user stick http://127.0.0.1:8660/mcp --header "Authorization: Bearer …" --header "X-Stick-Cwd: ${PWD}"`
   — Claude Code writes its own config; the agent never edits `~/.claude.json`.
 - **One prompt at a time:** a question waits while an approval is on the stick (its time keeps running) and is
@@ -170,7 +205,7 @@ Sources: [MCP Streamable HTTP (2026-07-28)](https://modelcontextprotocol.io/spec
 [Claude Code MCP](https://code.claude.com/docs/en/mcp).
 
 ### 7. Firmware update over Bluetooth (stick 1.8.0+)
-Dashboard → Stick → Firmware → **Update over Bluetooth** (or `stick-agent flash --ble`, which asks the running
+Dashboard → Stick → Firmware → **Update over Bluetooth** (or `stickybot flash --ble`, which asks the running
 agent: it owns the link). `firmware_api.py` starts a job; `ota.py` does the rest over the existing link:
 
 ```

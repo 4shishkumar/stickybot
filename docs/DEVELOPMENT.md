@@ -9,7 +9,7 @@ common things. First-time setup is in [BUILDING.md](BUILDING.md).
 |---|---|
 | `m5-stick-s3/` | firmware for the M5StickS3 (PlatformIO, Arduino core 3.x): `src/` modules, `test/` unit tests, `tools/` scripts (fonts, sounds, backup) |
 | `xiao-esp32-c3/` | firmware for the XIAO ESP32-C3 macro button |
-| `mac-agent/` | `stick-agent`, the Mac side: `stick_agent/` package, `tests/` |
+| `mac-agent/` | the StickyBot Mac app (`stickybot` command): `stick_agent/` package, `tests/` |
 | `PROTOCOL.md` | **the contract** between boards, the settings pages and the Mac agent: serial commands, HTTP API, the Bluetooth "Mac link" (JSON messages, audio frames, sound clips, events) |
 | `tools/devportal/` | small web UI to build, flash and watch logs for both boards |
 | `docs/` | this file, BUILDING.md, RELEASING.md (versions, tags, the release workflow) |
@@ -59,8 +59,8 @@ compile on the Mac; see `m5-stick-s3/test/` and `m5-stick-s3/Makefile`.
 | Where | How |
 |---|---|
 | **Stick serial log** | `pio device monitor` in `m5-stick-s3/` (115200), or the dev portal (`tools/devportal/start.sh`) → Logs. Only one program can hold the port: close it before flashing. |
-| **Stick log over Wi-Fi** | with Wi-Fi on (dev mode on USB power): `nc stick-key.local 23` — same commands as serial |
-| **Agent log** | `stick-agent logs` (`~/.stick-agent/agent.log`), dashboard → **Logs**, or Activity with "show log lines" |
+| **Stick log over Wi-Fi** | with Wi-Fi on (dev mode on USB power): `nc stickybot.local 23` — same commands as serial |
+| **Agent log** | `stickybot logs` (`~/.stick-agent/agent.log`), dashboard → **Logs**, or Activity with "show log lines" |
 | **Agent crash at start** | `~/.stick-agent/launchd.out` |
 | **Bluetooth messages** | the stick logs `buddy>` (sent) / `agent<` (received) lines |
 
