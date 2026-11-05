@@ -4,8 +4,10 @@ its settings (protocol commands over Bluetooth or USB) and onboarding.
 routes(agent) returns the aiohttp routes; server.py adds them.
 
   GET  /api/firmware             bundled build, sticks on USB, the connected stick's version
-  POST /api/firmware/flash       {"port", "backup"} -> {"job"}
+  POST /api/firmware/flash       {"port", "backup"} -> {"job"}             (USB)
+  POST /api/firmware/ota         {"force"} -> {"job"}                      (Bluetooth, stick 1.8.0+)
   GET  /api/firmware/jobs/{id}   SSE: {"line"} / {"progress","stage"} / {"done","ok","error"}
+  POST /api/firmware/jobs/{id}/cancel   stops a Bluetooth update (the stick keeps its firmware)
   POST /api/stick/proto          {"line": "@state"} -> {"ok","via","reply","error"}
   GET  /api/onboarding           {"steps": {...}, "done"}
   POST /api/onboarding           {"step", "done"} -> same
@@ -18,7 +20,7 @@ import uuid
 
 from aiohttp import web
 
-from . import config, flasher
+from . import config, flasher, ota
 
 log = logging.getLogger("firmware")
 
@@ -134,7 +136,7 @@ class Stick:
         if cached and time.time() - at < BLE_CACHE_S:
             return cached
         st = await self.ble("@state")
-        info = {"name": st.get("name"), "version": st.get("fw")} if st else None
+        info = {"name": st.get("name"), "version": st.get("fw"), "ota": ota.supported(st)} if st else None
         self._ble_cache = (time.time(), info)
         return info
 
@@ -147,6 +149,7 @@ class Job:
         self.events = []
         self.done = False
         self.changed = asyncio.Event()
+        self.cancel = None  # a Bluetooth update can be stopped
 
     def emit(self, e):
         self.events.append(e)
@@ -241,6 +244,52 @@ def routes(agent):
         asyncio.ensure_future(work())
         return web.json_response({"job": job.id})
 
+    async def ota_update(request):
+        body = await request.json() if request.can_read_body else {}
+        force = bool(body.get("force"))
+        if any(not j.done for j in jobs.values()):
+            return web.json_response({"error": "a flash is already running"}, status=409)
+        if not agent.link.connected:
+            return web.json_response({"error": "the stick isn't connected by Bluetooth"}, status=409)
+        try:
+            ota.bundled_app()
+        except ota.OtaError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        job = Job()
+        jobs[job.id] = job
+        sender = ota.Sender(agent.link, job.emit)
+        job.cancel = sender.cancel
+
+        async def work():
+            ok, err, result = False, None, None
+            stick.flashing = True
+            try:
+                result = await ota.update(agent, lambda: stick.ble("@state"), job.emit, force, sender=sender)
+                ok = True
+            except ota.OtaError as e:
+                err = str(e)
+            except Exception as e:  # noqa: BLE001
+                log.exception("bluetooth update failed")
+                err = f"unexpected error: {e}"
+            finally:
+                stick.flashing = False
+                stick._ble_cache = (0.0, None)
+            log.info("bluetooth update: %s", "ok" if ok else err)
+            job.emit({"done": True, "ok": ok, "error": err, "result": result})
+            job.done = True
+
+        asyncio.ensure_future(work())
+        return web.json_response({"job": job.id})
+
+    async def job_cancel(request):
+        job = jobs.get(request.match_info["id"])
+        if not job:
+            return web.json_response({"error": "no such job"}, status=404)
+        if job.done or not job.cancel:
+            return web.json_response({"error": "nothing to cancel"}, status=409)
+        job.cancel()
+        return web.json_response({"ok": True})
+
     async def job_events(request):
         job = jobs.get(request.match_info["id"])
         if not job:
@@ -287,7 +336,9 @@ def routes(agent):
     return [
         web.get("/api/firmware", firmware),
         web.post("/api/firmware/flash", flash),
+        web.post("/api/firmware/ota", ota_update),
         web.get("/api/firmware/jobs/{id}", job_events),
+        web.post("/api/firmware/jobs/{id}/cancel", job_cancel),
         web.post("/api/stick/proto", proto),
         web.get("/api/onboarding", get_onboarding),
         web.post("/api/onboarding", post_onboarding),

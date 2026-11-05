@@ -16,6 +16,7 @@ RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"     # Mac -> stick
 TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"     # stick -> Mac
 AUDIO = "6e400004-b5a3-f393-e0a9-e50e24dcca9e"  # stick -> Mac, agent audio frames
 AUDIO_IN = "6e400005-b5a3-f393-e0a9-e50e24dcca9e"  # Mac -> stick, sound clips
+OTA_DATA = "6e400006-b5a3-f393-e0a9-e50e24dcca9e"  # Mac -> stick, firmware image (stick 1.8.0+, ota.py)
 HELLO_EVERY_S = 8
 CHUNK = 180
 
@@ -97,6 +98,38 @@ class Link:
             return True
         except Exception as e:  # noqa: BLE001
             log.warning("audio send failed: %s", e)
+            return False
+
+    def ota_max_write(self):
+        """Largest write without response to the OTA characteristic (MTU - 3 if unknown)."""
+        try:
+            ch = self.client.services.get_characteristic(OTA_DATA)
+            if ch is not None and ch.max_write_without_response_size:
+                return int(ch.max_write_without_response_size)
+        except Exception:  # noqa: BLE001 — not connected / old bleak
+            pass
+        return max(20, (self.mtu or 23) - 3)
+
+    async def ota_write(self, pkt):
+        """One firmware packet (see ota.py), write without response. Waits for room in
+        Core Bluetooth's queue first (it drops packets silently when full, like clips).
+        False if the link is down."""
+        if not self.connected:
+            return False
+        periph = getattr(getattr(self.client, "_backend", None), "_peripheral", None)
+        try:
+            async with self._write_lock:
+                if periph is None:  # not Core Bluetooth: slow but safe
+                    await self.client.write_gatt_char(OTA_DATA, pkt, response=True)
+                    return True
+                for _ in range(1000):  # up to ~2 s
+                    if periph.canSendWriteWithoutResponse():
+                        break
+                    await asyncio.sleep(0.002)
+                await self.client.write_gatt_char(OTA_DATA, pkt, response=False)
+            return True
+        except Exception as e:  # noqa: BLE001 — link dropped mid-write
+            log.warning("ota write failed: %s", e)
             return False
 
     def _on_tx(self, _, data):
