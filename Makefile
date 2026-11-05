@@ -7,7 +7,8 @@ PY  ?= $(HOME)/.stick-agent/venv/bin/python
 PIO ?= $(HOME)/.platformio/penv/bin/pio
 RUFF = $(PY) -m ruff
 
-.PHONY: help test check lint format agent-test agent-test-all firmware-test firmware-build dev-setup shellcheck install-e2e
+.PHONY: help test check lint format agent-test agent-test-all firmware-test firmware-build dev-setup shellcheck install-e2e \
+        release release-dry-run
 
 help:
 	@echo "make test            agent tests + firmware native tests"
@@ -18,6 +19,7 @@ help:
 	@echo "make firmware-test   M5StickS3 unit tests on the Mac (PlatformIO native)"
 	@echo "make firmware-build  build the M5StickS3 firmware"
 	@echo "make dev-setup       install the agent's dev tools and the pre-commit hook"
+	@echo "make release VERSION=1.8.0   bump + date the changelog + commit + tag, locally (never pushes)"
 
 test: agent-test firmware-test
 
@@ -25,7 +27,7 @@ check: lint test
 
 lint:
 	cd mac-agent && $(RUFF) check .
-	@if command -v shellcheck >/dev/null; then shellcheck -s sh install.sh; else echo "(shellcheck not installed — skipping install.sh)"; fi
+	@if command -v shellcheck >/dev/null; then shellcheck -s sh install.sh tools/release.sh; else echo "(shellcheck not installed — skipping the shell scripts)"; fi
 
 # Formatting is configured but the existing code keeps its hand-aligned style;
 # use this on files you're writing, e.g.  make format FILES=mac-agent/stick_agent/new.py
@@ -38,8 +40,8 @@ agent-test:
 agent-test-all:
 	cd mac-agent && $(PY) -m pytest -m "slow or not slow"
 
-shellcheck:  ## lint install.sh (brew install shellcheck)
-	shellcheck -s sh install.sh
+shellcheck:  ## lint the shell scripts (brew install shellcheck)
+	shellcheck -s sh install.sh tools/release.sh
 
 install-e2e:  ## run install.sh for real into a throwaway HOME (slow, needs the network)
 	cd mac-agent && $(PY) -m pytest -m slow tests/test_install_e2e.py
@@ -53,3 +55,12 @@ firmware-build:
 dev-setup:
 	$(PY) -m pip install -e "mac-agent[dev]"
 	$(PY) -m pre_commit install
+
+# Releases (docs/RELEASING.md): local commit + tag only; push the tag to publish
+release:
+	@test -n "$(VERSION)" || { echo "usage: make release VERSION=1.8.0 (or 1.8.0-beta.1)"; exit 2; }
+	tools/release.sh $(VERSION)
+
+release-dry-run:
+	@test -n "$(VERSION)" || { echo "usage: make release-dry-run VERSION=1.8.0"; exit 2; }
+	tools/release.sh --dry-run $(VERSION)
