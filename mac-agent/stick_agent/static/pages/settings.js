@@ -1,5 +1,6 @@
 // Settings: the agent's own options (saved in ~/.stick-agent/config.json).
 import {h, clear, card, field, toggle, get, put, post, report, toast, refreshStatus, store} from "../lib.js";
+import {brainPanel, pickedModel} from "../brain.js";
 import {componentsPanel} from "../components.js";
 import {mcpPanel} from "../mcp.js";
 import {updatesPanel} from "../updates.js";
@@ -36,15 +37,15 @@ export async function render(el) {
   });
   root.append(
     card("Your stick", stickPicker()),
-    card("Claude",
+    card("Brain", brainPanel(c), brainStatus()),
+    card("Claude Code",
       field("Model", h("select", {id: "model"}, [["sonnet", "Sonnet — fast (recommended)"], ["opus", "Opus — smartest, slower"], ["haiku", "Haiku — fastest"]]
         .map(([v, l]) => h("option", {value: v, selected: c.model === v}, l)))),
       field("Follow-ups", h("div", {class: "row"}, h("input", {type: "number", id: "followup", min: 0, max: 120, value: c.followup_minutes ?? 10, style: "width:90px"}), h("span", {class: "dim"}, "minutes")),
-        "A request within this time continues the same conversation; after it, a new chat. (Or say “new chat”.)"),
+        "A request within this time continues the same conversation; after it, a new chat. (Or say “new chat”.) Applies to OpenRouter too."),
       field("Claude Code runs", h("select", {id: "brainMode"}, [["session", "as one session, always ready (faster)"], ["oneshot", "once per request (the old way)"]]
         .map(([v, l]) => h("option", {value: v, selected: (c.brain_mode || "session") === v}, l)))),
-      field("Live replies", toggle("streamReplies", "Show the reply on the stick while Claude writes it", c.stream_replies !== false)),
-      brainStatus()),
+      field("Live replies", toggle("streamReplies", "Show the reply on the stick while it's written (both brains)", c.stream_replies !== false))),
     card("Speech & replies",
       field("Read replies aloud", toggle("speak", "Short replies are spoken; long ones stay on the screen", c.speak_replies)),
       field("Play on", h("select", {id: "speakOut"}, [["stick", "the stick's speaker"], ["mac", "the Mac's speakers"]].map(([v, l]) => h("option", {value: v, selected: (c.speak_output || "stick") === v}, l)))),
@@ -102,16 +103,24 @@ export function leave() {
   wmListeners.clear();
 }
 
-// How Claude Code runs and how fast the last requests were, from /api/status (brain).
+// The picked brain and how fast the last requests were, from /api/status (brain).
 function brainStatus() {
   const line = h("div", {class: "small dim"});
   const s = ms => ms == null ? "–" : `${(ms / 1000).toFixed(1)} s`;
   const paint = b => {
     clear(line);
     if (!b) { line.textContent = "This version of the agent doesn't report it."; return; }
-    const mode = b.mode === "oneshot" ? "once per request" : `session ${b.alive ? "running" : "not running"}`;
-    line.appendChild(h("div", null, `Now: ${mode}`));
-    if (b.last) line.appendChild(h("div", null, `Last request (${b.last.mode}${b.last.warm ? ", warm" : ""}): first words after ${s(b.last.first_token_ms)}, done after ${s(b.last.total_ms)}${b.last.cancelled ? " (cancelled)" : ""}`));
+    if (b.brain === "openrouter") {
+      line.appendChild(h("div", null, `Now: OpenRouter, ${b.model || "no model picked"}${b.session ? " (a conversation is going)" : ""}`));
+      const l = b.last;
+      if (l) line.appendChild(h("div", null, l.ok
+        ? `Last request (${l.model}): first words after ${s(l.first_token_ms)}, done after ${s(l.total_ms)}${l.cost != null ? `, cost $${l.cost.toFixed(5)}` : ""}${l.tools && l.tools.length ? `, used ${l.tools.join(", ")}` : ""}`
+        : `Last request: ${l.cancelled ? "cancelled" : `failed — ${l.error}`}`));
+    } else {
+      const mode = b.mode === "oneshot" ? "once per request" : `session ${b.alive ? "running" : "not running"}`;
+      line.appendChild(h("div", null, `Now: Claude Code, ${mode}`));
+      if (b.last) line.appendChild(h("div", null, `Last request (${b.last.mode}${b.last.warm ? ", warm" : ""}): first words after ${s(b.last.first_token_ms)}, done after ${s(b.last.total_ms)}${b.last.cancelled ? " (cancelled)" : ""}`));
+    }
     for (const [m, a] of Object.entries(b.avg || {}))
       line.appendChild(h("div", null, `Average ${m} (${a.n}): first words ${s(a.first_token_ms)}, done ${s(a.total_ms)}`));
   };
@@ -230,7 +239,11 @@ function stickPicker() {
 async function save() {
   const v = id => document.getElementById(id);
   if (!v("model")) return;
+  const brain = (document.querySelector("input[name=brain]:checked") || {}).value || "claude";
+  if (brain === "openrouter" && !pickedModel()) { toast("Pick an OpenRouter model first (Settings → Brain)", "err"); return; }
   const r = await put("/api/config", {
+    brain,
+    openrouter_model: pickedModel(),
     model: v("model").value,
     followup_minutes: +v("followup").value,
     brain_idle_min: +v("followup").value || 10,
