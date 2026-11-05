@@ -22,9 +22,11 @@ std::string ellipsize(const std::string& s, int maxW, Width w, void* ctx) {
   return rtrim(t) + "...";
 }
 
-std::vector<std::string> wrap(const std::string& s, int maxLines, int maxW, Width w, void* ctx) {
+// The greedy wrap; `cut` says whether the text ran out of lines.
+static std::vector<std::string> wrapLines(const std::string& s, int maxLines, int maxW, Width w, void* ctx, bool& cut) {
   std::vector<std::string> out;
-  if (maxLines <= 0) return out;
+  cut = false;
+  if (maxLines <= 0) { cut = !s.empty(); return out; }
   std::string line;
   size_t start = 0;
   bool more = false;
@@ -43,7 +45,23 @@ std::vector<std::string> wrap(const std::string& s, int maxLines, int maxW, Widt
     start = sp + 1;
   }
   if (!more && !line.empty()) out.push_back(line);
-  if (more) {  // more text than fits: the last line ends in "..."
+  cut = more;
+  return out;
+}
+
+bool fits(const std::string& s, int maxLines, int maxW, Width w, void* ctx) {
+  bool cut;
+  auto lines = wrapLines(s, maxLines, maxW, w, ctx, cut);
+  if (cut) return false;
+  for (auto& l : lines)
+    if (w(l, ctx) > maxW) return false;  // one word wider than the line
+  return true;
+}
+
+std::vector<std::string> wrap(const std::string& s, int maxLines, int maxW, Width w, void* ctx) {
+  bool more;
+  auto out = wrapLines(s, maxLines, maxW, w, ctx, more);
+  if (more && !out.empty()) {  // more text than fits: the last line ends in "..."
     std::string& l = out.back();
     while (l.size() > 1 && w(l + "...", ctx) > maxW) popChar(l);
     l = rtrim(l) + "...";

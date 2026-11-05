@@ -52,6 +52,17 @@ void test_wrap_edge_cases() {
   TEST_ASSERT_EQUAL_STRING("abc def", exact[0].c_str());
 }
 
+void test_fits() {
+  // 10 chars a line at 60 px: 3 lines here; a wider (landscape) line needs fewer
+  TEST_ASSERT_TRUE(text::fits("the quick brown fox jumps", 3, 60, chars, nullptr));
+  TEST_ASSERT_FALSE(text::fits("the quick brown fox jumps", 2, 60, chars, nullptr));
+  TEST_ASSERT_TRUE(text::fits("the quick brown fox jumps", 2, 120, chars, nullptr));
+  TEST_ASSERT_TRUE(text::fits("the quick brown fox jumps", 1, 150, chars, nullptr));
+  TEST_ASSERT_FALSE(text::fits("supercalifragilistic", 3, 60, chars, nullptr));  // a word too wide
+  TEST_ASSERT_TRUE(text::fits("", 0, 60, chars, nullptr));
+  TEST_ASSERT_FALSE(text::fits("x", 0, 60, chars, nullptr));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_ellipsize);
@@ -59,5 +70,6 @@ int main() {
   RUN_TEST(test_wrap_basic);
   RUN_TEST(test_wrap_overflow_ends_with_ellipsis);
   RUN_TEST(test_wrap_edge_cases);
+  RUN_TEST(test_fits);
   return UNITY_END();
 }

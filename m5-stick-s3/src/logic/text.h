@@ -12,5 +12,8 @@ using Width = int (*)(const std::string& s, void* ctx);
 std::string ellipsize(const std::string& s, int maxW, Width w, void* ctx);
 // At most maxLines lines; if the text doesn't fit, the last line ends in "...".
 std::vector<std::string> wrap(const std::string& s, int maxLines, int maxW, Width w, void* ctx);
+// True if the whole text wraps into maxLines lines of maxW (no "..." needed): used to pick
+// the biggest font that still shows all of it.
+bool fits(const std::string& s, int maxLines, int maxW, Width w, void* ctx);
 
 }  // namespace text
