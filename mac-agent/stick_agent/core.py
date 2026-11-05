@@ -7,7 +7,7 @@ import os
 import time
 import uuid
 
-from . import brain, clips, commands, config, events, feed, github, home, link, stt, weather
+from . import brain, clips, commands, config, events, feed, github, home, link, stt, weather, wispr_mic
 from .adpcm import Recording
 
 log = logging.getLogger("agent")
@@ -57,6 +57,8 @@ class Agent:
         self.stats = {"requests": 0, "quick": 0, "claude": 0, "started": time.time()}
         self.listeners = []  # extra callbacks for every message from the stick
         self.voice = None  # the `say` process while speaking
+        self.wispr = wispr_mic.WisprMic(emit=self.emit)  # A held away from USB: the stick's mic into BlackHole
+        self.wispr.set_enabled(self.cfg.get("wireless_mic"))
 
     # --- events for the dashboard / menu bar --------------------------------
 
@@ -76,7 +78,7 @@ class Agent:
                 "stt_ready": self.stt_ready, "busy": self.brain.busy, "mtu": self.link.mtu, "stats": self.stats,
                 "prompts": [{"id": k, **{x: v[x] for x in ("tool", "hint", "from")}} for k, v in self.prompts.items()],
                 "model": self.cfg.get("model"), "weather": self.weather.now, "github": self.github.status(),
-                "stick_approvals": self.cfg.get("stick_approvals", True)}
+                "stick_approvals": self.cfg.get("stick_approvals", True), "wireless_mic": self.wispr.status()}
 
     def _history(self, entry):
         with config.HISTORY.open("a") as f:
@@ -89,6 +91,10 @@ class Agent:
         self.emit("link", state=state)
         if state == "connected":
             asyncio.ensure_future(self.sound({"get": 1}))
+            self.wispr.warm()  # ready before the first key-down
+        else:
+            self.wispr.stop()
+            self.wispr.close()
         if self.state in ("starting", "ready", "no-stick", "searching", "paused") and self.stt_ready:
             self.set_state("ready" if state == "connected" else state)
 
@@ -112,6 +118,11 @@ class Agent:
             elif msg.get("state") == "stop" and self.rec is not None:
                 rec, self.rec = self.rec, None
                 asyncio.ensure_future(self._handle_talk(rec))
+        elif msg.get("src") == "agent" and msg.get("evt") == "wispr":  # A held: the mic for Wispr, not a request
+            if msg.get("state") == "start":
+                self.wispr.start(msg.get("rate") or wispr_mic.RATE)
+            elif msg.get("state") == "stop":
+                self.wispr.stop()
         elif msg.get("src") == "agent" and msg.get("evt") == "cancel":
             log.info("cancelled on the stick")
             self.brain.cancel()
@@ -121,14 +132,16 @@ class Agent:
             self._decide(msg["id"], msg.get("decision"), "stick")
 
     def _on_audio(self, frame):
-        if self.rec is not None:
+        if self.wispr.active:
+            self.wispr.add(frame)
+        elif self.rec is not None:
             self.rec.add(frame)
 
     def _hello_extra(self):
         card = dict(self.home.card(self))
         card["a"] = stick_text(card.get("a", ""))[:60]
         card["b"] = stick_text(card.get("b", ""))[:140]
-        extra = {"home": card}
+        extra = {"home": card, "wmic": self.wispr.ready}
         if self.weather.now:
             extra["wx"] = {**self.weather.now, "at": stick_text(self.weather.now.get("at", ""))}
         return extra
@@ -331,6 +344,11 @@ class Agent:
         config.save(self.cfg)
         if "stick" in changes:
             self.link.set_target(self.cfg["stick"])
+        if "wireless_mic" in changes:
+            self.wispr.set_enabled(self.cfg.get("wireless_mic"))
+            if self.link.connected:
+                self.wispr.warm()
+                asyncio.ensure_future(self.link.send({"src": "agent", "wmic": self.wispr.ready}))
         if "idle_content" in changes:
             self.feed._next = 0
         if "weather" in changes or "weather_location" in changes:

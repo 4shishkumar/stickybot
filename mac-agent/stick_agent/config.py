@@ -36,6 +36,9 @@ DEFAULT_CONFIG = {
     "idle_content": ["facts", "hn", "onthisday", "wikipedia"],
     "onboarding": {},         # wizard steps the user ticked by hand (see firmware_api.py)
     "stick_approvals": True,  # Claude Code permission prompts go to the stick + dashboard first
+    # Wireless Wispr mic: an A hold away from USB streams the stick's mic over Bluetooth and the
+    # agent plays it into BlackHole 2ch (set Wispr's microphone to it). `stick-agent setup --with wireless_mic`
+    "wireless_mic": False,
     # Events on the stick (see events.py): kind -> "celebrate" | "nice" | "headsup" | "off";
     # kinds not listed use events.DEFAULT_RULES
     "event_rules": {},

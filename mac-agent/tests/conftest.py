@@ -13,7 +13,60 @@ os.environ["STICK_AGENT_PORT"] = "18660"
 
 import pytest  # noqa: E402
 
-from stick_agent import clips, config, events, github  # noqa: E402
+from stick_agent import clips, config, events, github, wispr_mic  # noqa: E402
+
+
+class FakeStream:
+    """A sounddevice.OutputStream that plays nothing: tests pull blocks with play(n)."""
+
+    def __init__(self, **kw):
+        self.kw = kw
+        self.started = self.closed = False
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.started = False
+
+    def close(self):
+        self.closed = True
+
+    def play(self, frames):
+        import numpy as np
+        out = np.ones((frames, self.kw["channels"]), dtype=np.float32)  # ones: catches unwritten samples
+        self.kw["callback"](out, frames, None, None)
+        return out
+
+
+class FakeSoundDevice:
+    """Stands in for the sounddevice module (no PortAudio, no real audio devices)."""
+
+    def __init__(self, devices=()):
+        self.devices = list(devices)
+        self.streams = []
+        self.fail_open = None
+
+    def query_devices(self):
+        return [dict(d, index=i) for i, d in enumerate(self.devices)]
+
+    def OutputStream(self, **kw):  # noqa: N802 — sounddevice's name
+        if self.fail_open:
+            raise self.fail_open
+        s = FakeStream(**kw)
+        self.streams.append(s)
+        return s
+
+
+BLACKHOLE = {"name": "BlackHole 2ch", "max_output_channels": 2, "max_input_channels": 2, "default_samplerate": 48000.0}
+
+
+@pytest.fixture(autouse=True)
+def no_real_audio(monkeypatch):
+    """Tests never open a real audio device: the wireless mic sees no devices unless a test adds one."""
+    fake = FakeSoundDevice()
+    monkeypatch.setattr(wispr_mic, "_sounddevice", lambda: fake)
+    return fake
 
 
 @pytest.fixture

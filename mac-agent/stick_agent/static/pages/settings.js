@@ -6,7 +6,7 @@ export const title = "Settings";
 export const subtitle = "How the agent behaves. Changes apply right away once you save.";
 
 const SOURCES = [["facts", "Fun facts"], ["hn", "Hacker News"], ["onthisday", "On this day"], ["wikipedia", "Wikipedia featured article"]];
-let root = null, cfg = null;
+let root = null, cfg = null, unsub = null;
 
 export function actions() {
   return [
@@ -57,6 +57,10 @@ export async function render(el) {
       field("Facts & news ticker", toggle("tickerOn", "Rotate facts and news when nothing needs you", c.ticker !== false)),
       field("Sources", h("div", {class: "row", style: "gap:16px"}, SOURCES.map(([v, l]) =>
         h("label", {class: "switch"}, h("input", {type: "checkbox", class: "idle", value: v, checked: (c.idle_content || []).includes(v)}), h("span", null, l)))))),
+    card("Wireless Wispr mic",
+      field("Wireless mic", toggle("wirelessMic", "Hold A away from USB: the stick's mic reaches Wispr over Bluetooth", !!c.wireless_mic),
+        "The agent plays it into the BlackHole 2ch virtual mic. Set Wispr Flow's microphone to “BlackHole 2ch”. On USB the stick is a normal USB mic as before."),
+      wirelessMicStatus()),
     card("Approvals",
       field("Stick approvals", toggle("stickApprovals", "Claude Code's permission prompts go to the stick and here first", c.stick_approvals !== false),
         "Off: Claude Code asks in the terminal straight away. On: it waits up to 30 s for A / B.")),
@@ -67,7 +71,34 @@ export async function render(el) {
   );
 }
 
-export function leave() { root = null; }
+export function leave() { root = null; if (unsub) unsub(); unsub = null; }
+
+// Device found / streaming, from /api/status (wireless_mic) and live "wispr_mic" events.
+function wirelessMicStatus() {
+  const line = h("div", {class: "small"});
+  const paint = w => {
+    clear(line);
+    if (!w) { line.appendChild(h("span", {class: "dim"}, "This version of the agent doesn't report it.")); return; }
+    if (w.error) {
+      line.append(h("span", {class: "pill warn"}, h("span", {class: "dot"}), "Needs attention"), " ", w.error.includes("brew")
+        ? h("span", null, "Install BlackHole 2ch in a terminal: ", h("code", null, "brew install --cask blackhole-2ch"), " (asks for your Mac password).")
+        : w.error);
+      return;
+    }
+    if (!w.enabled) { line.appendChild(h("span", {class: "dim"}, "Off.")); return; }
+    const parts = [h("span", {class: "pill ok"}, h("span", {class: "dot"}), w.streaming ? "Streaming to Wispr" : "Ready"),
+      " ", h("span", {class: "dim"}, `Playing into ${w.device || "BlackHole 2ch"}`)];
+    if (w.last) parts.push(h("span", {class: "dim"}, ` · last: ${w.last.secs}s, ${w.last.lost} lost frame${w.last.lost === 1 ? "" : "s"}, ${w.last.underruns} gap${w.last.underruns === 1 ? "" : "s"}`));
+    line.append(...parts);
+  };
+  paint((store.status || {}).wireless_mic);
+  if (unsub) unsub();
+  unsub = store.on((type, data) => {
+    if (type === "status") paint(data.wireless_mic);
+    else if (type === "event" && data && data.kind === "wispr_mic") paint(data);
+  });
+  return field("Status", line);
+}
 
 function stickPicker() {
   const s = store.status || {};
@@ -109,6 +140,7 @@ async function save() {
     ticker: v("tickerOn").checked,
     idle_content: [...document.querySelectorAll(".idle")].filter(c => c.checked).map(c => c.value),
     stick_approvals: v("stickApprovals").checked,
+    wireless_mic: v("wirelessMic").checked,
     safe_tools: v("safeTools").value.split(",").map(s => s.trim()).filter(Boolean),
     claude_path: v("claudePath").value.trim(),
   });
