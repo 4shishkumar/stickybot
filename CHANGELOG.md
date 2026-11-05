@@ -12,9 +12,7 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
-## [1.7.2] - 2026-11-05
-
-The first tagged release: everything on `main` so far. Firmware 1.7.2.
+The first tagged release: everything on `main` so far. Firmware 1.8.0.
 
 ### Added
 - **Installer:** `install.sh` (uv, its own Python 3.14 in `~/.stick-agent`, no Homebrew
@@ -45,13 +43,19 @@ The first tagged release: everything on `main` so far. Firmware 1.7.2.
   them in the dashboard (banner with the notes and an **Update** button), the menu bar and,
   once, on the stick. Installs made by `install.sh` update themselves in one click. Release
   firmware is downloaded and sha256-checked into `~/.stick-agent/firmware/`.
+- **Firmware updates over Bluetooth (firmware 1.8.0):** no cable needed from now on —
+  Stick → Firmware → *Update over Bluetooth*, or `stick-agent flash --ble`. The stick
+  checks the image's sha256, and rolls back by itself if the new firmware doesn't start
+  properly. (Sticks on older firmware need one USB flash to 1.8.0 first.)
 - MIT licence and third-party notices; CI on pull requests (macOS runners).
 
 ### Changed
 - Firmware binaries are no longer committed: they come from releases, or from
   `make -C m5-stick-s3 release` (now written to `~/.stick-agent/firmware/local/`).
 - `install.sh` checks out the latest stable release (main before the first one) and
-  clones over HTTPS when `gh` isn't logged in.
+  clones over HTTPS when `gh` isn't logged in. The repo is public: install with
+  `curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stick-key/main/install.sh | sh`.
+- The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
+  fills in your repo) and GitHub alerts have no default repo.
 
 [Unreleased]: https://github.com/ashish-kumar-noon/stick-key/compare/v1.7.2...HEAD
-[1.7.2]: https://github.com/ashish-kumar-noon/stick-key/releases/tag/v1.7.2
