@@ -61,6 +61,11 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   clock; the Aquarium's air strip is taller. The date and the temperature sit under the
   clock in portrait, in a column on the right in landscape.
 
+### Fixed
+- After a Bluetooth update the menu bar kept saying "Stick firmware … available" for up to
+  an hour: the check right after the update got a cached answer from before it. A finished
+  update or a reconnect now asks the stick itself.
+
 ## [2.0.0] - 2026-11-06
 
 **stick-key is now StickyBot.** After updating, macOS asks once more for Bluetooth (and
