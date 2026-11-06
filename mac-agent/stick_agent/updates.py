@@ -66,6 +66,7 @@ class Updates:
         self.error = ""
         self.note = ""             # e.g. "no release yet — ..."
         self.stick_fw = None       # the connected stick's firmware version, when known
+        self._stick_fresh = False  # reconnected: skip the stick API's cache next time
         self._stick_asked = 0.0
         self._lock = asyncio.Lock()
         s = self._load()
@@ -168,6 +169,7 @@ class Updates:
     def link_changed(self, state):
         if state == "connected":
             self._stick_asked = 0.0  # ask again (it may have been flashed meanwhile)
+            self._stick_fresh = True
 
     async def refresh_stick(self, force=False):
         stick = getattr(self.agent, "stick_api", None)
@@ -176,8 +178,9 @@ class Updates:
         if not force and self.clock() - self._stick_asked < STICK_FW_EVERY_S:
             return
         self._stick_asked = self.clock()
+        fresh, self._stick_fresh = force or self._stick_fresh, False  # not the cached answer from before a flash
         try:
-            info = await stick.connected()
+            info = await stick.connected(fresh=fresh)
         except Exception as e:  # noqa: BLE001
             log.info("stick version: %s", e)
             return

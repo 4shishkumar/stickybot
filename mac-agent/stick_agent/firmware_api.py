@@ -129,12 +129,12 @@ class Stick:
         self._usb_cache = (time.time(), out)
         return out
 
-    async def connected(self):
-        """{"name","version"} of the Bluetooth-linked stick, or None."""
+    async def connected(self, fresh=False):
+        """{"name","version"} of the Bluetooth-linked stick, or None (fresh: ask it, not the cache)."""
         if not self.agent.link.connected:
             return None
         at, cached = self._ble_cache
-        if cached and time.time() - at < BLE_CACHE_S:
+        if cached and not fresh and time.time() - at < BLE_CACHE_S:
             return cached
         st = await self.ble("@state")
         info = {"name": st.get("name"), "version": st.get("fw"), "ota": ota.supported(st)} if st else None

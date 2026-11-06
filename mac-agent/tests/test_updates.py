@@ -52,8 +52,9 @@ class FakeStickApi:
         self.version = version
         self.asked = 0
 
-    async def connected(self):
+    async def connected(self, fresh=False):
         self.asked += 1
+        self.fresh = fresh
         return {"name": "my-stick", "version": self.version} if self.version else None
 
 
@@ -139,7 +140,15 @@ async def test_newer_firmware_than_the_connected_stick(up, gh, agent):
     assert st["firmware_update"] and not st["agent_update"] and st["title"] == "Stick firmware 1.8.0 available"
     agent.stick_api.version = "1.8.0"
     await up.refresh_stick(force=True)
-    assert not up.status()["available"]
+    assert not up.status()["available"] and agent.stick_api.fresh  # not a cached answer from before the flash
+
+
+async def test_a_reconnect_asks_the_stick_fresh(up, agent):
+    await up.refresh_stick()
+    assert not agent.stick_api.fresh
+    up.link_changed("connected")
+    await up.refresh_stick()
+    assert agent.stick_api.fresh and agent.stick_api.asked == 2
 
 
 async def test_no_stick_no_firmware_update(up, gh, agent):
