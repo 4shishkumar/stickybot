@@ -31,6 +31,9 @@ esac
             'exec /usr/bin/git "$@"\n'),
     "curl": '#!/bin/sh\necho "curl $*" >>"$FAKE_LOG"\nexit "${FAKE_CURL_RC:-0}"\n',
     "open": '#!/bin/sh\necho "open $*" >>"$FAKE_LOG"\nexit "${FAKE_OPEN_RC:-0}"\n',
+    # the Command Line Tools: there unless FAKE_NO_CLT
+    "xcode-select": ('#!/bin/sh\necho "xcode-select $*" >>"$FAKE_LOG"\n'
+                     '[ -n "$FAKE_NO_CLT" ] && exit 2\necho /Library/Developer/CommandLineTools\n'),
 }
 
 
@@ -160,3 +163,19 @@ def test_the_one_line_install_uses_the_new_repo_name():
     text = SCRIPT.read_text()
     assert 'REPO="ashish-kumar-noon/stickybot"' in text
     assert "raw.githubusercontent.com/ashish-kumar-noon/stickybot/main/install.sh" in text
+
+
+def test_no_command_line_tools_asks_for_them_and_stops(fake, tmp_path):
+    (tmp_path / "fakebin/git").unlink()  # git is macOS's /usr/bin/git stub again
+    r = fake(src_arg=False, FAKE_NO_CLT="1")
+    assert r.returncode == 1 and "Command Line Tools" in r.stdout + r.stderr
+    assert "xcode-select --install" in r.calls and not any(c.startswith("git") for c in r.calls)
+
+
+def test_with_command_line_tools_git_is_fine(fake, tmp_path):
+    (tmp_path / "fakebin/git").unlink()
+    r = fake("--dry-run", src_arg=False)
+    assert r.returncode == 0 and "git ✓" in r.stdout and "xcode-select --install" not in r.calls
+    r = fake("--dry-run", src_arg=False, FAKE_NO_CLT="1")  # a dry run only says it
+    assert r.returncode == 0 and "would ask macOS to install the Command Line Tools" in r.stdout
+    assert "xcode-select --install" not in r.calls

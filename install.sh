@@ -123,6 +123,24 @@ step "Checking this Mac"
 [ "$(uname -m)" = "arm64" ] || die "an Apple Silicon Mac is needed (the speech model runs on its GPU)"
 say "macOS $(sw_vers -productVersion 2>/dev/null || echo '?') on Apple Silicon ✓"
 
+# git (to get StickyBot): without Apple's Command Line Tools, /usr/bin/git is only a stub that
+# pops up an "install developer tools" dialog and fails, so ask for them here and say why
+have_git() {
+  g="$(command -v git 2>/dev/null || true)"
+  [ -n "$g" ] || return 1
+  [ "$g" != /usr/bin/git ] || xcode-select -p >/dev/null 2>&1
+}
+if [ -z "$SRC" ] && [ "$UNINSTALL" != 1 ] && ! have_git; then
+  if [ "$DRY_RUN" = 1 ]; then
+    say "would ask macOS to install the Command Line Tools (for git)"
+  else
+    xcode-select --install >/dev/null 2>&1 || true
+    die "git is needed and isn't on this Mac yet. macOS has opened a window to install the Command Line Tools (git): click Install, wait until it finishes (a few minutes), then run this installer again"
+  fi
+else
+  [ -n "$SRC" ] || say "git ✓"
+fi
+
 if [ "$UNINSTALL" = 1 ]; then
   [ -x "$VENV/bin/stick-agent" ] || die "StickyBot isn't installed in $VENV"
   eval "set -- $setup_args"
