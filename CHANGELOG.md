@@ -12,6 +12,16 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- **Dark StickyWorld and Aquarium faces (firmware 2.3.0)**, for a desk at night, next to
+  the originals (which don't change), in the same pickers with their pictures and demos:
+  - **StickyWorld Dark**: the same world, always at night: a near-black sky with the moon
+    and dim stars (rain, snow, clouds and storms still show), the city with a few lit
+    windows, a dim ground. StickyBot's moods still follow the real time of day.
+  - **Aquarium Dark**: the deep sea: near-black water with drifting specks of light, fish
+    with a soft glow, glowing weed, dim sand. The fish still sleep at night.
+  - On both, the big clock stays bright, and anything urgent shows as on the originals.
+
 ## [2.1.0] - 2026-11-06
 
 ### Added
