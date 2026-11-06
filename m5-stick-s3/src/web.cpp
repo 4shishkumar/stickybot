@@ -97,7 +97,7 @@ static void beginServer() {
   MDNS.begin(HOSTNAME);
   MDNS.addService("http", "tcp", 80);
   MDNS.addService("telnet", "tcp", 23);  // network log (netlog)
-  MDNS.addServiceTxt("http", "tcp", "board", BOARD_ID);
+  MDNS.addServiceTxt("http", "tcp", "board", STICK_BOARD);
   MDNS.addServiceTxt("http", "tcp", "fw", FW_VERSION);
   MDNS.addServiceTxt("http", "tcp", "macro", "1");  // lets the dev portal find our boards
 

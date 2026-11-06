@@ -44,7 +44,7 @@ static const char* btName(hid::Bt b) {
 
 static String stateJson() {
   Combo c = settings::combo();
-  String j = "\"proto\":1,\"board\":\"" BOARD_ID "\",\"fw\":\"" FW_VERSION "\"";
+  String j = "\"proto\":1,\"board\":\"" STICK_BOARD "\",\"fw\":\"" FW_VERSION "\"";
   j += ",\"name\":" + q(hid::name());
   j += ",\"combo\":" + q(comboToString(c)) + ",\"mods\":" + c.mods + ",\"key\":" + c.key;
   j += String(",\"connected\":") + (hid::connected() ? "true" : "false");

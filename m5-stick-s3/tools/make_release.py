@@ -66,7 +66,7 @@ def make(out, build=BUILD, boot=None, release=None, agent_version=None, config_h
         raise SystemExit("firmware.bin doesn't look like an ESP32 app image")
     text = config_h.read_text()
     version = re.search(r'#define\s+FW_VERSION\s+"([^"]+)"', text)
-    board = re.search(r'#define\s+BOARD_ID\s+"([^"]+)"', text)
+    board = re.search(r'#define\s+STICK_BOARD\s+"([^"]+)"', text)
 
     out = Path(out)
     if out.exists():  # drop files from older bundles (e.g. a merged image)
