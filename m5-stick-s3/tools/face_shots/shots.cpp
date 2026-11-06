@@ -2,6 +2,7 @@
 // src/faces/, LovyanGFX into a sprite), and saves PNGs. No stick needed.
 //
 //   make -C tools/face_shots            demo frames -> tools/face_shots/out/
+//   make -C tools/face_shots FACE=aquadark   one face's demo
 //   make -C tools/face_shots previews   the dashboard's face pictures -> mac-agent/.../static/faces/
 #include <Arduino.h>
 #include <M5Unified.h>
@@ -163,9 +164,9 @@ static std::string slug(const String& s) {
 }
 
 // Every face's demo, a picture of each step (a little into it, once things have moved)
-static void demo(const std::string& dir) {
+static void demo(const std::string& dir, const std::string& face) {
   mkdir(dir.c_str(), 0755);
-  faces::demoStart("all");
+  faces::demoStart(face.c_str());
   String last;
   uint32_t changedAt = 0;
   bool shot = true;
@@ -223,6 +224,6 @@ int main(int argc, char** argv) {
   std::string mode = argc > 1 ? argv[1] : "demo";
   std::string dir = argc > 2 ? argv[2] : "out";
   if (mode == "previews") previews(dir);
-  else demo(dir);
+  else demo(dir, argc > 3 ? argv[3] : "all");
   return 0;
 }

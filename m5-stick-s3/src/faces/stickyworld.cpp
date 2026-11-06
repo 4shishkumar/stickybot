@@ -9,6 +9,10 @@
 //     Claude finishes; toys: shake = dizzy, flick = backflip, upside down = panic, lift = hi
 //   - level, XP, streak and the city's size along the ground; accessories as it earns them
 // The time, the battery / Bluetooth and anything urgent are always on screen.
+//
+// StickyWorld Dark (stickydark): the same world, always at night and dimmer, for a desk in
+// the dark (near-black sky, a few lit windows, a dim ground); the weather still shows, and
+// the bot's moods still follow the real time of day. One class, a dark flag.
 #include "faces.h"
 #include "common.h"
 #include "../logic/city.h"
@@ -30,6 +34,9 @@ constexpr uint16_t SHELL_RIM = rgb(0x4a, 0x52, 0x5c);
 constexpr uint16_t SCREEN    = rgb(0x12, 0x15, 0x19);
 constexpr uint16_t GOLD      = rgb(0xf2, 0xc1, 0x4e);
 constexpr uint16_t WINDOW    = rgb(0xff, 0xd1, 0x66);  // lit at night
+constexpr uint16_t WINDOW_DK = rgb(0xd8, 0xa0, 0x4c);  // dark: lit windows, a warmer, dimmer glow
+constexpr uint16_t BUBBLE    = rgb(0xf4, 0xf6, 0xf8);  // the speech bubble
+constexpr uint16_t BUBBLE_DK = rgb(0x26, 0x2c, 0x36);
 
 static uint16_t c(const sky::Rgb& x) { return rgb(x.r, x.g, x.b); }
 
@@ -54,6 +61,7 @@ struct Reaction {
 
 class StickyWorld : public Face {
  public:
+  explicit StickyWorld(bool dark = false) : dark_(dark) {}
   const char* id() const override { return "stickyworld"; }
   const char* title() const override { return "StickyWorld"; }
   const char* about() const override {
@@ -100,6 +108,9 @@ class StickyWorld : public Face {
 
   void draw(const Dash& d, bool wide, uint32_t now) override;
 
+ protected:
+  const bool dark_;  // StickyWorld Dark: always night, dimmer
+
  private:
   static constexpr int QN = 4;
   Reaction q_[QN];
@@ -117,6 +128,7 @@ class StickyWorld : public Face {
   int          nCity_ = 0;
   uint32_t     cityKey_ = 0;
   uint16_t     haze_ = 0;  // the sky at the horizon: the city fades into it by day
+  float        realLight_ = 1;  // the daylight outside (dark: the scene stays at night anyway)
 
   Mood reaction(uint32_t now, uint32_t& into);
   void sky(const Dash& d, const Layout& L, uint32_t now, bool& night, float& light);
@@ -154,6 +166,13 @@ void StickyWorld::sky(const Dash& d, const Layout& L, uint32_t now, bool& night,
   const int minute = d.minute >= 0 ? d.minute : 12 * 60;
   const char* icon = d.wxValid ? d.wxIcon.c_str() : "clear";
   sky::Colors sc = sky::colors(minute, sky::overcast(icon));
+  realLight_ = sc.light;
+  if (dark_) {  // midnight's sky whatever the time, deeper still
+    const sky::Colors n = sky::colors(0, sky::overcast(icon));
+    sc.top = sky::mix(n.top, {0, 0, 0}, 0.45f);
+    sc.bottom = sky::mix(n.bottom, {0, 0, 0}, 0.4f);
+    sc.light = 0.02f;
+  }
   light = sc.light;
   night = light < 0.3f;
   uint16_t top = c(sc.top), bot = c(sc.bottom);
@@ -161,7 +180,8 @@ void StickyWorld::sky(const Dash& d, const Layout& L, uint32_t now, bool& night,
   const bool storm = d.wxValid && d.wxIcon == "storm";
   const uint32_t ph = now % 7000;
   const bool flash = storm && (ph < 90 || (ph > 170 && ph < 230));
-  if (flash) { top = blend(top, TFT_WHITE, 0.5f); bot = blend(bot, TFT_WHITE, 0.5f); }
+  const float flashK = dark_ ? 0.22f : 0.5f;  // dark: a softer flash
+  if (flash) { top = blend(top, TFT_WHITE, flashK); bot = blend(bot, TFT_WHITE, flashK); }
   for (int y = 0; y < L.groundY; y += 4) canvas.fillRect(0, y, W, 4, blend(top, bot, (float)y / L.groundY));
 
   // stars, twinkling
@@ -170,7 +190,8 @@ void StickyWorld::sky(const Dash& d, const Layout& L, uint32_t now, bool& night,
     for (int i = 0; i < n; i++) {
       int sx = hash32(i * 7 + 1) % W, sy = 4 + hash32(i * 7 + 2) % (L.groundY - 36);
       float tw = 0.5f + 0.5f * sinf(now / 520.0f + i * 1.7f);
-      uint16_t col = blend(blend(top, bot, (float)sy / L.groundY), INK, (0.35f + 0.65f * tw) * (1 - light / 0.35f));
+      uint16_t col = blend(blend(top, bot, (float)sy / L.groundY), INK,
+                           (0.35f + 0.65f * tw) * (1 - light / 0.35f) * (dark_ ? 0.7f : 1.0f));
       int sz = i % 5 == 0 ? 2 : 1;
       canvas.fillRect(sx, sy, sz, sz, col);
     }
@@ -181,25 +202,28 @@ void StickyWorld::sky(const Dash& d, const Layout& L, uint32_t now, bool& night,
     x = 16 + (int)(t * (W - 32));
     y = L.groundY - 14 - (int)(sinf(PI * t) * (L.groundY - 14 - L.arcTop));
   };
-  if (sky::sunAt(minute, t) && !sky::overcast(icon)) {
+  if (!dark_ && sky::sunAt(minute, t) && !sky::overcast(icon)) {
     int x, y;
     arc(t, x, y);
     uint16_t sunC = blend(SUN, rgb(0xff, 0x7a, 0x45), constrain(1.2f - light, 0.0f, 1.0f));
     for (int r = 12; r > 7; r -= 2) canvas.fillCircle(x, y, r, blend(blend(top, bot, (float)y / L.groundY), sunC, 0.18f * (13 - r) / 2));
     canvas.fillCircle(x, y, 7, sunC);
     canvas.fillRect(x - 3, y - 4, 3, 2, blend(sunC, TFT_WHITE, 0.5f));  // a pixel glint
-  } else if (sky::moonAt(minute, t)) {
+  } else if (sky::moonAt(minute, t) || (dark_ && sky::sunAt(minute, t))) {  // dark: the moon takes the sun's path
     int x, y;
     arc(t, x, y);
-    canvas.fillCircle(x, y, 6, SNOW);
+    const uint16_t moon = dark_ ? blend(SNOW, top, 0.25f) : SNOW;
+    canvas.fillCircle(x, y, 6, moon);
     canvas.fillCircle(x + 3, y - 2, 5, blend(top, bot, (float)y / L.groundY));
-    canvas.fillRect(x - 3, y + 1, 2, 2, blend(SNOW, FAINT, 0.4f));  // a crater
+    canvas.fillRect(x - 3, y + 1, 2, 2, blend(moon, FAINT, 0.4f));  // a crater
   }
   // clouds, drifting
   int nc = d.wxValid ? sky::clouds(icon) : 0;
-  uint16_t cloud = night ? rgb(0x3a, 0x40, 0x58) : sky::overcast(icon) ? rgb(0xc0, 0xc7, 0xcf) : rgb(0xf4, 0xf6, 0xf8);
+  uint16_t cloud = dark_   ? rgb(0x26, 0x2b, 0x3a)
+                  : night ? rgb(0x3a, 0x40, 0x58)
+                  : sky::overcast(icon) ? rgb(0xc0, 0xc7, 0xcf) : rgb(0xf4, 0xf6, 0xf8);
   if (storm) cloud = blend(cloud, rgb(0x40, 0x46, 0x50), 0.5f);
-  if (flash) cloud = blend(cloud, TFT_WHITE, 0.5f);
+  if (flash) cloud = blend(cloud, TFT_WHITE, flashK);
   for (int i = 0; i < nc; i++) {
     float speed = 2.5f + i * 1.3f;
     int span = W + 60;
@@ -213,9 +237,10 @@ void StickyWorld::sky(const Dash& d, const Layout& L, uint32_t now, bool& night,
   if (flash && ph < 90) {  // the bolt
     int bx = 20 + hash32(now / 7000) % (W - 40), y0 = 40, y1 = L.groundY - 30;
     int mid = (y0 + y1) / 2;
-    canvas.drawWideLine(bx, y0, bx - 6, mid, 2, TFT_WHITE);
-    canvas.drawWideLine(bx - 6, mid, bx + 3, mid, 2, TFT_WHITE);
-    canvas.drawWideLine(bx + 3, mid, bx - 4, y1, 2, TFT_WHITE);
+    const uint16_t bolt = dark_ ? rgb(0xc8, 0xd0, 0xe0) : TFT_WHITE;
+    canvas.drawWideLine(bx, y0, bx - 6, mid, 2, bolt);
+    canvas.drawWideLine(bx - 6, mid, bx + 3, mid, 2, bolt);
+    canvas.drawWideLine(bx + 3, mid, bx - 4, y1, 2, bolt);
   }
 }
 
@@ -229,7 +254,7 @@ void StickyWorld::skyline(const world::Snapshot& w, const Layout& L, bool night,
     nCity_ = city::layout(w.seed, w.merged, w.towers, w.nTowers, W - 4, cell, city_, 72);
   }
   const uint16_t dusk = rgb(0x0b, 0x0f, 0x24);
-  const float dark = constrain((0.6f - light) / 0.5f, 0.0f, 0.78f);  // walls fade into the night
+  const float dark = dark_ ? 0.84f : constrain((0.6f - light) / 0.5f, 0.0f, 0.78f);  // walls fade into the night
   for (int i = 0; i < nCity_; i++) {
     const city::Placed& p = city_[i];
     const city::Building& b = p.b;
@@ -241,7 +266,7 @@ void StickyWorld::skyline(const world::Snapshot& w, const Layout& L, bool night,
     if (b.tower) {
       canvas.fillTriangle(x, top, x + bw - 1, top, x + bw / 2, top - 7, trim);
       canvas.drawFastVLine(x + bw / 2, top - 12, 5, trim);
-      canvas.fillRect(x + bw / 2 + 1, top - 12, 3, 2, night ? WINDOW : ERR);  // a flag
+      canvas.fillRect(x + bw / 2 + 1, top - 12, 3, 2, dark_ ? WINDOW_DK : night ? WINDOW : ERR);  // a flag
     } else if (b.roof == city::PEAK && bw >= 5) {
       canvas.fillTriangle(x, top, x + bw - 1, top, x + bw / 2, top - bw / 2, trim);
     } else if (b.roof == city::DOME && bw >= 5) {
@@ -261,7 +286,8 @@ void StickyWorld::skyline(const world::Snapshot& w, const Layout& L, bool night,
         int wy = top + bh - f * L.floorH - (L.floorH > 2 ? 1 : 0);
         for (int cI = 0; cI < cols; cI++, bit++) {
           bool lit = (b.windows >> (bit % 16)) & 1;
-          uint16_t wc = night ? (lit ? WINDOW : blend(wall, TFT_BLACK, 0.3f))
+          if (dark_) lit = lit && hash32(b.windows * 31u + bit * 7u + i) % 3 == 0;  // a few still up
+          uint16_t wc = night ? (lit ? (dark_ ? WINDOW_DK : WINDOW) : blend(wall, TFT_BLACK, 0.3f))
                               : blend(wall, rgb(0x2b, 0x3a, 0x55), 0.45f);
           canvas.fillRect(x + 1 + cI * 3, wy, 2, L.floorH > 2 ? 2 : 1, wc);
         }
@@ -272,9 +298,9 @@ void StickyWorld::skyline(const world::Snapshot& w, const Layout& L, bool night,
 
 void StickyWorld::ground(const Dash& d, const Layout& L, bool night) {
   const bool snow = d.wxValid && d.wxIcon == "snow";
-  uint16_t grass = night ? rgb(0x1f, 0x3b, 0x2a) : rgb(0x5a, 0x9e, 0x4b);
-  uint16_t dirt = night ? rgb(0x22, 0x1b, 0x16) : rgb(0x6e, 0x52, 0x37);
-  if (snow) grass = night ? rgb(0x8a, 0x93, 0xa6) : rgb(0xee, 0xf2, 0xf6);
+  uint16_t grass = dark_ ? rgb(0x16, 0x2a, 0x1f) : night ? rgb(0x1f, 0x3b, 0x2a) : rgb(0x5a, 0x9e, 0x4b);
+  uint16_t dirt = dark_ ? rgb(0x12, 0x0f, 0x0d) : night ? rgb(0x22, 0x1b, 0x16) : rgb(0x6e, 0x52, 0x37);
+  if (snow) grass = dark_ ? rgb(0x5a, 0x61, 0x70) : night ? rgb(0x8a, 0x93, 0xa6) : rgb(0xee, 0xf2, 0xf6);
   canvas.fillRect(0, L.groundY, W, H - L.groundY, dirt);
   canvas.fillRect(0, L.groundY, W, 4, grass);
   for (int x = 0; x < W; x += 6)  // tufts
@@ -289,7 +315,7 @@ void StickyWorld::weather(const Dash& d, const Layout& L, uint32_t now, bool nig
   const String& w = d.wxIcon;
   if (w == "rain" || w == "storm") {
     const int n = W > H ? 30 : 24;
-    const uint16_t rc = night ? blend(RAIN, GROUND, 0.4f) : RAIN;
+    const uint16_t rc = dark_ ? blend(RAIN, GROUND, 0.45f) : night ? blend(RAIN, GROUND, 0.4f) : RAIN;
     for (int i = 0; i < n; i++) {
       float y = fmodf(hash32(i + 600) % 300 + now * 0.17f, (float)L.groundY + 8);
       float x = fmodf(hash32(i + 700) % W - y * 0.25f + W, (float)W);
@@ -300,10 +326,10 @@ void StickyWorld::weather(const Dash& d, const Layout& L, uint32_t now, bool nig
     for (int i = 0; i < n; i++) {
       float y = fmodf(hash32(i + 800) % 300 + now * 0.024f, (float)L.groundY + 4);
       float x = hash32(i + 900) % W + sinf(now / 900.0f + i) * 5;
-      canvas.fillRect((int)x, (int)y, 2, 2, SNOW);
+      canvas.fillRect((int)x, (int)y, 2, 2, dark_ ? blend(SNOW, GROUND, 0.4f) : SNOW);
     }
   } else if (w == "fog") {
-    const uint16_t f = night ? rgb(0x3a, 0x40, 0x4a) : rgb(0xc8, 0xcd, 0xd3);
+    const uint16_t f = dark_ ? rgb(0x26, 0x2a, 0x32) : night ? rgb(0x3a, 0x40, 0x4a) : rgb(0xc8, 0xcd, 0xd3);
     for (int i = 0; i < 3; i++) {
       int y = L.groundY - 30 + i * 9, off = (int)(now / 120 + i * 40) % 60;
       for (int x = -off; x < W; x += 60) canvas.fillRoundRect(x, y, 44, 4, 2, f);
@@ -361,7 +387,7 @@ void StickyWorld::bot(float cx, int footY, float k, Mood m, uint32_t into, uint3
   }
   const float bw = 28 * k * sx, bh = 32 * k * sy, legH = 4 * k;
   const float bottom = footY - legH + yOff, top = bottom - bh, left = cx + xOff - bw / 2;
-  const uint16_t shell = night ? blend(SHELL, rgb(0x20, 0x26, 0x40), 0.45f) : SHELL;
+  const uint16_t shell = night ? blend(SHELL, rgb(0x20, 0x26, 0x40), dark_ ? 0.38f : 0.45f) : SHELL;
   const uint16_t rim = night ? blend(SHELL_RIM, rgb(0x10, 0x14, 0x28), 0.4f) : SHELL_RIM;
   const uint16_t legC = rgb(0x3a, 0x40, 0x48);
   // its shadow on the ground (smaller while it's in the air)
@@ -515,7 +541,7 @@ void StickyWorld::draw(const Dash& d, bool wide, uint32_t now) {
   const bool reviews = !u.on && d.agentLinked && w.reviews > 0;
   pet::MoodInputs in{u.on || reviews || (d.agentLinked && w.asks > 0), w.ci == world::Ci::RED,
                      w.ci == world::Ci::GREEN, d.agentLinked ? w.nSessions : 0,
-                     isNightMinute(d.minute) || light < 0.15f};
+                     isNightMinute(d.minute) || realLight_ < 0.15f};
   uint32_t into = 0;
   Mood m = reaction(now, into);
   const bool reacting = m != Mood::IDLE;
@@ -572,7 +598,8 @@ void StickyWorld::draw(const Dash& d, bool wide, uint32_t now) {
     // a little bounce while it's lifted up, steady once held
     if (u.on) signBoard(L.signX, L.signY, L.signW, L.signH, u.a, u.b, u.bg, u.ink);
     else signBoard(L.signX, L.signY, L.signW, L.signH, w.reviews == 1 ? "Review requested" : String(w.reviews) + " reviews",
-                   w.reviews == 1 ? "a PR waits for you" : "PRs wait for you", ui::BLUE, rgb(0x06, 0x16, 0x2a));
+                   w.reviews == 1 ? "a PR waits for you" : "PRs wait for you",
+                   dark_ ? rgb(0x2a, 0x4e, 0x80) : ui::BLUE, dark_ ? INK : rgb(0x06, 0x16, 0x2a));
   }
 
   if (m == Mood::CELEBRATING) confettiDraw(false);
@@ -609,8 +636,9 @@ void StickyWorld::draw(const Dash& d, bool wide, uint32_t now) {
   const bool cardKind = d.cardKind.length() && d.cardKind != "hello" && d.cardKind != "face";
   if (!holdSign && !reacting && d.agentLinked && cardKind && now - cardAt_ < 7000 && cardAt_) {
     // landscape: beside the bot, on the side with more room (the sky under the clock is short)
-    if (wide) speech(x_ > W / 2 ? 6 : W - 134, 54, 128, 38, (int)x_, d.cardA, d.cardB, rgb(0xf4, 0xf6, 0xf8), GROUND);
-    else speech(6, 80, W - 12, 42, (int)x_, d.cardA, d.cardB, rgb(0xf4, 0xf6, 0xf8), GROUND);
+    const uint16_t bg = dark_ ? BUBBLE_DK : BUBBLE, ink = dark_ ? INK : GROUND;
+    if (wide) speech(x_ > W / 2 ? 6 : W - 134, 54, 128, 38, (int)x_, d.cardA, d.cardB, bg, ink);
+    else speech(6, 80, W - 12, 42, (int)x_, d.cardA, d.cardB, bg, ink);
   }
 
   // always: the time (big, to read across a desk), battery / Bluetooth, the date and the
@@ -620,10 +648,26 @@ void StickyWorld::draw(const Dash& d, bool wide, uint32_t now) {
   stats(d, w, L, wide, ink, shade);
 }
 
+// StickyWorld Dark: the same class, the dark flag set
+class StickyWorldDark : public StickyWorld {
+ public:
+  StickyWorldDark() : StickyWorld(true) {}
+  const char* id() const override { return "stickydark"; }
+  const char* title() const override { return "StickyWorld Dark"; }
+  const char* about() const override {
+    return "StickyWorld at night, always: a near-black sky, a few lit windows, low glare for a dark desk";
+  }
+};
+
 }  // namespace
 
 Face& stickyWorld() {
   static StickyWorld f;
+  return f;
+}
+
+Face& stickyWorldDark() {
+  static StickyWorldDark f;
   return f;
 }
 

@@ -10,8 +10,11 @@
 //   dashboard    time, weather, battery, what waits, Claude, CI and the card in one grid
 //   space        StickyBot over a ringed planet: sessions orbit it, merged PRs launch rockets
 //   lava         a lava lamp: a blob per Claude session, its colour says how things are
+//   stickydark   StickyWorld Dark: the same world always at night, low glare (stickyworld.cpp)
+//   aquadark     Aquarium Dark: the deep sea, glowing fish and weed (aquarium.cpp)
 //
 // Adding a face: one file in src/faces/ that subclasses Face and defines `Face& myFace()`
+// (a variant of a face, like the dark ones: a subclass in the same file, with its own id)
 // (see classic.cpp, the smallest), plus one X(myFace) in FACES in faces.cpp (and, for a
 // clock with no world to show, its id in demo.cpp's QUIET list: the short demo).
 //

@@ -375,8 +375,8 @@ m5-stick-s3/
     ├── settings.*     saved settings (NVS flash)
     ├── hid.*          Bluetooth keyboard
     ├── ui.*           screen drawing, screen sleep (ui_draw.h: the kit the faces share)
-    ├── faces/         Home faces: registry + world (faces.*), classic, stickyworld, aquarium,
-    │                  bigtime, words, analog, dashboard, space, lava, demo
+    ├── faces/         Home faces: registry + world (faces.*), classic, stickyworld, aquarium
+    │                  (each with its Dark variant), bigtime, words, analog, dashboard, space, lava, demo
     ├── menu.*         on-device settings menu
     ├── web.*          Wi-Fi + settings page server
     └── web_page.h     the settings page (HTML/JS)

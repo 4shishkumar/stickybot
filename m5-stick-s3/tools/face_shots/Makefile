@@ -3,12 +3,14 @@
 # `pio run -e sticks3` (or `make build` one level up) once first.
 #
 #   make -C tools/face_shots            every face's demo, a picture per step -> out/
+#   make -C tools/face_shots FACE=<id>  one face's demo
 #   make -C tools/face_shots previews   the dashboard's face pictures (mac-agent static/faces/)
 SRC  := ../../src
 LIBS := ../../.pio/libdeps/sticks3
 GFX  := $(LIBS)/M5GFX/src
 JSON := $(LIBS)/ArduinoJson/src
 B    := build
+FACE ?= all
 
 CXXFLAGS := -std=gnu++17 -O1 -w -Imock -I$(SRC) -I$(GFX) -I$(JSON)
 CFLAGS   := -O1 -w -Imock -I$(GFX)
@@ -22,7 +24,7 @@ VPATH := $(SRC) $(SRC)/faces $(SRC)/logic $(GFX)/lgfx/v1 $(GFX)/lgfx/utility .
 
 .PHONY: demo previews clean
 demo: $(B)/shots
-	cd $(B)/.. && $(B)/shots demo out
+	cd $(B)/.. && $(B)/shots demo out $(FACE)
 previews: $(B)/shots
 	$(B)/shots previews ../../../mac-agent/stick_agent/static/faces
 
