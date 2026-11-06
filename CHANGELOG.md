@@ -22,6 +22,14 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
     with a soft glow, glowing weed, dim sand. The fish still sleep at night.
   - On both, the big clock stays bright, and anything urgent shows as on the originals.
 
+### Fixed
+- **The stick's Bluetooth ran out of buffers** (firmware 2.3.0): a long reply to the Mac app
+  (its status, with the list of faces) could use all 12, and then key presses were dropped
+  (the Mac password typed by a double-press of B sometimes came out wrong), wireless-mic
+  audio cut out, and the app's messages failed with "Insufficient Resource". The stick now
+  has 48, a key press waits up to half a second for one, and the app sends again when the
+  stick is busy for a moment.
+
 ## [2.1.0] - 2026-11-06
 
 ### Added
