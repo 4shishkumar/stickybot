@@ -38,7 +38,7 @@ constexpr int PAD   = 8;
 
 extern M5Canvas canvas;  // everything draws here, then pushSprite
 extern int      W, H;    // its size now (135 x 240 portrait, 240 x 135 landscape)
-extern const lgfx::IFont *F9, *F12, *F14, *F18, *F24, *F44, *F96;  // F44 / F96: digits only
+extern const lgfx::IFont *F9, *F12, *F14, *F18, *F24, *F32, *F44, *F56, *F96;  // F44 / F56 / F96: digits only
 
 // Text
 void txt(const String& s, int x, int y, const lgfx::IFont* f, uint16_t color, textdatum_t datum = middle_left);

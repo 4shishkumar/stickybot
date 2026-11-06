@@ -22,7 +22,7 @@ namespace ui {
 // and idle the stick becomes a desk clock (landscape when lying on its side).
 
 
-// Anti-aliased fonts, loaded from flash in begin(). F44 has digits only (the clock).
+// Anti-aliased fonts, loaded from flash in begin(). F44 / F56 / F96 have digits only (clocks).
 struct Vlw {
   lgfx::PointerWrapper data;
   lgfx::VLWfont font;
@@ -31,8 +31,8 @@ struct Vlw {
     return font.loadFont(&data) ? &font : (const lgfx::IFont*)&fonts::Font2;
   }
 };
-static Vlw vlw10, vlw12, vlw14, vlw18, vlw24, vlw44, vlw96;
-const lgfx::IFont *F9, *F12, *F14, *F18, *F24, *F44, *F96;  // F44/F96: digits only (clocks)
+static Vlw vlw10, vlw12, vlw14, vlw18, vlw24, vlw32, vlw44, vlw56, vlw96;
+const lgfx::IFont *F9, *F12, *F14, *F18, *F24, *F32, *F44, *F56, *F96;  // F44/F56/F96: digits only (clocks)
 
 M5Canvas canvas(&M5.Display);
 static uint8_t  brightness = 128;
@@ -53,7 +53,9 @@ void begin() {
   F14 = vlw14.load(INTER_14, INTER_14_LEN);
   F18 = vlw18.load(INTER_18, INTER_18_LEN);
   F24 = vlw24.load(INTER_24, INTER_24_LEN);
+  F32 = vlw32.load(INTER_32, INTER_32_LEN);
   F44 = vlw44.load(INTER_44, INTER_44_LEN);
+  F56 = vlw56.load(INTER_56, INTER_56_LEN);
   F96 = vlw96.load(INTER_96, INTER_96_LEN);
   lastActivity = millis();
 }
@@ -189,7 +191,7 @@ int paragraph(const String& s, const lgfx::IFont* f, int x, int y, int maxW, int
 
 // Line height for each font in wrapped text.
 int lineH(const lgfx::IFont* f) {
-  return f == F9 ? 13 : f == F12 ? 16 : f == F14 ? 18 : f == F18 ? 22 : 26;
+  return f == F9 ? 13 : f == F12 ? 16 : f == F14 ? 18 : f == F18 ? 22 : f == F32 ? 36 : 26;
 }
 
 // Biggest of `fonts` (largest first) in which all of s wraps into a box maxW x boxH

@@ -38,6 +38,7 @@ struct Dash {
   String   date;         // "Tue 20 Oct", "" until the agent has sent the time
   String   longDate;     // "Tuesday 20 October" (dock clock)
   int      minute = -1;  // minutes since local midnight (the faces' sky), -1 until the agent has sent the time
+  int      second = -1;  // 0-59 along with minute (the Analog face's second hand)
   // bottom card on the home screen (from the agent)
   String   cardKind, cardA, cardB;
   bool     cardUrgent;

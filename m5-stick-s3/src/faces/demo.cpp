@@ -76,21 +76,28 @@ static const Step SCRIPT[] = {
     {3000, 1, "Rain", [](State& s) { s.urgent = false; s.wx = "rain"; s.minute = 16 * 60; }, Kick::NONE},
     {3200, 1, "Night", [](State& s) { s.wx = "clear"; s.minute = 22 * 60 + 30; }, Kick::NONE},
 };
-static const Step CLASSIC[] = {
-    {3000, 0, "Classic", [](State&) {}, Kick::NONE},
+// The quiet faces (the clocks): a few times of day, something urgent, landscape
+static const Step CLOCKS[] = {
+    {3000, 0, "Morning", [](State&) {}, Kick::NONE},
     {3000, 0, "Needs you", [](State& s) { s.urgent = true; }, Kick::NONE},
-    {3000, 1, "Landscape", [](State& s) { s.urgent = false; s.minute = 14 * 60 + 5; s.wx = "partly"; }, Kick::NONE},
+    {3000, 0, "Evening", [](State& s) { s.urgent = false; s.minute = 18 * 60 + 47; s.wx = "partly"; }, Kick::NONE},
+    {3000, 1, "Landscape", [](State& s) { s.minute = 14 * 60 + 5; }, Kick::NONE},
+    {3000, 1, "Needs you", [](State& s) { s.urgent = true; }, Kick::NONE},
+    {3000, 1, "Late", [](State& s) { s.urgent = false; s.minute = 23 * 60 + 58; s.wx = "clear"; }, Kick::NONE},
 };
 
 static State    st;
-static int      order[8], nOrder = 0, pos = -1, step = -1;
+static int      order[16], nOrder = 0, pos = -1, step = -1;
 static uint32_t stepAt = 0;
 static bool     on = false;
 
+// The clocks get the short script; the faces with a world to show, the whole story.
 static const Step* script(int& n) {
-  bool classic = !strcmp(at(order[pos]).id(), "classic");
-  n = classic ? sizeof CLASSIC / sizeof CLASSIC[0] : sizeof SCRIPT / sizeof SCRIPT[0];
-  return classic ? CLASSIC : SCRIPT;
+  static const char* const QUIET[] = {"classic", "bigtime", "words", "analog"};
+  bool quiet = false;
+  for (const char* q : QUIET) quiet = quiet || !strcmp(at(order[pos]).id(), q);
+  n = quiet ? sizeof CLOCKS / sizeof CLOCKS[0] : sizeof SCRIPT / sizeof SCRIPT[0];
+  return quiet ? CLOCKS : SCRIPT;
 }
 
 static void freshWorld() {
@@ -134,7 +141,7 @@ static bool advance() {
 bool demoStart(const String& id) {
   nOrder = 0;
   if (!id.length() || id == "all") {
-    for (int i = 0; i < count() && nOrder < 8; i++) order[nOrder++] = i;
+    for (int i = 0; i < count() && nOrder < (int)(sizeof order / sizeof order[0]); i++) order[nOrder++] = i;
   } else {
     int i = find(id);
     if (i < 0) return false;
@@ -177,6 +184,8 @@ bool demoFrame(const ui::Dash& base, ui::Dash& d, int& side, String& caption) {
   d.wxIcon = st.wx;
   d.wxDay = st.minute >= 6 * 60 && st.minute < 19 * 60;
   d.wxTemp = st.wx == "snow" ? -2 : st.wx == "rain" ? 14 : 22;
+  d.wxHi = d.wxTemp + 4;
+  d.wxLo = d.wxTemp - 7;
   d.wxCond = st.wx == "partly" ? "partly cloudy" : st.wx;
   d.cardUrgent = st.urgent;
   d.cardKind = st.urgent ? "approval" : st.cardKind;

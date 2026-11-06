@@ -49,6 +49,72 @@ int timeText(const Dash& d, int x, int y, const lgfx::IFont* f, uint16_t ink, ui
   return cw + 3 + canvas.textWidth(d.ampm);
 }
 
+void outlineTxt(const String& s, int x, int y, const lgfx::IFont* f, uint16_t ink, uint16_t shade, textdatum_t datum,
+                int r) {
+  txt(s, x + r + 1, y + r + 1, f, shade, datum);  // the drop shadow, then the rim
+  for (int dy = -r; dy <= r; dy += r)
+    for (int dx = -r; dx <= r; dx += r)
+      if (dx || dy) txt(s, x + dx, y + dy, f, shade, datum);
+  txt(s, x, y, f, ink, datum);
+}
+
+int bigTime(const Dash& d, int x, int y, const lgfx::IFont* f, uint16_t ink, uint16_t shade, bool centred) {
+  if (!d.clock.length()) {  // no time yet: the name
+    const lgfx::IFont* nf = fit(d.name, W - 12, {F24, F18, F12});
+    canvas.setFont(nf);
+    int nw = canvas.textWidth(d.name);
+    outlineTxt(d.name, centred ? x - nw / 2 : x, y, nf, ink, shade);
+    return nw;
+  }
+  canvas.setFont(f);
+  const int cw = canvas.textWidth(d.clock), digitH = f == F56 ? 41 : f == F96 ? 72 : f == F44 ? 32 : 17;
+  canvas.setFont(F12);
+  const int aw = d.ampm.length() ? canvas.textWidth(d.ampm) + 3 : 0;
+  const int left = centred ? x - (cw + aw) / 2 : x;
+  outlineTxt(d.clock, left, y, f, ink, shade, middle_left, f == F96 || f == F56 ? 2 : 1);
+  // AM / PM at the digits' top right; left-aligned (landscape) by their foot, clear of the icons
+  if (aw) outlineTxt(d.ampm, left + cw + 3, centred ? y - digitH / 2 + 5 : y + digitH / 2 - 5, F12, blend(ink, shade, 0.2f), shade);
+  return cw + aw;
+}
+
+void headline(const Dash& d, bool wide, uint16_t ink, uint16_t shade, bool column) {
+  const uint16_t sub = blend(ink, shade, 0.12f);
+  statusIcons(d, W - 4, 9, ink);
+  const String note = quietNotice(d);
+  if (wide && !column) {  // the date and the temperature on a line under the clock
+    bigTime(d, 5, 27, F56, ink, shade);
+    String line = note.length() ? String("agent offline") : d.date;
+    if (d.wxValid && !note.length()) line += String(line.length() ? "  " : "") + String(d.wxTemp) + "°";
+    if (line.length()) outlineTxt(line, 6, 60, F14, sub, shade);
+    return;
+  }
+  if (wide) {  // the date and the temperature in a column right of the clock, under the icons
+    const int tw = bigTime(d, 5, 27, F56, ink, shade);
+    const int room = W - 6 - (5 + tw + 8);
+    const String line = note.length() ? String("agent offline") : d.date;
+    if (line.length()) outlineTxt(ellipsize(line, F12, room), W - 6, 28, F12, sub, shade, middle_right);
+    if (d.wxValid) outlineTxt(String(d.wxTemp) + "°", W - 6, 45, F14, ink, shade, middle_right);
+    return;
+  }
+  // portrait: AM / PM beside the clock when it fits, else with the date under it
+  const bool beside = !d.clock.length() || clockFits(d, F44, W - 6);
+  Dash t = d;
+  if (!beside) t.ampm = "";
+  bigTime(t, W / 2, 38, F44, ink, shade, true);
+  const String line = note.length() ? note : beside || !d.ampm.length() ? d.date : d.ampm + "  " + d.date;
+  const lgfx::IFont* lf = note.length() ? F9 : F12;
+  const bool temp = d.wxValid && !note.length();
+  if (line.length()) outlineTxt(ellipsize(line, lf, W - 12 - (temp ? 30 : 0)), 6, 67, lf, sub, shade);
+  if (temp) outlineTxt(String(d.wxTemp) + "°", W - 6, 67, F12, ink, shade, middle_right);
+}
+
+bool clockFits(const Dash& d, const lgfx::IFont* f, int maxW) {
+  canvas.setFont(f);
+  int w = canvas.textWidth(d.clock);
+  canvas.setFont(F12);
+  return w + (d.ampm.length() ? 3 + (int)canvas.textWidth(d.ampm) : 0) <= maxW;
+}
+
 void statusIcons(const Dash& d, int right, int cy, uint16_t ink) {
   int r = right - 18;
   batteryIcon(r, cy - 4, d.battery, d.charging);

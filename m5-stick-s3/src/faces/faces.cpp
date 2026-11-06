@@ -6,7 +6,9 @@
 namespace faces {
 
 // --- Registry: add a face here (and its file) --------------------------------------
-#define FACES(X) X(classic) X(stickyWorld) X(aquarium)
+#define FACES(X)                                                                            \
+  X(classic) X(stickyWorld) X(aquarium) X(bigTimeFace) X(wordsFace) X(analog) X(dashboard) \
+  X(space) X(lava)
 
 #define FACE_DECLARE(f) Face& f();
 FACES(FACE_DECLARE)

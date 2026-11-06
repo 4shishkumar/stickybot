@@ -4,9 +4,16 @@
 //   stickyworld  StickyBot in a pixel world: sky by the time and weather, a city that grows
 //                with your merged PRs, moods from your CI / Claude sessions / what waits for you
 //   aquarium     a fish per running Claude Code session, PRs as bubbles, tilt the water
+//   bigtime      just the time, as big as it gets (minimal)
+//   words        the time in words, "twenty-five to eleven" (minimal)
+//   analog       a clean dial with a ticking second hand, the date and the weather
+//   dashboard    time, weather, battery, what waits, Claude, CI and the card in one grid
+//   space        StickyBot over a ringed planet: sessions orbit it, merged PRs launch rockets
+//   lava         a lava lamp: a blob per Claude session, its colour says how things are
 //
 // Adding a face: one file in src/faces/ that subclasses Face and defines `Face& myFace()`
-// (see classic.cpp, the smallest), plus one X(myFace) in FACES in faces.cpp.
+// (see classic.cpp, the smallest), plus one X(myFace) in FACES in faces.cpp (and, for a
+// clock with no world to show, its id in demo.cpp's QUIET list: the short demo).
 //
 // Every face keeps the time and anything urgent on screen (common.h: urgent(), timeBar()).
 // The other screens (prompts, events, the agent, the dock clock) are not faces: they

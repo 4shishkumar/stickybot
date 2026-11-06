@@ -36,11 +36,15 @@ static uint16_t c(const sky::Rgb& x) { return rgb(x.r, x.g, x.b); }
 struct Layout {
   int  groundY, statsY;
   int  signX, signY, signW, signH;
-  int  floorH;  // px per building floor
-  float k;      // bot scale
+  int  holdX, poleX;  // where the bot stands to hold the sign up, and the pole it holds
+  int  floorH;        // px per building floor
+  float k;            // bot scale
+  int  arcTop;        // the sun's and the moon's highest point (under the clock)
 };
-constexpr Layout PORTRAIT{180, 200, 8, 46, 119, 58, 3, 1.2f};
-constexpr Layout WIDE{100, 114, 94, 22, 140, 44, 2, 1.0f};
+// Portrait: the clock across the top (common.h headline()), the sign over the bot's head.
+// Landscape: the clock on the left of the top, the sign beside the bot (held by its edge).
+constexpr Layout PORTRAIT{180, 200, 8, 80, 119, 54, 3, 20, 3, 1.2f, 94};
+constexpr Layout WIDE{100, 114, 134, 54, 102, 40, 118, 137, 2, 1.0f, 58};
 
 struct Reaction {
   Mood     m = Mood::IDLE;
@@ -175,7 +179,7 @@ void StickyWorld::sky(const Dash& d, const Layout& L, uint32_t now, bool& night,
   float t;
   auto arc = [&](float t, int& x, int& y) {
     x = 16 + (int)(t * (W - 32));
-    y = L.groundY - 14 - (int)(sinf(PI * t) * (L.groundY - (W > H ? 52 : 74)));
+    y = L.groundY - 14 - (int)(sinf(PI * t) * (L.groundY - 14 - L.arcTop));
   };
   if (sky::sunAt(minute, t) && !sky::overcast(icon)) {
     int x, y;
@@ -433,7 +437,7 @@ void StickyWorld::bot(float cx, int footY, float k, Mood m, uint32_t into, uint3
   // the sign's pole, held in its right hand
   if (poleX >= 0) {
     float hy = top + bh * 0.55f;
-    canvas.fillRect(poleX - 1, poleTop, 3, hy - poleTop + 3, rgb(0x8a, 0x62, 0x3c));
+    if (hy > poleTop) canvas.fillRect(poleX - 1, poleTop, 3, hy - poleTop + 3, rgb(0x8a, 0x62, 0x3c));
     canvas.drawWideLine(left + bw - 1, hy + 2, poleX - 1, hy, 1.6f * k, rim);
     canvas.fillCircle(poleX, hy, 2.2f * k, shell);
   }
@@ -522,7 +526,7 @@ void StickyWorld::draw(const Dash& d, bool wide, uint32_t now) {
   const float margin = 18 * L.k;
   if (x_ < 0) x_ = tx_ = W * 0.4f;
   if (holdSign) {
-    tx_ = L.signX + 12 - 14 * L.k;  // its hand under the pole
+    tx_ = L.holdX;  // its hand at the pole
   } else if (!reacting && m != Mood::SLEEPY && fabsf(tx_ - x_) < 1 && now > idleUntil_) {
     tx_ = margin + frac01(now) * (W - 2 * margin);
     idleUntil_ = now + 2500 + (uint32_t)(frac01(now + 1) * 4000);
@@ -542,7 +546,7 @@ void StickyWorld::draw(const Dash& d, bool wide, uint32_t now) {
   // the sign it holds up (urgent things, review requests)
   int poleX = -1, poleTop = 0;
   if (holdSign && fabsf(tx_ - x_) < 3) {
-    poleX = L.signX + 12;
+    poleX = L.poleX;
     poleTop = L.signY + L.signH - 2;
   }
   bot(x_, L.groundY + 1, L.k, m, into, now, w.acc, night, walking, poleX, poleTop);
@@ -604,19 +608,15 @@ void StickyWorld::draw(const Dash& d, bool wide, uint32_t now) {
   }
   const bool cardKind = d.cardKind.length() && d.cardKind != "hello" && d.cardKind != "face";
   if (!holdSign && !reacting && d.agentLinked && cardKind && now - cardAt_ < 7000 && cardAt_) {
-    if (wide) speech(96, 22, 138, 40, (int)x_, d.cardA, d.cardB, rgb(0xf4, 0xf6, 0xf8), GROUND);
-    else speech(6, 48, W - 12, 42, (int)x_, d.cardA, d.cardB, rgb(0xf4, 0xf6, 0xf8), GROUND);
+    // landscape: beside the bot, on the side with more room (the sky under the clock is short)
+    if (wide) speech(x_ > W / 2 ? 6 : W - 134, 54, 128, 38, (int)x_, d.cardA, d.cardB, rgb(0xf4, 0xf6, 0xf8), GROUND);
+    else speech(6, 80, W - 12, 42, (int)x_, d.cardA, d.cardB, rgb(0xf4, 0xf6, 0xf8), GROUND);
   }
 
-  // always: the time, battery / Bluetooth, the temperature, the stats
+  // always: the time (big, to read across a desk), battery / Bluetooth, the date and the
+  // temperature, the stats
   const uint16_t ink = INK, shade = rgb(0x05, 0x07, 0x10);
-  const int tw = timeText(d, 6, wide ? 15 : 17, F24, ink, shade);
-  String sub = quietNotice(d);
-  if (!sub.length()) sub = d.date;
-  if (sub.length()) shadowTxt(ellipsize(sub, F9, wide ? 120 : W - 12), 6, wide ? 34 : 37, F9, blend(ink, shade, 0.15f), shade);
-  statusIcons(d, W - 4, 9, ink);
-  if (d.wxValid && wide) shadowTxt(String(d.wxTemp) + "°", 6 + tw + 8, 15, F14, ink, shade);  // the right is the sign's
-  else if (d.wxValid) shadowTxt(String(d.wxTemp) + "°", W - 6, 25, F12, ink, shade, middle_right);
+  headline(d, wide, ink, shade);
   stats(d, w, L, wide, ink, shade);
 }
 

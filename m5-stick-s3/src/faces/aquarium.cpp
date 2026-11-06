@@ -26,8 +26,8 @@ struct Layout {
   int surface;  // where the water starts (level)
   int sand;     // where it ends
 };
-constexpr Layout PORTRAIT{32, 214};
-constexpr Layout WIDE{26, 114};
+constexpr Layout PORTRAIT{60, 214};  // the air above the water holds the big clock
+constexpr Layout WIDE{52, 116};
 
 static const uint16_t FISH[school::HUES] = {
     rgb(0xff, 0x8c, 0x42), rgb(0xff, 0x6b, 0x9a), rgb(0xff, 0xd1, 0x4a), rgb(0x9b, 0xe5, 0x64),
@@ -375,11 +375,20 @@ void Aquarium::draw(const Dash& d, bool wide, uint32_t now) {
     else signBoard(6, L.surface + 8 + bob, W - 12, 50, u.a, u.b, u.bg, u.ink);
   }
 
-  // always: the time and battery / Bluetooth in the air strip
+  // always: the time (big, to read across a desk) and battery / Bluetooth in the air strip
   const uint16_t shade = rgb(0x02, 0x08, 0x12);
-  int tw = timeText(d, 6, wide ? 12 : 15, F18, INK, shade);
-  if (wide && d.wxValid) shadowTxt(String(d.wxTemp) + "°", 6 + tw + 8, 12, F12, DIM, shade);
-  statusIcons(d, W - 4, wide ? 11 : 9, INK);
+  statusIcons(d, W - 4, 9, INK);
+  if (wide) {
+    bigTime(d, 5, 26, F56, INK, shade);
+    if (d.wxValid) outlineTxt(String(d.wxTemp) + "°", W - 6, 30, F14, INK, shade, middle_right);
+  } else if (!d.clock.length() || clockFits(d, F44, W - 8)) {
+    bigTime(d, W / 2, 37, F44, INK, shade, true);
+  } else {  // "10:08": AM / PM moves up beside the icons
+    Dash t = d;
+    t.ampm = "";
+    bigTime(t, W / 2, 37, F44, INK, shade, true);
+    outlineTxt(d.ampm, 6, 9, F12, blend(INK, shade, 0.2f), shade);
+  }
   String n = quietNotice(d);
   if (n.length()) shadowTxt(wide ? String("agent offline") : n, 6, L.sand + (wide ? 8 : 10), F9, INK, shade);
   else if (wide && w.nSessions && d.agentLinked)

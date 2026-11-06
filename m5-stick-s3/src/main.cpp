@@ -20,6 +20,7 @@
 // settings page, or serial commands — see ../PROTOCOL.md.
 
 #include <M5Unified.h>
+#include <time.h>
 #include "netlog.h"
 #include <WiFi.h>
 #include <driver/rtc_io.h>
@@ -164,6 +165,7 @@ static ui::Dash readDash() {
   d.date = buddy::date();
   d.longDate = buddy::longDate();
   d.minute = buddy::minuteOfDay();
+  d.second = d.minute >= 0 ? (int)(time(nullptr) % 60) : -1;
   buddy::HomeCard hc = buddy::homeCard();
   d.cardKind = hc.kind;
   d.cardA = hc.a;

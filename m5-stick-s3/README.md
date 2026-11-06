@@ -175,15 +175,37 @@ screen. Approvals, questions, alerts and the dock clock still take over as befor
   sparkle, a release a golden one; review requests bring a crab with a tiny sign; failed CI
   turns the water murky until it's fixed. Tilt the stick and the water stays level, the fish
   drift to the low side; shake it for a burst of bubbles. At night the fish sleep.
+- **Big Time** (2.2.0): just the time, as big as it gets (hours over minutes in portrait),
+  the date small under it, the battery as a hairline.
+- **Words** (2.2.0): the time the way you'd say it, "twenty-five to eleven", to the nearest
+  five minutes ("just after" / "nearly" in between), the hour in teal.
+- **Analog** (2.2.0): an anti-aliased dial with a ticking second hand (5 redraws a second
+  on USB, 1 on battery), the date and the weather with the day's high and low.
+- **Dashboard** (2.2.0): the time, date, weather + high / low, battery / Bluetooth, tiles for
+  what needs you, review requests, Claude sessions and CI (+ PRs merged today), and the
+  agent's current card, in one grid.
+- **Space** (2.2.0): StickyBot in a bubble helmet over a ringed planet. Claude sessions are
+  satellites in orbit; a merged PR launches a rocket (a release: a golden one, confetti),
+  CI green / Claude done is a loop-the-loop, CI failed blinks its antenna red; signs and the
+  agent's card float by like in StickyWorld. Shake = warp speed, lift = it waves.
+- **Lava Lamp** (2.2.0): wax blobs warm, rise, cool and sink (one more per Claude session);
+  purple / pink when calm, amber while Claude works, red when CI failed, pulsing orange when
+  something waits for you. A merged PR sends a big blob up; shake it to swirl, tilt it and
+  the blobs lean.
 
-The faces animate at ~25 fps on USB; on battery 15 fps, 7 fps after 20 s without a
-press (the screen sleeps soon after anyway). The data comes from the Mac agent (see
+StickyWorld, Aquarium, Space and Lava Lamp show the clock big (2.2.0: 44 px digits across
+the top in portrait, 56 px in landscape) with a dark rim so it reads over the scene.
+
+The animated faces (StickyWorld, Aquarium, Space, Lava Lamp) run at ~20-25 fps on USB;
+on battery 12-15 fps, 6-7 fps after 20 s without a press (the screen sleeps soon after
+anyway). Classic, Big Time, Words and Dashboard only redraw when something changes. The data comes from the Mac agent (see
 PROTOCOL.md, *Faces*); the stick keeps the last copy in NVS so they draw without it.
 Serial `screens faces` plays every face's demo (`face demo <id>` one of them; A or B
 stops it); `face <id>` picks one.
 
 Adding a face: one file in `src/faces/` (subclass `faces::Face`, see `classic.cpp`)
-and one `X(myFace)` in the `FACES` list in `src/faces/faces.cpp`. To look at them without
+and one `X(myFace)` in the `FACES` list in `src/faces/faces.cpp` (a clock with no world to
+show: its id in `QUIET` in `demo.cpp`, for the short demo). To look at them without
 a stick, `make -C tools/face_shots` draws every demo step with the firmware's own drawing
 code into `tools/face_shots/out/` (PNGs and contact sheets; `SCALE=3` for big pixels);
 `make -C tools/face_shots previews` remakes the dashboard's pictures.
@@ -332,6 +354,7 @@ make build     # the stick firmware still builds with the same logic
 | `test_city` | StickyWorld's city: the same buildings from a seed, towers in place, squeeze then scroll to fit |
 | `test_sky` | the sky by time of day and weather, sun and moon arcs |
 | `test_school` | Aquarium: fish per session (swim in, grow, leap out), the full tank, tilt drift, the damped spring |
+| `test_clockface` | the Words face's time in words (fives, "just after" / "nearly", midnight / noon, the hour rolling over), the Analog face's hands, words stacked to fit |
 
 Hardware-facing code (screens, Bluetooth, audio I/O) isn't covered by these;
 `combo.cpp` checks at compile time that the shared key table matches the
@@ -352,7 +375,8 @@ m5-stick-s3/
     ├── settings.*     saved settings (NVS flash)
     ├── hid.*          Bluetooth keyboard
     ├── ui.*           screen drawing, screen sleep (ui_draw.h: the kit the faces share)
-    ├── faces/         Home faces: registry + world (faces.*), classic, stickyworld, aquarium, demo
+    ├── faces/         Home faces: registry + world (faces.*), classic, stickyworld, aquarium,
+    │                  bigtime, words, analog, dashboard, space, lava, demo
     ├── menu.*         on-device settings menu
     ├── web.*          Wi-Fi + settings page server
     └── web_page.h     the settings page (HTML/JS)

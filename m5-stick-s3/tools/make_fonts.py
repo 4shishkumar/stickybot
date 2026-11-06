@@ -29,7 +29,9 @@ FONTS = [
     ("INTER_14", 14, 500, TEXT),     # emphasised body, chips
     ("INTER_18", 18, 600, TEXT),     # titles
     ("INTER_24", 24, 500, TEXT),     # big words
+    ("INTER_32", 32, 600, TEXT),     # bigger words (the Words face), semi-bold
     ("INTER_44", 44, 600, CLOCK),    # the clock (digits only), semi-bold
+    ("INTER_56", 56, 600, CLOCK),    # the faces' landscape clock (digits only), semi-bold
     ("INTER_96", 96, 300, "0123456789: "),  # the dock clock (digits only), light
 ]
 

@@ -35,6 +35,31 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   protocol `@face id=…` / `@face demo=…`.
 - `m5-stick-s3/tools/face_shots`: draws the faces on the Mac with the firmware's own drawing
   code and saves PNGs (the dashboard's pictures come from it).
+- **Six more faces (firmware 2.2.0)**, in the same pickers, each with its demo:
+  - **Big Time**: just the time, as big as the screen allows (hours over minutes in
+    portrait), the date small under it and the battery as a hairline.
+  - **Words**: the time the way you'd say it, "twenty-five to eleven" (to the nearest five
+    minutes, "just after" / "nearly" for the ones in between), the hour in teal.
+  - **Analog**: a clean anti-aliased dial with a ticking second hand, the date and the
+    weather with the day's high and low.
+  - **Dashboard**: everything at a glance: the time, the date, the weather with high / low,
+    battery / Bluetooth, tiles for what needs you, review requests, Claude sessions and CI
+    (with today's merged PRs), and the agent's current card.
+  - **Space**: StickyBot floats in a bubble helmet over a ringed planet; each Claude session
+    is a satellite in orbit, a merged PR launches a rocket (a release a golden one), CI green
+    or Claude done is a loop-the-loop; shake it for warp speed.
+  - **Lava Lamp**: wax blobs rise and sink (one more per Claude session); the colour says
+    how things are (calm, Claude working, CI failed, something waiting); a merged PR sends a
+    big blob up, shake it and the wax swirls, tilt it and the blobs lean.
+
+### Changed
+- **A much bigger clock on StickyWorld and Aquarium** (firmware 2.2.0), to read from across
+  the desk: about twice the size in portrait (the semi-bold 44 px clock digits, centred
+  across the top) and bigger still in landscape (new 56 px digits), with a dark rim so it
+  reads over the sky and the water. To make room, StickyWorld's sign and speech bubble sit
+  lower (in landscape, StickyBot holds the sign beside it) and the sun's arc stays under the
+  clock; the Aquarium's air strip is taller. The date and the temperature sit under the
+  clock in portrait, in a column on the right in landscape.
 
 ## [2.0.0] - 2026-11-06
 

@@ -140,12 +140,15 @@ static ui::Dash base() {
   d.date = "Fri 6 Nov";
   d.longDate = "Friday 6 November";
   d.minute = 9 * 60 + 41;
+  d.second = (now_ / 1000) % 60;
   d.agentLinked = true;
   d.cardKind = "fact";
   d.cardA = "Did you know?";
   d.cardB = "Honey never spoils.";
   d.wxValid = true;
   d.wxTemp = 24;
+  d.wxHi = 27;
+  d.wxLo = 18;
   d.wxIcon = "clear";
   d.wxCond = "clear";
   d.wxDay = true;

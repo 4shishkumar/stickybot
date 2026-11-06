@@ -14,7 +14,11 @@ extern const uint8_t INTER_18[];  // 18 px, weight 600
 extern const size_t  INTER_18_LEN;
 extern const uint8_t INTER_24[];  // 24 px, weight 500
 extern const size_t  INTER_24_LEN;
+extern const uint8_t INTER_32[];  // 32 px, weight 600
+extern const size_t  INTER_32_LEN;
 extern const uint8_t INTER_44[];  // 44 px, weight 600
 extern const size_t  INTER_44_LEN;
+extern const uint8_t INTER_56[];  // 56 px, weight 600
+extern const size_t  INTER_56_LEN;
 extern const uint8_t INTER_96[];  // 96 px, weight 300
 extern const size_t  INTER_96_LEN;

@@ -18,6 +18,22 @@ String quietNotice(const ui::Dash& d);   // "agent offline" (not urgent: A still
 
 // The time (and AM / PM) with a dark shadow so it reads on any sky; returns its width.
 int  timeText(const ui::Dash& d, int x, int y, const lgfx::IFont* f, uint16_t ink, uint16_t shade);
+// The time big, for reading across a desk: a dark rim all round and a drop shadow so it
+// reads on any sky or water, AM / PM small beside it. x is the left edge (AM / PM by the
+// digits' foot, clear of the icons at the top right: landscape) or the centre with
+// centred = true (AM / PM at the top right: portrait), y the digits' middle. Before the
+// agent sends the time: the stick's name. Returns the width (with AM / PM).
+int  bigTime(const ui::Dash& d, int x, int y, const lgfx::IFont* f, uint16_t ink, uint16_t shade, bool centred = false);
+bool clockFits(const ui::Dash& d, const lgfx::IFont* f, int maxW);  // the time + AM / PM in maxW
+// The top of a scene face (StickyWorld, Space, Lava): battery / Bluetooth, the big clock and
+// the date + temperature. Portrait: the clock centred across the top (its middle at y 38),
+// the date and the temperature under it (y 67), all above y 76. Landscape: the clock on the
+// left (F56, down to y 48), the date and the temperature in a column on the right (column
+// false: on a line under the clock, y 60, for a face that has the right side to itself).
+void headline(const ui::Dash& d, bool wide, uint16_t ink, uint16_t shade, bool column = true);
+// Text with that rim (r px all round) and shadow.
+void outlineTxt(const String& s, int x, int y, const lgfx::IFont* f, uint16_t ink, uint16_t shade,
+                textdatum_t datum = middle_left, int r = 1);
 // Battery (% + icon) and Bluetooth, right-aligned at x, centred on y; agent dot too.
 void statusIcons(const ui::Dash& d, int right, int cy, uint16_t ink);
 void shadowTxt(const String& s, int x, int y, const lgfx::IFont* f, uint16_t ink, uint16_t shade,
