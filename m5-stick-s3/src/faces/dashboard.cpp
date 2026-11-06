@@ -103,8 +103,13 @@ class Dashboard : public Face {
     const int vy = y + h / 2 - 5;
     const bool none = t.value == "-" || t.value == "0";  // nothing there: quiet
     txt(t.value, x + 6, vy, t.value.length() > 2 ? F14 : F18, none ? FAINT : t.accent);
-    txt(ellipsize(t.label, F9, w - 10), x + 6, y + h - 7, F9, t.hot ? INK : DIM);
-    if (t.extra.length()) txt(t.extra, x + w - 5, y + h - 7, F9, ui::OK, middle_right);
+    String extra = t.extra;  // after the label; "+2 PRs" -> "+2" when the tile is narrow
+    canvas.setFont(F9);
+    const int lw = canvas.textWidth(t.label);
+    if (extra.length() && lw + 6 + canvas.textWidth(extra) > w - 11) extra = extra.substring(0, extra.indexOf(' '));
+    const int ew = extra.length() ? canvas.textWidth(extra) + 6 : 0;
+    txt(ellipsize(t.label, F9, w - 10 - ew), x + 6, y + h - 7, F9, t.hot ? INK : DIM);
+    if (extra.length()) txt(extra, x + w - 5, y + h - 7, F9, ui::OK, middle_right);
   }
 
   // The card: the stick's own news first (urgent()), then the agent's, then a hint.
