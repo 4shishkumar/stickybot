@@ -21,6 +21,12 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   - **Aquarium Dark**: the deep sea: near-black water with drifting specks of light, fish
     with a soft glow, glowing weed, dim sand. The fish still sleep at night.
   - On both, the big clock stays bright, and anything urgent shows as on the originals.
+- **Face packages, the design (no firmware support yet).** A format for Home faces made of
+  data (a manifest + small pixel-art images) that anyone can publish and the dashboard will
+  install over Bluetooth without reflashing: `docs/faces/` (format, guidelines, catalog,
+  plan, JSON Schema), a validator / compiler / catalog builder in `tools/faces/`, a
+  reference renderer in face_shots (`make -C m5-stick-s3/tools/face_shots pkg PKG=…`) and
+  three examples in `faces/examples/`.
 
 ### Fixed
 - **The stick's Bluetooth ran out of buffers** (firmware 2.3.0): a long reply to the Mac app

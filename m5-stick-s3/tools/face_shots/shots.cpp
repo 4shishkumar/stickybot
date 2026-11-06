@@ -4,6 +4,8 @@
 //   make -C tools/face_shots            demo frames -> tools/face_shots/out/
 //   make -C tools/face_shots FACE=aquadark   one face's demo
 //   make -C tools/face_shots previews   the dashboard's face pictures -> mac-agent/.../static/faces/
+//   make -C tools/face_shots pkg PKG=<face package>   a face package (docs/faces/FORMAT.md) in
+//                                       several states -> out/pkg/ (and with PREVIEWS=1 its previews/)
 #include <Arduino.h>
 #include <M5Unified.h>
 #include <ArduinoJson.h>
@@ -18,6 +20,7 @@
 #include "ui.h"
 #include "ui_draw.h"
 #include "faces/faces.h"
+#include "pkgface.h"
 
 // --- The bits of the firmware the screens touch -------------------------------------
 static uint32_t now_ = 1000;
@@ -219,10 +222,131 @@ static void previews(const std::string& dir) {
   }
 }
 
+// --- Face packages (docs/faces/FORMAT.md, pkgface.cpp) ---------------------------------
+
+struct PkgState {
+  const char* name;
+  int minute;              // -1: the time isn't known yet
+  const char* ci;
+  world::Kick kick;        // fired `after` ms before the shot
+  bool urgent;
+  int battery;
+};
+
+static const PkgState PKG_STATES[] = {
+    {"day", 9 * 60 + 41, "green", world::Kick::NONE, false, 76},
+    {"night", 23 * 60 + 30, "green", world::Kick::NONE, false, 76},
+    {"merged", 14 * 60 + 5, "green", world::Kick::MERGED, false, 76},
+    {"ci-red", 16 * 60 + 52, "red", world::Kick::CI_RED, false, 76},
+    {"urgent", 10 * 60 + 15, "green", world::Kick::NONE, true, 76},
+    {"no-time", -1, "none", world::Kick::NONE, false, 12},
+};
+
+static ui::Dash pkgDash(const PkgState& s) {
+  ui::Dash d = base();
+  d.minute = s.minute;
+  if (s.minute < 0) {
+    d.clock = d.ampm = d.date = d.longDate = "";
+    d.second = -1;
+    d.agentLinked = false;
+    d.wxValid = false;
+  } else {
+    int h = s.minute / 60, m = s.minute % 60;
+    d.clock = String(h % 12 ? h % 12 : 12) + ":" + (m < 10 ? "0" : "") + String(m);
+    d.ampm = h < 12 ? "AM" : "PM";
+    d.wxDay = h >= 7 && h < 19;
+  }
+  d.battery = s.battery;
+  if (s.urgent) {
+    d.cardUrgent = true;
+    d.cardKind = "approval";
+    d.cardA = "Approve Bash?";
+    d.cardB = "web: npm test -- --watch";
+  }
+  return d;
+}
+
+static world::Snapshot pkgWorld(const PkgState& s) {
+  world::Snapshot w;
+  w.valid = s.minute >= 0;
+  w.mergedToday = 3;
+  w.merged = 41;
+  w.ci = world::parseCi(s.ci);
+  w.asks = s.urgent ? 1 : 0;
+  w.reviews = 1;
+  w.nSessions = 2;
+  w.xp = 420;
+  w.streak = 6;
+  return w;
+}
+
+static bool readFile(const std::string& path, std::vector<uint8_t>& blob) {
+  FILE* f = fopen(path.c_str(), "rb");
+  if (!f) { fprintf(stderr, "can't read %s\n", path.c_str()); return false; }
+  uint8_t buf[4096];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof buf, f)) > 0) blob.insert(blob.end(), buf, buf + n);
+  fclose(f);
+  return true;
+}
+
+// One shot of a package face in a state: run it from a fresh start for `ms` (its animations
+// move; the state's event fires `after` ms before the end), then save.
+static bool pkgShot(const std::vector<uint8_t>& blob, const PkgState& s, int side, const std::string& path,
+                    uint32_t ms = 2400, uint32_t after = 700) {
+  pkgface::Face face;
+  String err;
+  if (!face.load(blob.data(), blob.size(), err)) {
+    fprintf(stderr, "invalid face: %s\n", err.c_str());
+    return false;
+  }
+  ui::setOrientation(false, side);
+  ui::setTilt(side ? 1 : 0, side ? 0 : 1);
+  const ui::Dash d = pkgDash(s);
+  const world::Snapshot w = pkgWorld(s);
+  const uint32_t start = now_;
+  bool kicked = false;
+  for (uint32_t t = 0; t <= ms; t += 40) {
+    now_ = start + t;
+    if (s.kick != world::Kick::NONE && !kicked && t >= ms - after) {
+      face.kick(s.kick, now_);
+      kicked = true;
+    }
+    ui::drawPage(ui::Page::HOME, d);  // the canvas in this orientation (the built-in face under it)
+    face.draw(d, w, side != 0, now_);
+  }
+  savePng(path);
+  return true;
+}
+
+// shots pkg <face.sfb> <dir>: every state, both ways up, and a contact sheet.
+// shots pkgpreview <face.sfb> <dir>: the package's previews (a calm day).
+static int pkg(const std::string& file, const std::string& dir, bool preview) {
+  std::vector<uint8_t> blob;
+  if (!readFile(file, blob)) return 1;
+  mkdir(dir.c_str(), 0755);
+  if (preview) {
+    for (int side : {0, 1})
+      if (!pkgShot(blob, PKG_STATES[0], side, dir + (side ? "/landscape.png" : "/portrait.png"))) return 1;
+    return 0;
+  }
+  std::string id = file.substr(file.find_last_of('/') + 1);
+  id = id.substr(0, id.find('.'));
+  const size_t first = shots.size();
+  const int n = sizeof PKG_STATES / sizeof PKG_STATES[0];
+  for (int side : {0, 1})
+    for (int i = 0; i < n; i++)
+      if (!pkgShot(blob, PKG_STATES[i], side, dir + "/" + id + "-" + PKG_STATES[i].name + (side ? "-wide" : "") + ".png"))
+        return 1;
+  sheet(dir + "/" + id + "-sheet.png", first, shots.size(), n);
+  return 0;
+}
+
 int main(int argc, char** argv) {
   ui::begin();
   std::string mode = argc > 1 ? argv[1] : "demo";
   std::string dir = argc > 2 ? argv[2] : "out";
+  if (mode == "pkg" || mode == "pkgpreview") return argc > 3 ? pkg(argv[2], argv[3], mode == "pkgpreview") : 2;
   if (mode == "previews") previews(dir);
   else demo(dir, argc > 3 ? argv[3] : "all");
   return 0;

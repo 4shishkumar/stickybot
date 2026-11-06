@@ -1,0 +1,69 @@
+{
+  "$schema": "../../../docs/faces/face.schema.json",
+  "format": 1,
+  "id": "textclock",
+  "name": "Text Clock",
+  "version": "1.0.0",
+  "author": {"name": "StickyBot", "github": "ashish-kumar-noon"},
+  "license": "CC0-1.0",
+  "about": "Hours over minutes in big light digits, the date and the temperature",
+  "tags": ["minimal", "clock", "example"],
+  "minFirmware": "2.4.0",
+  "motion": "static",
+  "colors": {
+    "top": "#141c22",
+    "bottom": "#111316",
+    "ink": "#e6e9ec",
+    "mint": "#8fd8cf",
+    "dim": "#98a1ab",
+    "faint": "#5b636d",
+    "track": "#24292e",
+    "low": "#ff5252",
+    "ok": "#3ddc84"
+  },
+  "layouts": {
+    "portrait": {
+      "bg": {"grad": ["top", "bottom"]},
+      "card": [6, 184, 123, 46],
+      "elements": [
+        {"type": "text", "when": "time.known", "text": "{time.h12}", "font": 96, "x": 67, "y": 64, "anchor": "mc", "color": "ink"},
+        {"type": "text", "when": "time.known", "text": "{time.mm}", "font": 96, "x": 67, "y": 150, "anchor": "mc", "color": "mint"},
+        {"type": "text", "when": "time.known", "text": "{time.ampm}", "font": 12, "x": 6, "y": 9, "anchor": "ml", "color": "dim"},
+        {"type": "text", "when": {"all": ["!urgent.on", "agent.linked"]}, "text": "{date.short}", "font": 14,
+         "x": 67, "y": 204, "anchor": "mc", "w": 123, "color": "dim"},
+        {"type": "text", "when": {"all": ["!urgent.on", "wx.valid"]}, "text": "{wx.temp}°  {wx.cond}", "font": 12,
+         "x": 67, "y": 222, "anchor": "mc", "w": 123, "color": "faint"},
+        {"type": "text", "when": {"all": ["!urgent.on", "!agent.linked", "time.known"]}, "text": "agent offline", "font": 12,
+         "x": 67, "y": 204, "anchor": "mc", "color": "faint"},
+        {"type": "text", "when": "!time.known", "text": "{dev.name}", "fit": [24, 18, 12], "w": 123, "x": 67, "y": 100, "anchor": "mc", "color": "ink"},
+        {"type": "text", "when": "!time.known", "text": "the time comes from the Mac", "font": 10, "x": 67, "y": 132, "anchor": "mc", "w": 115, "lines": 2, "color": "faint"},
+        {"type": "bar", "x": 24, "y": 237, "w": 87, "h": 2, "r": 1, "value": {"var": "dev.battery", "of": 100}, "color": "faint", "track": "track"},
+        {"type": "bar", "when": {"all": ["!dev.charging", {"var": "dev.battery", "le": 15}]}, "x": 24, "y": 237, "w": 87, "h": 2, "r": 1,
+         "value": {"var": "dev.battery", "of": 100}, "color": "low"},
+        {"type": "bar", "when": "dev.charging", "x": 24, "y": 237, "w": 87, "h": 2, "r": 1, "value": {"var": "dev.battery", "of": 100}, "color": "ok"}
+      ]
+    },
+    "landscape": {
+      "bg": {"grad": ["top", "bottom"]},
+      "card": [10, 80, 220, 46],
+      "elements": [
+        {"type": "text", "when": {"all": ["time.known", "!urgent.on"]}, "text": "{time.h12}:{time.mm}", "fit": [96, 56], "w": 228,
+         "x": 120, "y": 58, "anchor": "mc", "color": "ink"},
+        {"type": "text", "when": {"all": ["time.known", "urgent.on"]}, "text": "{time.h12}:{time.mm}", "font": 56,
+         "x": 120, "y": 40, "anchor": "mc", "color": "ink"},
+        {"type": "text", "when": "time.known", "text": "{time.ampm}", "font": 12, "x": 6, "y": 9, "anchor": "ml", "color": "dim"},
+        {"type": "text", "when": {"all": ["!urgent.on", "agent.linked"]}, "text": "{date.long}", "font": 14,
+         "x": 120, "y": 110, "anchor": "mc", "w": 150, "color": "dim"},
+        {"type": "text", "when": {"all": ["!urgent.on", "wx.valid"]}, "text": "{wx.temp}°", "font": 14, "x": 228, "y": 110, "anchor": "mr", "color": "faint"},
+        {"type": "text", "when": {"all": ["!urgent.on", "!agent.linked", "time.known"]}, "text": "agent offline", "font": 12,
+         "x": 120, "y": 110, "anchor": "mc", "color": "faint"},
+        {"type": "text", "when": "!time.known", "text": "{dev.name}", "fit": [24, 18, 12], "w": 220, "x": 120, "y": 56, "anchor": "mc", "color": "ink"},
+        {"type": "text", "when": "!time.known", "text": "the time comes from the Mac", "font": 10, "x": 120, "y": 80, "anchor": "mc", "color": "faint"},
+        {"type": "bar", "x": 40, "y": 132, "w": 160, "h": 2, "r": 1, "value": {"var": "dev.battery", "of": 100}, "color": "faint", "track": "track"},
+        {"type": "bar", "when": {"all": ["!dev.charging", {"var": "dev.battery", "le": 15}]}, "x": 40, "y": 132, "w": 160, "h": 2, "r": 1,
+         "value": {"var": "dev.battery", "of": 100}, "color": "low"},
+        {"type": "bar", "when": "dev.charging", "x": 40, "y": 132, "w": 160, "h": 2, "r": 1, "value": {"var": "dev.battery", "of": 100}, "color": "ok"}
+      ]
+    }
+  }
+}

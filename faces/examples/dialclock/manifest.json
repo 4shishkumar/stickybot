@@ -1,0 +1,79 @@
+{
+  "$schema": "../../../docs/faces/face.schema.json",
+  "format": 1,
+  "id": "dialclock",
+  "name": "Dial Clock",
+  "version": "1.0.0",
+  "author": {"name": "StickyBot", "github": "ashish-kumar-noon"},
+  "license": "CC0-1.0",
+  "about": "A watch dial with a ticking second hand, a battery ring, the date and weather",
+  "tags": ["analog", "clock", "example"],
+  "minFirmware": "2.4.0",
+  "motion": "static",
+  "colors": {
+    "bg": "#0f1215",
+    "rim": "#343b43",
+    "dial": "#1a1e23",
+    "ink": "#f2f4f6",
+    "dim": "#98a1ab",
+    "faint": "#5b636d",
+    "teal": "#2ec4b6",
+    "orange": "#ff9f1c",
+    "shadow": "#08090b",
+    "ring": "#23292f"
+  },
+  "parts": {
+    "dial": [
+      {"type": "circle", "x": 0, "y": 0, "r": 60, "fill": "rim"},
+      {"type": "circle", "x": 0, "y": 0, "r": 58, "fill": "dial"},
+      {"type": "arc", "x": 0, "y": 0, "r": 58, "t": 2, "start": 0, "end": 360, "value": {"var": "dev.battery", "of": 100},
+       "color": "teal", "when": "dev.battery"},
+      {"type": "ticks", "x": 0, "y": 0, "r": 53, "count": 60, "len": 1, "width": 1, "color": "faint",
+       "every": 5, "majorLen": 6, "majorWidth": 1.4, "majorColor": "dim", "firstColor": "teal"},
+      {"type": "text", "text": "{date.dd}", "font": 12, "x": 26, "y": 0, "anchor": "mc", "color": "dim", "when": "time.known"},
+      {"type": "hand", "hand": "hour", "x": 0, "y": 0, "length": 29, "w0": 3.4, "w1": 1.8, "color": "ink", "shadow": "shadow"},
+      {"type": "hand", "hand": "minute", "x": 0, "y": 0, "length": 46, "w0": 2.6, "w1": 1.2, "color": "ink", "shadow": "shadow"},
+      {"type": "hand", "hand": "second", "x": 0, "y": 0, "length": 50, "tail": 10, "w0": 0.7, "w1": 0.7, "color": "orange"},
+      {"type": "circle", "x": 0, "y": 0, "r": 4, "fill": "orange"},
+      {"type": "circle", "x": 0, "y": 0, "r": 1, "fill": "dial"}
+    ]
+  },
+  "layouts": {
+    "portrait": {
+      "bg": "bg",
+      "card": [6, 160, 123, 62],
+      "elements": [
+        {"type": "group", "part": "dial", "x": 67, "y": 86},
+        {"type": "text", "when": {"all": ["!urgent.on", "time.known"]}, "text": "{date.weekday}", "font": 18,
+         "x": 67, "y": 166, "anchor": "mc", "w": 123, "color": "ink"},
+        {"type": "text", "when": {"all": ["!urgent.on", "time.known"]}, "text": "{date.day} {date.month}", "font": 12,
+         "x": 67, "y": 186, "anchor": "mc", "w": 123, "color": "dim"},
+        {"type": "weather", "when": "!urgent.on", "x": 50, "y": 214, "size": 20, "anchor": "mr"},
+        {"type": "text", "when": {"all": ["!urgent.on", "wx.valid"]}, "text": "{wx.temp}°", "font": 18,
+         "x": 54, "y": 214, "anchor": "ml", "color": "ink"},
+        {"type": "text", "when": {"all": ["!urgent.on", "wx.valid"]}, "text": "{wx.hi}/{wx.lo}", "font": 10,
+         "x": 92, "y": 215, "anchor": "ml", "color": "faint"},
+        {"type": "text", "when": "!time.known", "text": "{dev.name}", "fit": [18, 12], "w": 123, "x": 67, "y": 176,
+         "anchor": "mc", "color": "dim"}
+      ]
+    },
+    "landscape": {
+      "bg": "bg",
+      "card": [134, 24, 102, 98],
+      "elements": [
+        {"type": "group", "part": "dial", "x": 68, "y": 68},
+        {"type": "text", "when": {"all": ["!urgent.on", "time.known"]}, "text": "{date.weekday}", "font": 18,
+         "x": 186, "y": 38, "anchor": "mc", "w": 100, "color": "ink"},
+        {"type": "text", "when": {"all": ["!urgent.on", "time.known"]}, "text": "{date.day} {date.month}", "font": 12,
+         "x": 186, "y": 58, "anchor": "mc", "w": 100, "color": "dim"},
+        {"type": "weather", "when": "!urgent.on", "x": 178, "y": 90, "size": 20, "anchor": "mr"},
+        {"type": "text", "when": {"all": ["!urgent.on", "wx.valid"]}, "text": "{wx.temp}°", "font": 18,
+         "x": 182, "y": 90, "anchor": "ml", "color": "ink"},
+        {"type": "text", "when": {"all": ["!urgent.on", "wx.valid"]}, "text": "H {wx.hi}°  L {wx.lo}°", "font": 12,
+         "x": 186, "y": 112, "anchor": "mc", "w": 100, "color": "faint"},
+        {"type": "text", "when": "!time.known", "text": "{dev.name}", "fit": [18, 12], "w": 100, "x": 186, "y": 60,
+         "anchor": "mc", "color": "dim"}
+      ]
+    }
+  }
+}
