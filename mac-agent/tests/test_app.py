@@ -233,10 +233,12 @@ def test_a_restart_keeps_the_app_identity(monkeypatch):
     monkeypatch.setattr(app, "process_path", lambda: exe)
     monkeypatch.setattr(sys, "argv", ["/x/stick_agent/__main__.py", "run"])
     monkeypatch.delenv("__PYVENV_LAUNCHER__", raising=False)
+    venv = Path("/home/.stick-agent/venv/bin/python")  # as installed (the release build runs outside a venv)
+    monkeypatch.setattr(app, "venv_python", lambda: venv)
     assert app.running_as_app() and app.display_name() == "StickyBot"
     got_exe, argv = app.restart_argv()
     assert got_exe == exe and argv == [exe, "-m", "stick_agent", "run"]
-    assert os.environ["__PYVENV_LAUNCHER__"] == str(app.venv_python())  # CPython dropped it at start-up
+    assert os.environ["__PYVENV_LAUNCHER__"] == str(venv)  # CPython dropped it at start-up
     monkeypatch.setattr(app, "process_path", lambda: sys.executable)
     assert app.display_name() == "Python"
     assert app.restart_argv() == (sys.executable, [sys.executable, "/x/stick_agent/__main__.py", "run"])
