@@ -1237,9 +1237,12 @@ void HijelHID_BLEKeyboard::_sendKeyReport() {
     }
 
     _pKeyboardInput->setValue(_keyReport, HID_KEYBOARD_REPORT_SIZE);
-    int retries = 0;
-    while (!_pKeyboardInput->notify() && _connected && retries++ < 20) {
-        vTaskDelay(1);
+    // [stick-key change] wait up to 500 ms for a free Bluetooth buffer (was ~20 ms). A dropped
+    // report is a missing or stuck key: a typed password came out wrong while other
+    // traffic (a long reply to the Mac app) had the buffers.
+    const uint32_t start = millis();
+    while (!_pKeyboardInput->notify() && _connected && millis() - start < 500) {
+        vTaskDelay(2);
     }
     _lastReportMs = millis();
 }

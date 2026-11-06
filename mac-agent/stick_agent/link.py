@@ -70,11 +70,22 @@ class Link:
         try:
             async with self._write_lock:
                 for i in range(0, len(data), CHUNK):
-                    await self.client.write_gatt_char(RX, data[i:i + CHUNK], response=True)
+                    await self._write(data[i:i + CHUNK])
             return True
         except Exception as e:  # noqa: BLE001 — link dropped mid-write
-            log.warning("send failed: %s", e)
+            log.warning("send failed (%s, %d bytes): %s", next(iter(msg), "?"), len(data), e)
             return False
+
+    async def _write(self, part, tries=4):
+        """One chunk; "Insufficient Resource" means the stick's Bluetooth buffers are busy
+        for a moment (a long reply going out): wait and send it again."""
+        for n in range(tries):
+            try:
+                return await self.client.write_gatt_char(RX, part, response=True)
+            except Exception as e:  # noqa: BLE001
+                if "Insufficient Resource" not in str(e) or n == tries - 1:
+                    raise
+                await asyncio.sleep(0.1 * (n + 1))
 
     async def send_audio(self, pkts):
         """Sends clip packets in order (write without response; Core Bluetooth paces them)."""

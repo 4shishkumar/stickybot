@@ -76,8 +76,10 @@ static void send(const String& json, bool log = true) {
   String s = json + "\n";
   for (size_t i = 0; i < s.length(); i += CHUNK) {
     String part = s.substring(i, min(s.length(), i + CHUNK));
-    // A burst of notifications can run out of Bluetooth buffers: retry briefly
-    for (int tries = 0; tries < 25 && !tx->notify((const uint8_t*)part.c_str(), part.length()); tries++) delay(4);
+    // A burst of notifications can run out of Bluetooth buffers: retry (up to 300 ms; a
+    // dropped part would garble the line). Spaced, so a long reply leaves buffers for keys.
+    for (int tries = 0; tries < 75 && !tx->notify((const uint8_t*)part.c_str(), part.length()); tries++) delay(4);
+    if (s.length() > CHUNK) delay(2);
   }
   if (log) Log.printf("buddy> %s\n", json.c_str());
 }
