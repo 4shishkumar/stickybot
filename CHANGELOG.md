@@ -12,6 +12,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-06
+
 ### Added
 - **Faces for the stick's Home screen (firmware 2.1.0).** Pick one in the stick's menu
   (**Face**), on its Web settings page, or on the dashboard's Stick page (pictures, **Use**,
@@ -246,7 +248,8 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/ashish-kumar-noon/stickybot/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/ashish-kumar-noon/stickybot/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.1.0
 [2.0.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.0.0
 [1.8.6]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.6
 [1.8.5]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.5
