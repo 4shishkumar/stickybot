@@ -1578,7 +1578,7 @@ void drawDock(const Dash& d, int side, bool night) {
     if (d.clock.length() && colon > 0) {
       txt(d.clock.substring(0, colon), W / 2, 62, F96, ink, middle_center);
       txt(d.clock.substring(colon + 1), W / 2, 150, F96, ink, middle_center);
-      txt(d.ampm + "  -  " + d.date, W / 2, 202, F12, dim, middle_center);
+      txt(d.ampm.length() ? d.ampm + "  -  " + d.date : d.date, W / 2, 202, F12, dim, middle_center);
     } else {
       txt(d.name, W / 2, 100, fit(d.name, W - 12, {F24, F12}), ink, middle_center);
     }

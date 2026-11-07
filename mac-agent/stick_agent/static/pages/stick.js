@@ -205,6 +205,9 @@ function screenCard() {
     st.landscape === undefined ? null :  // firmware 1.9.0+
       field("Landscape screens", toggle("landscape", "Held sideways, approvals, questions, alerts and replies turn landscape (needs auto-rotate)",
         st.landscape, e => send("landscape", {on: e.target.checked ? 1 : 0}, "Saved"))),
+    st.clock24 === undefined ? null :  // firmware 2.4.0+
+      field("24-hour clock", toggle("clock24", "Show the time as 15:05 instead of 3:05 PM (on every face that shows the time)",
+        st.clock24, e => send("clock24", {on: e.target.checked ? 1 : 0}, "Saved"))),
     field("Developer mode", toggle("devMode", "Keep Wi-Fi on while on USB (for wireless updates and logs)", st.devMode,
       e => send("devmode", {on: e.target.checked ? 1 : 0}, "Saved"))));
 }

@@ -50,7 +50,7 @@ class BigTime : public Face {
     if (d.clock.length() && colon > 0) {
       txt(d.clock.substring(0, colon), W / 2, 62, F96, INK, middle_center);
       txt(d.clock.substring(colon + 1), W / 2, 150, F96, blend(INK, AGENT, 0.55f), middle_center);
-      if (!u.on) txt(ellipsize(d.ampm + "  " + date, F14, W - 12), W / 2, 206, F14, DIM, middle_center);
+      if (!u.on) txt(ellipsize(d.ampm.length() ? d.ampm + "  " + date : date, F14, W - 12), W / 2, 206, F14, DIM, middle_center);
     } else {
       txt(d.name, W / 2, 100, fit(d.name, W - 12, {F24, F18, F12}), INK, middle_center);
       txt("time comes from the Mac agent", W / 2, 128, F9, FAINT, middle_center);

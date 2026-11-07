@@ -373,9 +373,12 @@ void decide(bool approve) { answer(approve ? "once" : "deny"); }
 // Local time from the agent's clock; formatting is in logic/clock.cpp (unit-tested).
 static bool localNow(clockfmt::Local& t) { return clockfmt::local((int64_t)time(nullptr), tzOffset, t); }
 
+bool localTime(clockfmt::Local& t) { return localNow(t); }
+
 String clock() {
   clockfmt::Local t;
-  return localNow(t) ? String(clockfmt::time12(t).c_str()) : String();
+  if (!localNow(t)) return String();
+  return String(settings::clock24() ? clockfmt::time24(t).c_str() : clockfmt::time12(t).c_str());
 }
 
 int hour() {
@@ -395,7 +398,7 @@ String longDate() {
 
 String ampm() {
   clockfmt::Local t;
-  return localNow(t) ? String(clockfmt::ampm(t).c_str()) : String();
+  return localNow(t) && !settings::clock24() ? String(clockfmt::ampm(t).c_str()) : String();
 }
 
 String date() {

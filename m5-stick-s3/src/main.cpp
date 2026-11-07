@@ -162,6 +162,13 @@ static ui::Dash readDash() {
   d.claudeMsg = buddy::lastMessage();
   d.clock = buddy::clock();
   d.ampm = buddy::ampm();
+  d.clock24 = settings::clock24();
+  clockfmt::Local lt;
+  if (buddy::localTime(lt)) {
+    d.wday = lt.wday;
+    d.mday = lt.mday;
+    d.mon = lt.mon;
+  }
   d.date = buddy::date();
   d.longDate = buddy::longDate();
   d.minute = buddy::minuteOfDay();
@@ -455,6 +462,7 @@ static void onMenu(menu::Action a) {
       settings::saveMotion(d.lift, d.faceDown, d.shake);
       settings::saveAutoRotate(d.autoRotate);
       settings::saveLandscape(d.landscape);
+      settings::saveClock24(d.clock24);
       settings::saveDevMode(d.devMode);
       settings::saveSoundOn(d.sound);
       settings::saveSoundVolume(d.volume);
@@ -1036,7 +1044,7 @@ void loop() {
           menu::open({settings::combo(), hid::slot(), settings::standbyMin(), settings::brightnessPct(),
                       settings::enterDelayMs(),
                       settings::liftWakes(), settings::faceDownSleeps(), settings::shakeEscapes(),
-                      settings::autoRotate(), settings::landscape(), settings::devMode(), settings::soundOn(), settings::soundVolume(),
+                      settings::autoRotate(), settings::landscape(), settings::clock24(), settings::devMode(), settings::soundOn(), settings::soundVolume(),
                       settings::wirelessMic(), (uint8_t)max(0, faces::find(settings::face()))},
                      hid::state() == hid::Bt::OFF);
           mode = Mode::MENU;

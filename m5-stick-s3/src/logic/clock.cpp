@@ -19,6 +19,12 @@ std::string time12(const Local& t) {
   return buf;
 }
 
+std::string time24(const Local& t) {
+  char buf[8];
+  snprintf(buf, sizeof buf, "%d:%02d", t.hour, t.min);
+  return buf;
+}
+
 std::string ampm(const Local& t) { return t.hour < 12 ? "AM" : "PM"; }
 
 std::string shortDate(const Local& t) {

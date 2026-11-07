@@ -19,6 +19,7 @@ struct Draft {
   bool    lift, faceDown, shake;
   bool    autoRotate;
   bool    landscape;   // landscape screens when held sideways (with auto-rotate)
+  bool    clock24;     // 24-hour time
   bool    devMode;
   bool    sound;
   uint8_t volume;  // 0-255

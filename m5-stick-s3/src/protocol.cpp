@@ -59,6 +59,7 @@ static String stateJson() {
   j += ",\"brightness\":" + String(settings::brightnessPct());
   j += String(",\"autoRotate\":") + (settings::autoRotate() ? "true" : "false");
   j += String(",\"landscape\":") + (settings::landscape() ? "true" : "false");  // 1.9.0
+  j += String(",\"clock24\":") + (settings::clock24() ? "true" : "false");      // 2.4.0
   j += String(",\"devMode\":") + (settings::devMode() ? "true" : "false");
   j += ",\"face\":" + q(faces::active().id()) + ",\"faces\":" + faces::json();  // 2.0.0
   j += String(",\"wirelessMic\":") + (settings::wirelessMic() ? "true" : "false");
@@ -220,6 +221,13 @@ Result run(const String& action, const Args& arg) {
     String v = arg("on");
     settings::saveLandscape(v == "1" || v == "true");
     return ok(String("\"landscape\":") + (settings::landscape() ? "true" : "false"));
+  }
+
+  if (action == "clock24") {  // the time as 24-hour (2.4.0)
+    String v = arg("on");
+    settings::saveClock24(v == "1" || v == "true");
+    Log.printf("Clock: %s\n", settings::clock24() ? "24-hour" : "12-hour");
+    return ok(String("\"clock24\":") + (settings::clock24() ? "true" : "false"));
   }
 
   if (action == "face") {  // id=<face>: the Home screen's face; demo=<face|all>: a preview on the stick

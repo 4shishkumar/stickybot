@@ -59,6 +59,9 @@ void   saveAutoRotate(bool on);
 bool   landscape();      // with auto-rotate: the reading screens turn landscape when held sideways
 void   saveLandscape(bool on);
 
+bool   clock24();                  // the time as 24-hour ("15:05") instead of 12-hour ("3:05 PM")
+void   saveClock24(bool on);
+
 String face();                    // the Home screen's face id (faces/faces.h), default "classic"
 void   saveFace(const String& id);
 

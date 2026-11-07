@@ -115,6 +115,9 @@ void saveAutoRotate(bool on) { prefs.putBool("autorot", on); }
 bool landscape()            { return prefs.getBool("landscape", true); }
 void saveLandscape(bool on)  { prefs.putBool("landscape", on); }
 
+bool clock24()               { return prefs.getBool("clock24", false); }
+void saveClock24(bool on)     { prefs.putBool("clock24", on); }
+
 String face()                 { return getStr("face", "classic"); }
 void saveFace(const String& id) { prefs.putString("face", id); }
 
