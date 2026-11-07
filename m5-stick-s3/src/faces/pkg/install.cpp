@@ -206,6 +206,11 @@ static void put(JsonObjectConst p) {
   const char* id = p["id"] | "";
   const uint32_t size = p["size"] | 0UL;
   if (!idOk(id)) return refuse("id", "3-12 of a-z, 0-9");
+  static const char* const RESERVED[] = {"all", "none", "demo", "default", "off", "face", "faces", "stickybot"};
+  const int known = faces::find(id);
+  bool reserved = known >= 0 && !pkg::isPackage(faces::at(known));  // a built-in face's id
+  for (const char* r : RESERVED) reserved = reserved || !strcmp(r, id);
+  if (reserved) return refuse("id", "a built-in face's (or a reserved) id");
   if (ota::active()) return refuse("ota", "a firmware update is running");
   const char* busy = rx.receiving() || !busyWhy ? nullptr : busyWhy();  // (a face arriving: this resumes or replaces it)
   if (busy) return refuse("busy", busy);

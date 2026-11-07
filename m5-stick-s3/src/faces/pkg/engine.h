@@ -26,7 +26,7 @@ void* bigAlloc(size_t n);  // malloc, from PSRAM on the stick when there is some
 class Arena {
  public:
   ~Arena() { clear(); }
-  void* alloc(size_t n);   // 4-aligned, zeroed; nullptr when out of memory
+  void* alloc(size_t n);   // 8-aligned, zeroed; nullptr when out of memory
   template <typename T>
   T* make(size_t n = 1) {
     T* p = (T*)alloc(sizeof(T) * (n ? n : 1));
@@ -39,7 +39,7 @@ class Arena {
   size_t bytes() const { return bytes_; }
 
  private:
-  struct Block {
+  struct alignas(8) Block {  // (its size a multiple of 8: what follows it is 8-aligned)
     Block* next;
     size_t used, cap;
   };

@@ -354,11 +354,62 @@ static int pkg(const std::string& file, const std::string& dir, bool preview) {
   return 0;
 }
 
+// shots fuzz <face.sfb> [n]: the engine's loader against n broken copies of a good face (bytes
+// changed, cut short, the manifest's text garbled); whatever loads is drawn both ways up. It
+// must never crash or read out of bounds (build with SAN=1 for AddressSanitizer).
+static int fuzz(const std::string& file, int n) {
+  std::vector<uint8_t> blob;
+  if (!readFile(file, blob)) return 1;
+  static faces::pkg::Engine face;
+  const ui::Dash d = pkgDash(PKG_STATES[0]);
+  const world::Snapshot w = pkgWorld(PKG_STATES[0]);
+  uint32_t seed = 12345;
+  auto rnd = [&]() { seed = seed * 1103515245u + 12345u; return seed >> 8; };
+  int loaded = 0;
+  for (int i = 0; i < n; i++) {
+    std::vector<uint8_t> b = blob;
+    const int kind = rnd() % 4, changes = 1 + rnd() % 8;
+    for (int k = 0; k < changes; k++) {
+      const size_t at = rnd() % b.size();
+      if (kind == 0) b[at] = rnd();                                 // any byte
+      else if (kind == 1) b[at] ^= 1 << (rnd() % 8);                // a bit
+      else if (kind == 2) b.resize(std::max<size_t>(1, at));        // cut short
+      else {                                                        // the manifest: digits and quotes
+        const size_t m = 16 + rnd() % std::min<size_t>(b.size() - 16, blob[8] | blob[9] << 8);
+        const char* junk = "0123456789-\"{}[],:9e9";
+        if (m < b.size()) b[m] = junk[rnd() % strlen(junk)];
+      }
+    }
+    String err;
+    std::vector<uint8_t> exact(b);  // its own allocation: ASan sees reads past the end
+    if (face.load(exact.data(), exact.size(), err) != faces::pkg::LoadError::NONE) continue;
+    loaded++;
+    for (int side : {0, 1}) {
+      ui::setOrientation(false, side);
+      now_ += 40;
+      face.kick(world::Kick::MERGED, now_);
+      face.draw(d, w, side != 0, now_);
+    }
+  }
+  printf("fuzz: %d broken copies, %d still loaded and were drawn, no crash\n", n, loaded);
+  return 0;
+}
+
 int main(int argc, char** argv) {
   ui::begin();
   std::string mode = argc > 1 ? argv[1] : "demo";
   std::string dir = argc > 2 ? argv[2] : "out";
   if (mode == "pkg" || mode == "pkgpreview") return argc > 3 ? pkg(argv[2], argv[3], mode == "pkgpreview") : 2;
+  if (mode == "fuzz") return argc > 2 ? fuzz(argv[2], argc > 3 ? atoi(argv[3]) : 5000) : 2;
+  if (mode == "check" && argc > 2) {  // shots check <face.sfb>: would the stick take it? (as an install does)
+    std::vector<uint8_t> blob;
+    if (!readFile(argv[2], blob)) return 1;
+    static faces::pkg::Engine face;
+    String err;
+    const bool ok = face.load(blob.data(), blob.size(), err) == faces::pkg::LoadError::NONE;
+    printf("%s\n", ok ? "ok" : (String("invalid: ") + err).c_str());
+    return ok ? 0 : 3;
+  }
   if (mode == "previews") previews(dir);
   else demo(dir, argc > 3 ? argv[3] : "all");
   return 0;

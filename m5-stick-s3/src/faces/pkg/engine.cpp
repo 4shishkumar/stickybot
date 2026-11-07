@@ -49,7 +49,7 @@ BigAllocator bigJson;
 constexpr size_t BLOCK = 8 * 1024;
 
 void* Arena::alloc(size_t n) {
-  n = (n + 3) & ~(size_t)3;
+  n = (n + 7) & ~(size_t)7;  // 8: pointers and floats in the structs, on any host
   if (!head_ || head_->used + n > head_->cap) {
     const size_t cap = n > BLOCK / 2 ? n : BLOCK;  // a big one (an image) gets its own block
     Block* b = (Block*)bigAlloc(sizeof(Block) + cap);
