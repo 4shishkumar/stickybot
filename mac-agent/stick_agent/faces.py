@@ -78,6 +78,7 @@ REASONS = {  # the stick's refusal / error codes (FORMAT.md §18) -> words for t
     "read": "reading the face back on the stick failed",
     "open": "the stick couldn't start writing the face",
     "notfound": "that face isn't on the stick",
+    "id": "this face's id belongs to a built-in face; rename it",
 }
 
 

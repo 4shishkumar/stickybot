@@ -33,9 +33,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   if it came from a stranger: a face that doesn't load is never half-drawn (Classic shows
   instead and the stick says why), a face that is too slow drops to a calmer frame rate, and
   one that crashes the stick twice in a row is set aside until it's installed again. A small
-  toast over Home shows the install ("Installing Cat Nap 60 %"); B cancels it. (The
-  dashboard's catalog and install buttons come next; this release has the stick's half:
-  PROTOCOL.md, *Face packages over Bluetooth*.)
+  toast over Home shows the install ("Installing Cat Nap 60 %"); B cancels it.
+  (PROTOCOL.md, *Face packages over Bluetooth*.)
 - **A 24-hour clock (firmware 2.4.0).** A setting in the stick's menu (**Clock**) and on the
   dashboard's Stick page: every face's clock, the dock clock and the demos show 15:05
   instead of 3:05 PM.
