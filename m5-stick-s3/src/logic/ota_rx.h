@@ -70,6 +70,9 @@ struct Conditions {
 
 // Refusal for a new session (NONE = may start). Resuming skips the version checks.
 Error refuse(const Begin& b, const Conditions& c, bool resuming = false);
+// The same for a plain file (a face package, faces/pkg/install.cpp): busy, size (against
+// partitionSize, the largest file) and the sha256 only; no battery or version checks.
+Error refuseFile(const Begin& b, const Conditions& c);
 
 // The first bytes of an app image: magic 0xE9 and the chip id (needs >= 14 bytes).
 bool imageHeaderOk(const uint8_t* p, size_t n, uint16_t chipId = CHIP_ESP32S3);
@@ -82,6 +85,9 @@ struct Sink {
   virtual bool sha256(uint32_t size, uint8_t out[32]) = 0;  // of the first `size` bytes written
   virtual bool commit() = 0;                                // validate + set the boot partition
   virtual void abort() = 0;
+  // After open(): bytes already written by an earlier session that this one continues (a
+  // file sink keeps a part file across a restart); 0 = start at the beginning.
+  virtual uint32_t resumeFrom() { return 0; }
 };
 
 struct Reply {
@@ -96,7 +102,11 @@ class Receiver {
  public:
   enum class State : uint8_t { IDLE, RECEIVING, DONE };
 
-  explicit Receiver(Sink& sink) : sink_(sink) {}
+  // What arrives: an app image (firmware: its header is checked, refuse()) or any file
+  // (refuseFile(), no header check).
+  enum class Kind : uint8_t { APP_IMAGE, FILE };
+
+  explicit Receiver(Sink& sink, Kind kind = Kind::APP_IMAGE) : sink_(sink), kind_(kind) {}
 
   Reply begin(const Begin& b, const Conditions& c, uint32_t now);
   Reply data(uint32_t offset, const uint8_t* p, size_t n, uint32_t now);
@@ -118,6 +128,7 @@ class Receiver {
   Reply fail(Error e);
 
   Sink& sink_;
+  Kind  kind_;
   State state_ = State::IDLE;
   uint32_t size_ = 0, next_ = 0, lastAcked_ = 0;
   uint32_t lastAckAt_ = 0, lastDataAt_ = 0, gapAt_ = 0;

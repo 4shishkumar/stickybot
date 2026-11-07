@@ -83,6 +83,15 @@ Error refuse(const Begin& b, const Conditions& c, bool resuming) {
   return Error::NONE;
 }
 
+Error refuseFile(const Begin& b, const Conditions& c) {
+  if (c.busy) return Error::BUSY;
+  if (b.compressed) return Error::UNSUPPORTED;
+  if (b.size == 0 || b.size > c.partitionSize) return Error::SIZE;
+  uint8_t sha[32];
+  if (!parseSha256(b.sha256, sha)) return Error::SHA;
+  return Error::NONE;
+}
+
 bool imageHeaderOk(const uint8_t* p, size_t n, uint16_t chipId) {
   // esp_image_header_t: magic (0xE9) at 0, chip_id (u16 LE) at 12
   return n >= 14 && p[0] == 0xE9 && (uint16_t)(p[12] | p[13] << 8) == chipId;
@@ -113,7 +122,7 @@ Reply Receiver::begin(const Begin& b, const Conditions& c, uint32_t now) {
   bool same = state_ == State::RECEIVING && b.size == size_ && parseSha256(b.sha256, sha) &&
               memcmp(sha, sha_, 32) == 0;
   Reply r;
-  Error e = refuse(b, c, same);
+  Error e = kind_ == Kind::FILE ? refuseFile(b, c) : refuse(b, c, same);
   if (e != Error::NONE) {  // an earlier session (if any) stays, so a later begin can still resume it
     r.kind = Reply::Kind::REFUSED;
     r.error = e;
@@ -140,11 +149,17 @@ Reply Receiver::begin(const Begin& b, const Conditions& c, uint32_t now) {
   next_ = lastAcked_ = 0;
   lastAckAt_ = lastDataAt_ = now;
   gap_ = dup_ = headerChecked_ = false;
+  if (kind_ == Kind::FILE) {
+    headerChecked_ = true;  // any bytes
+    const uint32_t from = sink_.resumeFrom();
+    if (from < size_) next_ = lastAcked_ = from;  // (a whole earlier file: sent again)
+  }
   parseSha256(b.sha256, sha_);
   strncpy(version_, b.version ? b.version : "", sizeof(version_) - 1);
   version_[sizeof(version_) - 1] = 0;
   r.kind = Reply::Kind::READY;
-  r.offset = 0;
+  r.offset = next_;
+  r.resumed = next_ > 0;
   return r;
 }
 
@@ -172,7 +187,7 @@ Reply Receiver::data(uint32_t offset, const uint8_t* p, size_t n, uint32_t now) 
   size_t skip = next_ - offset;
   p += skip;
   n -= skip;
-  if (next_ < sizeof(head_)) {  // keep the image header to check it
+  if (next_ < sizeof(head_) && !headerChecked_) {  // keep the image header to check it
     size_t k = sizeof(head_) - next_ < n ? sizeof(head_) - next_ : n;
     memcpy(head_ + next_, p, k);
   }
