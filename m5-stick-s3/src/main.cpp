@@ -29,6 +29,8 @@
 #include "hid.h"
 #include "ui.h"
 #include "menu.h"
+#include "faces/pkg/install.h"
+#include "faces/pkg/package.h"
 #include "web.h"
 #include "battery.h"
 #include "protocol.h"
@@ -387,6 +389,7 @@ static const char* otaBusy() {
   if (hid::pairingCode()) return "pairing";
   if (mode == Mode::MENU) return "menu";
   if (web::busy()) return "wifi-update";
+  if (faces::pkg::install::receiving()) return "faces";  // a face package is arriving (one transfer at a time)
   return nullptr;
 }
 
@@ -407,6 +410,13 @@ static bool otaLoop() {
     ignoreAUntilRelease = M5.BtnA.isPressed();
     swallowB = swallowB || M5.BtnB.isPressed();
     dirty = true;
+  }
+  // A face package arriving: a toast over Home (faces/pkg/install.cpp), B cancels it
+  faces::pkg::install::loop();
+  faces::pkg::loop();
+  if (faces::pkg::install::receiving() && mode == Mode::STATUS && ui::awake() && M5.BtnB.wasPressed()) {
+    faces::pkg::install::cancelByUser();
+    swallowB = true;  // that press isn't an Enter
   }
   String notice;
   if (ota::takeNotice(notice)) showMessage(notice.c_str(), "Nothing changed on the stick", COLOR_WARN, 3000);
@@ -671,6 +681,7 @@ void setup() {
   lastInput = millis();
   status = readStatus();
   ota::setBusyCheck(otaBusy);
+  faces::pkg::install::setBusyCheck(otaBusy);
   ota::bootCheck();  // last: it may start the loop watchdog until a new firmware is confirmed
   Log.printf("ready %s fw %s — combo %s%s. Type 'help' for commands.\n", hid::name().c_str(),
                 FW_VERSION, comboToString(settings::combo()).c_str(), fromStandby ? " (woke from standby)" : "");

@@ -87,7 +87,7 @@ static const Step CLOCKS[] = {
 };
 
 static State    st;
-static int      order[16], nOrder = 0, pos = -1, step = -1;
+static int      order[32], nOrder = 0, pos = -1, step = -1;
 static uint32_t stepAt = 0;
 static bool     on = false;
 
@@ -96,6 +96,7 @@ static const Step* script(int& n) {
   static const char* const QUIET[] = {"classic", "bigtime", "words", "analog"};
   bool quiet = false;
   for (const char* q : QUIET) quiet = quiet || !strcmp(at(order[pos]).id(), q);
+  quiet = quiet || at(order[pos]).clockOnly();  // a static face package
   n = quiet ? sizeof CLOCKS / sizeof CLOCKS[0] : sizeof SCRIPT / sizeof SCRIPT[0];
   return quiet ? CLOCKS : SCRIPT;
 }

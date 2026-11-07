@@ -54,6 +54,14 @@ int  recent(uint8_t[RECENT], bool[RECENT]) { return 0; }
 namespace settings { bool soundOn() { return false; } }
 namespace sound { bool play(const String&) { return true; } }
 String comboToString(const Combo&) { return "Option+Cmd"; }
+// No installed face packages here (no flash): `shots pkg` draws one with the engine directly
+namespace faces { namespace pkg {
+void     begin() {}
+int      count() { return 0; }
+Face&    at(int) { return faces::at(0); }
+void     drawOverlay(bool) {}
+uint32_t overlayFrameMs() { return 0; }
+}}
 
 // --- PNG -------------------------------------------------------------------------
 static void be32(std::vector<uint8_t>& v, uint32_t x) { for (int i = 3; i >= 0; i--) v.push_back(x >> (i * 8)); }

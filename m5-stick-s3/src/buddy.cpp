@@ -13,6 +13,7 @@
 #include "events.h"
 #include "ota.h"
 #include "faces/faces.h"
+#include "faces/pkg/install.h"
 
 namespace buddy {
 
@@ -21,7 +22,7 @@ static const char* NUS_RX  = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";  // desktop
 static const char* NUS_TX  = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";  // stick -> desktop
 static const char* AUDIO   = "6e400004-b5a3-f393-e0a9-e50e24dcca9e";  // stick -> agent: ADPCM frames
 static const char* AUDIO_IN = "6e400005-b5a3-f393-e0a9-e50e24dcca9e"; // agent -> stick: sound clips
-static const char* OTA_DATA = "6e400006-b5a3-f393-e0a9-e50e24dcca9e"; // agent -> stick: firmware image (1.8.0+)
+static const char* OTA_DATA = "6e400006-b5a3-f393-e0a9-e50e24dcca9e"; // agent -> stick: firmware image (1.8.0+), face packages (2.4.0+)
 
 constexpr uint32_t LINK_TIMEOUT_MS = 30000;
 constexpr uint32_t AGENT_TIMEOUT_MS = 25000;  // agent sends a hello every 10 s
@@ -53,12 +54,14 @@ class AudioInCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
-// Firmware image packets; WRITE_ENC already needs the encrypted (paired) link
+// Firmware image or face package packets (whichever transfer is open owns the characteristic:
+// only one runs at a time); WRITE_ENC already needs the encrypted (paired) link
 class OtaCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& info) override {
     if (!info.isEncrypted()) return;
     std::string v = c->getValue();
-    ota::onPacket((const uint8_t*)v.data(), v.size());
+    if (faces::pkg::install::receiving()) faces::pkg::install::onPacket((const uint8_t*)v.data(), v.size());
+    else ota::onPacket((const uint8_t*)v.data(), v.size());
   }
 };
 
@@ -198,6 +201,10 @@ static void handleAgent(JsonDocument& d) {
   }
   if (d["ota"].is<JsonObject>()) {  // firmware update over this link (ota.cpp)
     ota::control(d["ota"].as<JsonObjectConst>());
+    return;
+  }
+  if (d["faces"].is<JsonObject>()) {  // a face package: install, remove (faces/pkg/install.cpp)
+    faces::pkg::install::control(d["faces"].as<JsonObjectConst>());
     return;
   }
   if (fresh || !usbSent_ || millis() - usbSentAt_ > 20000) sendUsb();

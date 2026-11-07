@@ -51,6 +51,9 @@ float    frac01(uint32_t x);                          // hash32(x) as 0..1
 uint16_t c565(uint8_t r, uint8_t g, uint8_t b);
 bool     isNightMinute(int minute);                    // 22:00-6:00 (unknown time: false)
 
+// The package faces changed (pkg/package.cpp): find the Home face again by its id.
+void refresh();
+
 // Demo (demo.cpp) -> registry (faces.cpp): which face and which fake world to show.
 void setDemo(int face, const world::Snapshot* w);
 void demoKick(world::Kick k);

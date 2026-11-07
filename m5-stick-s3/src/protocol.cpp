@@ -12,6 +12,7 @@
 #include "mic.h"
 #include <Preferences.h>
 #include "faces/faces.h"
+#include "faces/pkg/package.h"
 
 namespace protocol {
 
@@ -62,6 +63,7 @@ static String stateJson() {
   j += String(",\"clock24\":") + (settings::clock24() ? "true" : "false");      // 2.4.0
   j += String(",\"devMode\":") + (settings::devMode() ? "true" : "false");
   j += ",\"face\":" + q(faces::active().id()) + ",\"faces\":" + faces::json();  // 2.0.0
+  j += "," + faces::pkg::stateJson();  // 2.4.0: the face packages (their list: @faces)
   j += String(",\"wirelessMic\":") + (settings::wirelessMic() ? "true" : "false");
   j += String(",\"ota\":1,\"otaPending\":") + (ota::pendingVerify() ? "true" : "false");  // Bluetooth update (1.8.0+)
   j += String(",\"usbMounted\":") + (mic::usbMounted() ? "true" : "false");
@@ -242,6 +244,16 @@ Result run(const String& action, const Args& arg) {
     faces::select(id);
     Log.printf("Face: %s\n", id.c_str());
     return ok("\"face\":" + q(id));
+  }
+
+  if (action == "faces") {  // the face packages (2.4.0): page=<n> one page of the list; rm=<id|all>
+    String rm = arg("rm");
+    if (rm.length()) {
+      int n = faces::pkg::remove(rm);
+      if (!n && rm != "all") return fail("Not installed: " + rm, 404);
+      return ok("\"removed\":" + String(n));
+    }
+    return ok(faces::pkg::listJson(arg("page").toInt()));
   }
 
   if (action == "wmic") {

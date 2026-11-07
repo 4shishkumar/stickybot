@@ -20,6 +20,8 @@
 namespace faces {
 namespace pkg {
 
+void* bigAlloc(size_t n);  // malloc, from PSRAM on the stick when there is some (free() it)
+
 // Memory for one face, in blocks, freed whole (PSRAM on the stick when there is some).
 class Arena {
  public:
