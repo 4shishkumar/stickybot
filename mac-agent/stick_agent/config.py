@@ -74,6 +74,9 @@ DEFAULT_CONFIG = {
     # "stable" = releases only, "beta" = prereleases (vX.Y.Z-beta.N) too
     "update_check": True,
     "update_channel": "stable",
+    # Face packages (faces.py): the catalog the dashboard's "Get more faces" offers. Another URL
+    # (a fork, a test server) needn't be signed; the default one must be (faces.CATALOG_KEYS)
+    "faces_catalog_url": "https://ashish-kumar-noon.github.io/stickybot/faces/catalog.json",
 }
 
 
