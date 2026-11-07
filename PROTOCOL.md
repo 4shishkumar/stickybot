@@ -413,7 +413,7 @@ stick reads). Older firmware has no `pkgFaces`: don't send `faces` messages or `
 | board → Mac | `{"evt":"faces","state":"done","id":"catnap","version":"1.0.0"}` — the sha256 of the file read back from flash matches, the face loads (the same checks as when it's drawn), and it replaced the old `<id>.sfb` at once. `version` is the manifest's. A repeated `end` gets `done` again |
 | board → Mac | `{"evt":"faces","state":"error","error":"invalid","why":"portrait element 3: unknown type 'video'","offset":N}` — the transfer is over and nothing was installed (`incomplete` is the exception: bytes are missing, the session stays; `put` again to resume) |
 | Mac → board | `{"faces":{"cancel":1}}` → `{"evt":"faces","state":"cancelled","by":"agent","offset":N}`; **B** on the stick while the toast shows → `"by":"stick"` |
-| Mac → board | `{"faces":{"rm":"catnap"}}` → `{"evt":"faces","state":"removed","id":"catnap","n":1}`; `"rm":"all"` removes every one (`"id":"all","n":<how many>`); a face that isn't installed → `{"evt":"faces","state":"error","error":"not_found","id":"catnap"}` |
+| Mac → board | `{"faces":{"rm":"catnap"}}` → `{"evt":"faces","state":"removed","id":"catnap","n":1}`; `"rm":"all"` removes every one (`"id":"all","n":<how many>`); a face that isn't installed → `{"evt":"faces","state":"error","error":"notfound","id":"catnap"}` (the OTA code `not_started` keeps its underscore) |
 | Mac → board | `@face id=catnap` (unchanged): make it the Home face |
 
 Refusals (`put`): `busy` (+ `why`: `dictation`, `talk`, `approval`, `pairing`, `menu`, `wifi-update`, as

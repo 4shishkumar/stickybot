@@ -293,7 +293,7 @@ void control(JsonObjectConst msg) {
     }
     const int n = pkg::remove(id);
     if (n || id == "all") send("\"state\":\"removed\",\"id\":" + q(id) + ",\"n\":" + n);
-    else send("\"state\":\"error\",\"error\":\"not_found\",\"id\":" + q(id));
+    else send("\"state\":\"error\",\"error\":\"notfound\",\"id\":" + q(id));
     return;
   }
 }
