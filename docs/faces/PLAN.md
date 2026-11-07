@@ -1,9 +1,9 @@
 # Faces marketplace: the plan
 
-What exists now (branch `feature/face-format`) and what is left, in order. Efforts are rough
-working days for one person who knows the codebase.
+What exists now and what is left, in order. Efforts are rough working days for one person
+who knows the codebase.
 
-## Done (this branch)
+## Done (branches `feature/face-format`, then `feature/face-engine`: firmware 2.4.0)
 
 - **The format, v1**: [FORMAT.md](FORMAT.md), [face.schema.json](face.schema.json),
   [GUIDELINES.md](GUIDELINES.md), [CATALOG.md](CATALOG.md).
@@ -13,11 +13,16 @@ working days for one person who knows the codebase.
   - `validate.py`: the command-line validator;
   - `build_catalog.py`: `catalog.json` plus compiled faces and previews;
   - `make_example_art.py`: the Cat Nap pixel art.
-- **Reference renderer**: `m5-stick-s3/tools/face_shots/pkgface.{h,cpp}`. It reads `.sfb`
-  and draws with the stick's own `ui_draw.h` / `faces/common.h` (fonts, fitting, icons,
-  status, urgent card). It handles every element type, bindings, conditions, tweens, events
-  and reactions, repeat, parts, tiles and mix. `make -C m5-stick-s3/tools/face_shots pkg
-  PKG=…` renders six states in both orientations, plus a contact sheet and the previews.
+- **The firmware engine** (step 1 below): `m5-stick-s3/src/faces/pkg/engine.*`, with the
+  pure parts in `src/logic/facefmt.*` (bindings, templates, conditions, tweens, frame tiers,
+  the guard rail) and `src/logic/sfb.*` (the container), unit-tested (`make test`). face_shots
+  draws packages with it (`make -C m5-stick-s3/tools/face_shots pkg PKG=…`: six states both
+  ways up, a contact sheet, the previews; `fuzz PKG=… SAN=1`; `shots check <face.sfb>`). Its
+  pictures of the three examples are pixel-identical to the first reference renderer's.
+- **Storage and the Bluetooth install, firmware half** (steps 2 and 3): `src/faces/pkg/store.*`,
+  `package.*` (the registry, the crash guard), `install.*` (the file sink, `faces` messages,
+  the toast), `@faces`, `pkgFaces` in `@state`. PROTOCOL.md, *Face packages over Bluetooth*.
+- **The 12 / 24-hour setting** (`clock24`): the menu, `@clock24`, `@state`, the dashboard.
 - **Examples**: `faces/examples/textclock` (static, 3.6 KB), `dialclock` (static with
   seconds, 3.2 KB), `catnap` (calm, sprites, parallax, reactions, 8.8 KB).
 - **Tests**: `mac-agent/tests/test_face_format.py` (examples valid, compile round trip, PNG,
@@ -25,7 +30,7 @@ working days for one person who knows the codebase.
 
 ## Remaining
 
-### 1. Firmware engine (5–7 days)
+### 1. Firmware engine (done, 2.4.0)
 
 Move `pkgface.cpp` into `src/faces/pkg/` as a `Face` subclass (`PackageFace`), registered
 alongside the built-ins.
@@ -47,7 +52,7 @@ alongside the built-ins.
   one arena per face, freed whole); ArduinoJson memory for a 16 KB manifest (~2–3× in a
   `JsonDocument`, parsed in PSRAM).
 
-### 2. Storage (1–2 days)
+### 2. Storage (done, 2.4.0)
 
 LittleFS on the existing `spiffs` partition (FORMAT.md §17): mount it with format-on-fail,
 `/fs/faces/`, list, remove, the 12-face and space limits, and `.part` handling. Wipe the
@@ -55,7 +60,7 @@ folder in the menu's factory reset.
 - **Risks:** first-mount format time (~1–2 s for 1.5 MB, once); flash wear is negligible at
   these sizes. Check that the Arduino 3.x LittleFS partition label matches (`spiffs`).
 
-### 3. Bluetooth install + `@faces` (2–3 days)
+### 3. Bluetooth install + `@faces` (firmware done in 2.4.0; the agent side remains)
 
 Firmware: a `FileSink` for `otarx::Receiver`, the `faces` message family, ownership of the
 `…0006…` characteristic, refusals, the install toast, `@faces` with paging, and
@@ -116,16 +121,20 @@ generation are exactly what the format deliberately can't express.
 About **15–20 days** to ship steps 1–5 (the marketplace usable end to end), plus 1 day for
 signing and 2–3 days for migrating built-ins.
 
-## Open questions
+## Decided
 
-1. **`minFirmware` "2.4.0"** in the examples assumes the engine ships in 2.4.0.
-2. **24-hour time**: there is no setting yet. Should `time.hm` follow a future setting, with
-   `h12` / `h24` explicit for designers (as written)?
-3. **Hosting**: GitHub Pages (recommended) needs Pages turned on for the public repo. Is
-   that OK?
-4. **Card text in faces**: faces can show `card.a` / `card.b` (Claude progress, PR titles)
-   on screen. It's the user's own screen and faces can't send anything anywhere, but should
-   community faces be limited to the urgent card only?
-5. **Install limit** of 12 faces and **64 KB** each: generous or tight?
-6. Should the status icons be overridable for minimal faces (BigTime-style "battery as a
-   hairline")? The design says no: the firmware always draws them.
+1. The engine ships in firmware **2.4.0** (the examples' `minFirmware`).
+2. **24-hour time**: a setting (`clock24`, 2.4.0); `time.hm` follows it, `h12` / `h24` stay
+   explicit for designers. The built-in faces' clocks follow it too.
+3. **Hosting**: the catalog on GitHub Pages.
+4. **Card text**: community faces may show `card.a` / `card.b`.
+5. **Limits**: 12 installed faces, 64 KB each.
+6. **Status icons and the urgent card** are always drawn by the firmware (not overridable).
+
+## Open
+
+- The stick has no factory reset; when it gets one, it should wipe the faces too
+  (`faces::pkg::store::wipe()`; `@faces rm=all` does it today).
+- `@state`'s `faces` lists the built-in faces only (package faces are in `@faces`, to keep
+  `@state` short); moving the built-in list to `@faces` too is still to do (FORMAT.md
+  section 19).

@@ -15,7 +15,7 @@ This document defines format 1. Related documents:
 - `tools/faces/validate.py`: checks a package against the schema **and** everything below
   (references, fonts, budgets, pictures), and compiles it.
 - `make -C m5-stick-s3/tools/face_shots pkg PKG=<dir>`: draws a package with the stick's own
-  drawing code. This is the reference renderer.
+  engine (`m5-stick-s3/src/faces/pkg/engine.cpp`) on the Mac. What it saves is what the stick shows.
 - `faces/examples/`: three packages to copy (`textclock`, `dialclock`, `catnap`).
 
 ## Contents
@@ -190,7 +190,7 @@ connected) is an empty string or 0 and counts as false. Use `when` to show a pla
 | Binding | Kind | Example | Where it comes from today (firmware) |
 |---|---|---|---|
 | `time.known` | bool | | `Dash.minute >= 0` (the agent has sent the clock) |
-| `time.hm` | text | `9:41` | `Dash.clock` (`buddy::clock()`, 12-hour. If a 24-hour setting arrives, `time.hm` follows it) |
+| `time.hm` | text | `9:41` | the clock, 12- or 24-hour as the stick's setting says (`clock24`, firmware 2.4.0) |
 | `time.hm24` | text | `21:41` | `Dash.minute` |
 | `time.h12`, `time.hh12` | text | `9`, `09` | `Dash.minute` |
 | `time.h24`, `time.hh24` | text | `21`, `21` | `Dash.minute` |
@@ -198,7 +198,7 @@ connected) is an empty string or 0 and counts as false. Use `when` to show a pla
 | `time.ampm` | text | `AM` | `Dash.ampm` |
 | `time.hour`, `time.minute`, `time.second`, `time.minuteOfDay` | number | | `Dash.minute`, `Dash.second` |
 | `time.words`, `time.wordsLead`, `time.wordsHour` | text | `twenty to ten`, `just after`, `ten` | `clockface::words()` (the Words face) |
-| `date.weekday`, `date.dow` | text | `Friday`, `Fri` | `clockfmt::Local.wday` (`Dash.longDate`) |
+| `date.weekday`, `date.dow` | text | `Friday`, `Fri` | `clockfmt::Local.wday` (`Dash.wday`) |
 | `date.day`, `date.dd` | text | `6`, `06` | `Local.mday` |
 | `date.month`, `date.mon`, `date.mm` | text | `November`, `Nov`, `11` | `Local.mon` |
 | `date.short`, `date.long` | text | `Fri 6 Nov`, `Friday 6 November` | `Dash.date`, `Dash.longDate` |
@@ -410,9 +410,9 @@ then N times:
         D     the indices, rows padded to a byte (MSB first), maybe PackBits; padded to 4
 ```
 
-The reference renderer (`m5-stick-s3/tools/face_shots/pkgface.cpp`) reads exactly this,
-which is what the firmware engine will read. `facepkg.read_sfb()` is the Python reader (the
-agent checks downloads with it).
+The firmware reads exactly this (`m5-stick-s3/src/logic/sfb.cpp` for the container,
+`src/faces/pkg/engine.cpp` for the manifest), and face_shots runs the same code on the Mac.
+`facepkg.read_sfb()` is the Python reader (the agent checks downloads with it).
 
 ## 16. Validation and errors
 
@@ -435,10 +435,12 @@ the face invalid. An invalid face is **never half-drawn**:
   reinstall or remove it".
 - The saved `face` setting is kept, so a fixed reinstall brings the face back. Removing the
   face selects Classic.
-- A face that crashes or hangs the renderer (it shouldn't, but it's a new parser) trips the
-  loop watchdog. After 2 resets in a row while a package face was active, the stick boots
-  with Classic and marks that face invalid (an NVS counter, cleared after 60 s of normal
-  running).
+- A face that crashes the renderer (it shouldn't, but it's a new parser) resets the stick.
+  After 2 resets in a row from a crash or a watchdog (`esp_reset_reason`) while a package face
+  was the Home face, the stick boots with Classic and marks that face broken until it is
+  installed again (an NVS counter, cleared after 60 s of normal running). The engine has no
+  unbounded loops, and face_shots fuzzes the loader (`make -C m5-stick-s3/tools/face_shots
+  fuzz PKG=<dir> SAN=1`).
 
 ## 17. Storage on the stick
 
@@ -469,7 +471,8 @@ coredump  0x7F0000    64 KB
   engine loads its file into PSRAM: the manifest (ArduinoJson, parsed once into compact
   structs) and the images (indices, one byte each). Other faces stay on flash.
 - **Removing** deletes the file. If it was the active face, the stick switches to Classic.
-  A factory reset (menu) or `@faces rm=all` wipes the folder.
+  `@faces rm=all` (or `{"faces":{"rm":"all"}}`) wipes the folder. (The stick has no factory
+  reset yet; when one arrives it should call `store::wipe()`.)
 
 ## 18. Installing over Bluetooth
 
@@ -481,32 +484,36 @@ firmware or a face) owns `…0006…`. Messages are JSON on RX/TX with `"src":"a
 
 | Direction | Message |
 |---|---|
-| Mac → stick | `{"faces":{"put":{"id":"catnap","version":"1.0.0","size":8772,"sha256":"<64 hex>"}}}` |
-| stick → Mac | `{"evt":"faces","state":"ready","id":"catnap","offset":0,"window":16384,"chunk":240,"resumed":false}` |
-| stick → Mac | `{"evt":"faces","state":"refused","error":"busy"\|"full"\|"size"\|"format"\|"firmware"\|"ota","why":…}` |
+| Mac → stick | `{"faces":{"put":{"id":"catnap","version":"1.0.0","size":8772,"sha256":"<64 hex>"}}}` (optional `"name"`: what the toast says) |
+| stick → Mac | `{"evt":"faces","state":"ready","id":"catnap","offset":0,"size":8772,"window":16384,"chunk":240,"resumed":false}` |
+| stick → Mac | `{"evt":"faces","state":"refused","error":"busy"\|"full"\|"size"\|"ota"\|"id"\|"sha","why":…}` |
 | Mac → stick | packets on `…0006…` |
 | stick → Mac | `{"evt":"faces","state":"ack","offset":N}` and `"gap":true` exactly as for firmware (4 KB acks, resend from N) |
 | Mac → stick | `{"faces":{"end":1}}` |
 | stick → Mac | `{"evt":"faces","state":"done","id":"catnap","version":"1.0.0"}`: the sha256 of the file read back matches, the face validated (section 16), and `.part` was renamed to `<id>.sfb` (replacing the old version atomically) |
-| stick → Mac | `{"evt":"faces","state":"error","error":"sha"\|"invalid","why":"image 2: bad header"}` |
+| stick → Mac | `{"evt":"faces","state":"error","error":"sha"\|"invalid"\|"format"\|"firmware"\|…,"why":"image 2: bad header","offset":N}` |
 | Mac → stick | `{"faces":{"cancel":1}}` → `"state":"cancelled"` |
-| Mac → stick | `{"faces":{"rm":"catnap"}}` → `{"evt":"faces","state":"removed","id":"catnap"}` |
+| Mac → stick | `{"faces":{"rm":"catnap"}}` → `{"evt":"faces","state":"removed","id":"catnap","n":1}` (`"rm":"all"`: every face) |
 | Mac → stick | `@face id=catnap` (unchanged): pick it |
 
 - **Refusals:** `busy` (dictation, talk, an approval, the menu: the same checks as OTA),
-  `ota` (a firmware update is running or pending), `size` (0 or > 64 KB), `full` (12 faces
-  or not enough space), `format` (a face format this firmware doesn't know), `firmware`
-  (the agent should already have checked `minFirmware`, and the stick checks again from the
-  manifest). There is no battery minimum: it's a 64 KB file write, not a reflash.
+  `ota` (a firmware update is running), `size` (0 or > 64 KB), `full` (12 faces or not
+  enough space), `id` (a bad, built-in or reserved id), `sha` (not 64 hex digits). There is
+  no battery minimum: it's a 64 KB file write, not a reflash.
+- **After the bytes:** `format` (a face format this firmware doesn't know) and `firmware`
+  (`minFirmware` newer than the stick; the agent should already have checked it) come as
+  `"state":"error"`, because the stick only learns them from the file, as it does `invalid`.
+  PROTOCOL.md (*Face packages over Bluetooth*) has every code.
 - **Resume:** as OTA. The session lives 3 min after a disconnect, and the same `put`
   (id + size + sha256) resumes from the acknowledged offset. `.part.json` lets it survive a
-  reboot too.
+  reboot too (it resumes from what `.part` holds).
 - **Checksum:** sha256 end to end. The catalog publishes it (CATALOG.md), the agent checks
   the download against it, and the stick checks what it wrote (read back from flash, as
   OTA does). Signatures: see section 21.
 - **Time:** 64 KB at ~15 KB/s is ~4.5 s. The examples take under a second.
-- **On screen:** a small "Installing Cat Nap… 60 %" toast over Home (not the full update
-  screen). B cancels.
+- **On screen:** a small "Installing Cat Nap  60 %" toast over Home (not the full update
+  screen; the name comes from `put`'s `name`, else the id). B cancels. Then "Installed Cat
+  Nap" or "Couldn't install …" for a few seconds.
 
 ## 19. Listing faces: `@faces`
 

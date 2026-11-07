@@ -89,7 +89,9 @@ and can be ignored.
 | `wmic` | `on=0\|1` | StickS3: the wireless Wispr mic switch (see section 5) |
 | `autorotate` | `on=0\|1` | StickS3: turn the screen with the motion sensor (state: `autoRotate`) |
 | `landscape` | `on=0\|1` | StickS3 1.9.0+: with auto-rotate, landscape screens when held sideways (state: `landscape`) |
-| `face` | `id=<face>` or `demo=<face\|all>` | StickS3 2.1.0+: the Home face (saved; state: `face`, and `faces`: `[{"id","title","about"}]`), or play a face's demo on the stick (A or B ends it) |
+| `face` | `id=<face>` or `demo=<face\|all>` | StickS3 2.1.0+: the Home face (saved; state: `face`, and `faces`: `[{"id","title","about"}]`), or play a face's demo on the stick (A or B ends it). 2.4.0+: an installed face package's id works too |
+| `faces` | `page=<n>` or `rm=<id\|all>` | StickS3 2.4.0+: the installed face packages, 6 a page, or remove them (see section 5, *Face packages over Bluetooth*; state: `pkgFaces`) |
+| `clock24` | `on=0\|1` | StickS3 2.4.0+: the time as 24-hour ("15:05") on every face, the dock clock and the demos (state: `clock24`) |
 
 Responses that end in a restart include `"restarting":true`.
 
@@ -116,6 +118,8 @@ Errors: `@{"ok":false,"error":"<message>"}`.
 - `standby`: only present on boards with a battery (minutes, 0 = never)
 - `brightness`: only present on boards with a screen (percent)
 - `web.mode`: `off` | `joining` | `home` (joined home Wi-Fi) | `hotspot`
+- StickS3 2.4.0+: `clock24` (true: 24-hour time), `pkgFaces` (`{"n":<installed face packages>,"fmt":[1]}`;
+  their list is `@faces`, section 5)
 
 ## 4. Wi-Fi settings page + OTA
 
@@ -161,7 +165,7 @@ Bluetooth connection as the keyboard. Writes need the paired (encrypted) link.
 | TX | `…0003…` | board → Mac | JSON lines (notify, split into ≤180-byte pieces) |
 | Audio | `…0004…` | board → Mac | agent audio frames (notify) |
 | Audio in | `…0005…` | Mac → board | sound clips: `[0][samples u32][rate u16]` start, `[1][frame]` data, `[2]` end → play (write without response; first/last acknowledged) |
-| OTA data | `…0006…` | Mac → board | firmware image packets `[offset u32 LE][bytes]` (write without response; StickS3 1.8.0+, see *Firmware update over Bluetooth*) |
+| OTA data | `…0006…` | Mac → board | firmware image packets `[offset u32 LE][bytes]` (write without response; StickS3 1.8.0+, see *Firmware update over Bluetooth*), and face packages (2.4.0+, *Face packages over Bluetooth*): one transfer at a time |
 
 The service UUID is in the advertisement (while connected too), so Mac
 programs find the board by it; they should then stay with the one board the
@@ -382,3 +386,66 @@ doesn't go to standby (waking is a reset) and refuses another update (`pending`)
 prompts, events and standby wait. Then "Restarting". On `begin` the stick asks the Mac for a quick connection interval, long
 link-layer packets and the 2M PHY (macOS decides what it grants; apps on the Mac cannot set these).
 
+### Face packages over Bluetooth (StickS3 2.4.0+)
+
+Faces made of data ([docs/faces/FORMAT.md](docs/faces/FORMAT.md)): the dashboard installs a compiled
+face (`.sfb`, at most 64 KB) on the stick, which keeps it in its flash (LittleFS on the 1.5 MB `spiffs`
+partition, `/fs/faces/<id>.sfb`, at most 12). The transfer is the firmware update's: the same receiver
+(windows, acks, gaps, resume), the same `…0006…` characteristic, only a file at the end instead of a
+firmware image. **One bulk transfer at a time:** while a face arrives it owns `…0006…` and a firmware
+`begin` is refused `busy` with `"why":"faces"`; while a firmware update runs (or is about to restart), a
+face is refused `ota`.
+
+**Support:** `@state` has `"pkgFaces":{"n":3,"fmt":[1]}` (the faces installed, the face formats the
+stick reads). Older firmware has no `pkgFaces`: don't send `faces` messages or `@faces` to it.
+
+**Messages** (all `"src":"agent"`; the board's answers are `"evt":"faces"`, with `"src":"agent"` like the
+`ota` ones):
+
+| Direction | Message |
+|---|---|
+| Mac → board | `{"faces":{"put":{"id":"catnap","version":"1.0.0","size":8772,"sha256":"<64 hex>","name":"Cat Nap"}}}` — `name` is optional (what the toast says; else the id) |
+| board → Mac | `{"evt":"faces","state":"ready","id":"catnap","offset":0,"size":8772,"window":16384,"chunk":240,"resumed":false}` — send from `offset` (window and chunk as for firmware) |
+| board → Mac | `{"evt":"faces","state":"refused","error":"busy","why":"dictation"}` — nothing started (codes below) |
+| Mac → board | packets on `…0006…`: `[offset u32 LE][bytes]`, in order, write without response |
+| board → Mac | `{"evt":"faces","state":"ack","offset":N}` and `…,"gap":true}` — exactly as for firmware (every 4 KB, at the end, 150 ms after news; gap: resend from N) |
+| Mac → board | `{"faces":{"end":1}}` once everything is acknowledged |
+| board → Mac | `{"evt":"faces","state":"done","id":"catnap","version":"1.0.0"}` — the sha256 of the file read back from flash matches, the face loads (the same checks as when it's drawn), and it replaced the old `<id>.sfb` at once. `version` is the manifest's. A repeated `end` gets `done` again |
+| board → Mac | `{"evt":"faces","state":"error","error":"invalid","why":"portrait element 3: unknown type 'video'","offset":N}` — the transfer is over and nothing was installed (`incomplete` is the exception: bytes are missing, the session stays; `put` again to resume) |
+| Mac → board | `{"faces":{"cancel":1}}` → `{"evt":"faces","state":"cancelled","by":"agent","offset":N}`; **B** on the stick while the toast shows → `"by":"stick"` |
+| Mac → board | `{"faces":{"rm":"catnap"}}` → `{"evt":"faces","state":"removed","id":"catnap","n":1}`; `"rm":"all"` removes every one (`"id":"all","n":<how many>`); a face that isn't installed → `{"evt":"faces","state":"error","error":"not_found","id":"catnap"}` |
+| Mac → board | `@face id=catnap` (unchanged): make it the Home face |
+
+Refusals (`put`): `busy` (+ `why`: `dictation`, `talk`, `approval`, `pairing`, `menu`, `wifi-update`, as
+for firmware), `ota` (a firmware update is running), `size` (0 or more than 64 KB), `full` (12 faces
+installed, or not enough room; + `why`), `id` (not `^[a-z][a-z0-9]{2,11}$`, or a built-in face's or a
+reserved id), `sha` (not 64 hex digits). There is no battery minimum.
+
+Errors (after the bytes, or instead of them): `sha` (the file read back doesn't match), `invalid` (+ `why`:
+the stick never trusts the Mac, see FORMAT.md section 16), `format` (a face format this firmware doesn't
+read), `firmware` (the manifest's `minFirmware` is newer than the stick's; + `why`: "needs firmware 2.5.0"),
+`incomplete`, `timeout` (nothing for 3 min), `size` (data past the end), `open`, `write`, `read`,
+`not_started`. **`format` and `firmware` are errors, not refusals:** the stick only knows them once it has
+the file (the agent should check the catalog's `format` and `minFirmware` before sending).
+
+**Resume:** as for firmware, the session stays 3 min after a disconnect and the same `put` (id, size,
+sha256) answers `ready` with `"resumed":true`. The stick also keeps the part file
+(`/fs/faces/.part` + `.part.json`), so the same `put` after a restart resumes from what it had.
+
+**On the stick:** a small toast over Home, "Installing Cat Nap  60 %" ("waiting" when the data stops),
+then "Installed Cat Nap" or "Couldn't install …" for a few seconds; the screen wakes for it.
+
+**Listing:** `@faces` (also over Bluetooth as `{"proto":"@faces"}`) answers one page of the installed
+faces, at most 6, so the reply stays short:
+
+```json
+{"ok":true,"faces":[{"id":"catnap","v":"1.0.0","sz":8772,"sha":"3f9c0a1b"},
+                    {"id":"dialclock","v":"1.0.0","sz":3224,"sha":"7d10e2c4","err":"image 0: short image data"}],
+ "free":712,"max":12,"more":false}
+```
+
+`v` the face's version, `sz` its size in bytes, `sha` the first 8 hex digits of its sha256, `err` only for
+a face that doesn't load (the stick draws Classic instead), `free` the room left in KB, `more`: `@faces
+page=1` has the next 6. `@faces rm=<id|all>` removes (`{"ok":true,"removed":N}`; 404 if it isn't
+installed). Removing the Home face makes Classic the Home face. Names and titles stay on the Mac (the
+catalog has them). `@state`'s `faces` still lists only the built-in faces.
