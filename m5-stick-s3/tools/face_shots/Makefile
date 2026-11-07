@@ -22,12 +22,12 @@ PKG  ?= ../../../faces/examples/textclock
 CXXFLAGS := -std=gnu++17 -O1 -w -Imock -I$(SRC) -I$(GFX) -I$(JSON)
 CFLAGS   := -O1 -w -Imock -I$(GFX)
 
-APP  := shots.cpp pkgface.cpp $(SRC)/ui.cpp $(SRC)/fonts_vlw.cpp $(wildcard $(SRC)/faces/*.cpp) $(wildcard $(SRC)/logic/*.cpp)
+APP  := shots.cpp $(SRC)/ui.cpp $(SRC)/fonts_vlw.cpp $(wildcard $(SRC)/faces/*.cpp) $(SRC)/faces/pkg/engine.cpp $(wildcard $(SRC)/logic/*.cpp)
 LGFX := $(GFX)/lgfx/v1/LGFXBase.cpp $(GFX)/lgfx/v1/lgfx_v1.cpp $(GFX)/lgfx/v1/lgfx_fonts.cpp \
         $(GFX)/lgfx/v1/lgfx_v1_panel.cpp fbbase.cpp
 CSRC := $(wildcard $(GFX)/lgfx/utility/*.c) fontstubs.c
 OBJ  := $(addprefix $(B)/,$(notdir $(APP:.cpp=.o) $(LGFX:.cpp=.o) $(CSRC:.c=.o)))
-VPATH := $(SRC) $(SRC)/faces $(SRC)/logic $(GFX)/lgfx/v1 $(GFX)/lgfx/utility .
+VPATH := $(SRC) $(SRC)/faces $(SRC)/faces/pkg $(SRC)/logic $(GFX)/lgfx/v1 $(GFX)/lgfx/utility .
 
 .PHONY: demo previews pkg clean
 demo: $(B)/shots
@@ -44,8 +44,9 @@ pkg: $(B)/shots
 
 $(B)/shots: $(OBJ)
 	$(CXX) -o $@ $^ -lz
-$(B)/pkgface.o: pkgface.h
-$(B)/shots.o: pkgface.h
+# a header changed (ui::Dash, an engine struct): rebuild what includes it, or the objects disagree
+HDRS := $(wildcard $(SRC)/*.h $(SRC)/faces/*.h $(SRC)/faces/pkg/*.h $(SRC)/logic/*.h)
+$(addprefix $(B)/,$(notdir $(APP:.cpp=.o))): $(HDRS)
 $(B)/%.o: %.cpp | $(B)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 $(B)/%.o: %.c | $(B)

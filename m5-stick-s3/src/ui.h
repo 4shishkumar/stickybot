@@ -30,8 +30,9 @@ struct Dash {
   int      battery;      // 0-100, -1 unknown
   bool     charging;
   String   batLine;      // "4.02 V · charging"
-  String   clock;        // "3:05" (12-hour) once the Mac agent has sent the time, else ""
-  String   ampm;         // "AM" / "PM"
+  String   clock;        // "3:05" (or "15:05" with the 24-hour setting) once the Mac agent has sent the time, else ""
+  String   ampm;         // "AM" / "PM" ("" with the 24-hour setting)
+  bool     clock24 = false;  // the 12 / 24-hour setting
   // Mac agent (+ the Claude desktop app, if the stick is named "Claude...")
   bool     agentLinked;
   String   agentHeard, agentText;
@@ -39,6 +40,7 @@ struct Dash {
   String   longDate;     // "Tuesday 20 October" (dock clock)
   int      minute = -1;  // minutes since local midnight (the faces' sky), -1 until the agent has sent the time
   int      second = -1;  // 0-59 along with minute (the Analog face's second hand)
+  int      wday = -1, mday = 0, mon = 0;  // the date's parts (wday 0 Sunday, mon 0 January), wday -1 until then
   // bottom card on the home screen (from the agent)
   String   cardKind, cardA, cardB;
   bool     cardUrgent;

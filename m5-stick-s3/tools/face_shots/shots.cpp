@@ -20,7 +20,7 @@
 #include "ui.h"
 #include "ui_draw.h"
 #include "faces/faces.h"
-#include "pkgface.h"
+#include "faces/pkg/engine.h"
 
 // --- The bits of the firmware the screens touch -------------------------------------
 static uint32_t now_ = 1000;
@@ -143,6 +143,9 @@ static ui::Dash base() {
   d.ampm = "AM";
   d.date = "Fri 6 Nov";
   d.longDate = "Friday 6 November";
+  d.wday = 5;
+  d.mday = 6;
+  d.mon = 10;
   d.minute = 9 * 60 + 41;
   d.second = (now_ / 1000) % 60;
   d.agentLinked = true;
@@ -222,7 +225,7 @@ static void previews(const std::string& dir) {
   }
 }
 
-// --- Face packages (docs/faces/FORMAT.md, pkgface.cpp) ---------------------------------
+// --- Face packages (docs/faces/FORMAT.md): the stick's own engine (src/faces/pkg/) ---------
 
 struct PkgState {
   const char* name;
@@ -248,6 +251,7 @@ static ui::Dash pkgDash(const PkgState& s) {
   if (s.minute < 0) {
     d.clock = d.ampm = d.date = d.longDate = "";
     d.second = -1;
+    d.wday = -1;
     d.agentLinked = false;
     d.wxValid = false;
   } else {
@@ -294,9 +298,9 @@ static bool readFile(const std::string& path, std::vector<uint8_t>& blob) {
 // move; the state's event fires `after` ms before the end), then save.
 static bool pkgShot(const std::vector<uint8_t>& blob, const PkgState& s, int side, const std::string& path,
                     uint32_t ms = 2400, uint32_t after = 700) {
-  pkgface::Face face;
+  static faces::pkg::Engine face;  // (one, as on the stick: loading frees the last one's arena)
   String err;
-  if (!face.load(blob.data(), blob.size(), err)) {
+  if (face.load(blob.data(), blob.size(), err) != faces::pkg::LoadError::NONE) {
     fprintf(stderr, "invalid face: %s\n", err.c_str());
     return false;
   }
