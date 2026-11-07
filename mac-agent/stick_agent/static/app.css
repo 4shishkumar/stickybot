@@ -271,6 +271,19 @@ select { padding-right: 26px; }
 .face img.tall { width: 68px; height: 120px; }
 .face img.wide { width: 108px; height: 61px; }
 .pet-facts { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+/* Stick page: face packages (firmware 2.4.0+) — installed list, the catalog, filters, install progress */
+.market { display: flex; flex-direction: column; gap: 12px; }
+.market-grid { margin-top: 2px; }
+.market-grid .face { min-height: 100%; }
+.market-filters { gap: 10px; }
+.market-job .grow { flex: 1; gap: 6px; }
+.list > .item img.mini { width: 34px; height: 60px; border-radius: 4px; background: #111316; flex: none; }
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--radius-s); overflow: hidden; }
+.seg button { font: inherit; font-size: 12.5px; font-weight: 600; padding: 4px 10px; border: 0; border-left: 1px solid var(--line);
+  background: var(--panel); color: var(--dim); cursor: pointer; }
+.seg button:first-child { border-left: 0; }
+.seg button:hover { color: var(--ink); background: var(--raised); }
+.seg button.on { background: var(--agent-soft); color: var(--ink); box-shadow: inset 0 -2px 0 var(--agent); }
 .progress { height: 8px; border-radius: 99px; background: var(--raised); overflow: hidden; border: 1px solid var(--line); }
 .progress > i { display: block; height: 100%; width: 0; background: var(--agent); border-radius: 99px; transition: width .3s; }
 .progress.err > i { background: var(--err); }
