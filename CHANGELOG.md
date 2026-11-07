@@ -27,6 +27,15 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   plan, JSON Schema), a validator / compiler / catalog builder in `tools/faces/`, a
   reference renderer in face_shots (`make -C m5-stick-s3/tools/face_shots pkg PKG=…`) and
   three examples in `faces/examples/`.
+- **More faces, in the dashboard (stick firmware 2.4.0+).** The Stick page's *More faces*:
+  the faces added to the stick (Use, Update, Remove, or "didn't load on your stick"), *Get
+  more faces* from the catalog (previews, filters for minimal / fun / utility and official /
+  community, install progress, errors in words) and *Install from file…* for people making
+  faces. The app fetches the catalog from GitHub Pages and keeps a copy for offline
+  browsing, checks its ed25519 signature and every face file (size, checksum, contents,
+  the stick's firmware) before sending it over Bluetooth. A stick older than 2.4.0 is asked
+  to update first. CI checks face pull requests (validation, re-rendered previews, version
+  raised) and publishes the signed catalog.
 
 ### Fixed
 - **The stick's Bluetooth ran out of buffers** (firmware 2.3.0): a long reply to the Mac app
