@@ -18,6 +18,8 @@ from . import (
     commands,
     components_api,
     config,
+    faces,
+    faces_api,
     firmware_api,
     install_flow,
     link,
@@ -128,7 +130,7 @@ def make_app(agent):
     async def put_config(request):
         body = await request.json()
         allowed = {k: v for k, v in body.items() if k in config.DEFAULT_CONFIG}
-        bad = brain_api.valid_config(allowed)
+        bad = brain_api.valid_config(allowed) or faces.valid_config(allowed)
         if bad:
             return web.json_response({"error": bad}, status=400)
         agent.update_config(allowed)
@@ -301,6 +303,7 @@ def make_app(agent):
     app = web.Application(middlewares=[guard])
     app.router.add_static("/static/", STATIC, show_index=False)
     app.add_routes(firmware_api.routes(agent))
+    app.add_routes(faces_api.routes(agent))  # after firmware_api (stick_api)
     app.add_routes(components_api.routes(agent))
     app.add_routes(install_flow.routes(agent))  # the setup page (#install); after firmware_api (stick_api)
     app.add_routes(mcp_server.routes(agent))
