@@ -10,11 +10,12 @@ constexpr uint16_t ENTER_STEPS[]   = {0, 500, 1000, 1500, 2000, 3000};
 
 enum Item {
   MOD_FN, MOD_CTRL, MOD_OPTION, MOD_SHIFT, MOD_CMD, KEY, TEST, ENTER,
-  SLOT, BT, FORGET, STANDBY, SOUND, VOLUME, WMIC, M_LIFT, M_FACE, M_SHAKE, BRIGHT, HOME_FACE, CLOCK24, AUTOROT, LANDSCAPE, FLIP, WEB, DEV, POWER, SAVE, CANCEL,
-  // 2.5.0: the new screens come after the settings, so the existing items keep their places
+  SLOT, BT, FORGET, STANDBY, SOUND, VOLUME, WMIC, M_LIFT, M_FACE, M_SHAKE, BRIGHT, HOME_FACE, CLOCK24, AUTOROT, LANDSCAPE, FLIP, WEB, DEV, POWER,
+  // 2.5.0: the new screens come after the settings (the existing items keep their places), then Save / Cancel last
   GAMES,                        // the games (games/games.h)
   REMOTE,                       // the IR remote screen (src/ir/screen.cpp)
   R_MOUSE, R_PRESENT, R_MEDIA,  // the remote modes (air.h): start one
+  SAVE, CANCEL,
   COUNT
 };
 static_assert(COUNT <= sizeof(ui::MenuView::lines) / sizeof(ui::MenuView::lines[0]), "ui::MenuView::lines is too small for the menu");

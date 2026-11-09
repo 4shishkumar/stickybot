@@ -308,7 +308,7 @@ The combo is saved in the stick's flash (NVS) and used immediately.
 | Flip screen | rotate the screen 180° (saved) |
 | Forget pairing | press twice to confirm; stick restarts |
 | Save & exit / Cancel | |
-| Games / Remote (IR) / Air mouse / Presenter / Media remote | open that screen (2.5.0; the last items, after Cancel) |
+| Games / Remote (IR) / Air mouse / Presenter / Media remote | open that screen (2.5.0; after Power off, before Save & exit and Cancel) |
 
 Button A moves to the next item. The top bar shows the combo you're building.
 The menu cancels itself after 60 s without input.
