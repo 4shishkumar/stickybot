@@ -1068,7 +1068,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let py = root.join(".stick-agent");
         std::fs::create_dir_all(&py).unwrap();
-        let opts = Options { port: PORT, home: root.join(".stickybot-rs"), fake_stick: true, import_from: Some(py.clone()) };
+        let opts =
+            Options { port: PORT, home: root.join(".stickybot-rs"), fake_stick: true, import_from: Some(py.clone()) };
         let st = AppState::new(&opts, Backend::Fake(FakeStick::new())).unwrap();
         st.link.spawn();
         let app = router(st.clone());

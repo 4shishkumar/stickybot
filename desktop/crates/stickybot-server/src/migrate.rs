@@ -421,7 +421,10 @@ mod tests {
         assert_eq!(cmds[0]["open_url"], "https://github.com/acme/widgets/pull/{n}");
 
         let lib = crate::clips::library(&f.sounds);
-        assert_eq!(lib, vec![json!({"pack": "kenney", "name": "bong_001"}), json!({"pack": "kenney", "name": "glass_001"})]);
+        assert_eq!(
+            lib,
+            vec![json!({"pack": "kenney", "name": "bong_001"}), json!({"pack": "kenney", "name": "glass_001"})]
+        );
         assert_eq!(fs::read(f.sounds.join("kenney/glass_001.ogg")).unwrap(), b"OggS fake");
 
         let h = fs::read_to_string(f.paths.history()).unwrap();
@@ -463,11 +466,8 @@ mod tests {
         assert_eq!(fs::read(f.sounds.join("kenney/glass_001.ogg")).unwrap(), b"my own glass");
         assert!(r.skipped.contains(&"sounds: 1 clips were already here".to_string()), "{r:?}");
         // the histories merge in time order
-        let h: Vec<Value> = fs::read_to_string(f.paths.history())
-            .unwrap()
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
+        let h: Vec<Value> =
+            fs::read_to_string(f.paths.history()).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
         assert_eq!(h.iter().map(|v| v["t"].as_f64().unwrap()).collect::<Vec<_>>(), [100.0, 150.0, 200.5]);
     }
 

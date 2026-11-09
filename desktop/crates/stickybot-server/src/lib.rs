@@ -12,6 +12,7 @@ pub mod commands;
 pub mod config;
 pub mod firmware;
 pub mod hub;
+pub mod mcp;
 pub mod migrate;
 pub mod python_agent;
 pub mod speech;

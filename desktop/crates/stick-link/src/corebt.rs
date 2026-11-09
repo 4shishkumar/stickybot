@@ -537,7 +537,11 @@ impl CbConn {
             let (p, c2, d) = (self.p.clone(), c.clone(), data.clone());
             let wrote = self.bt.on_queue(move || unsafe {
                 if late || p.get().canSendWriteWithoutResponse() {
-                    p.get().writeValue_forCharacteristic_type(d.get(), c2.get(), CBCharacteristicWriteType::WithoutResponse);
+                    p.get().writeValue_forCharacteristic_type(
+                        d.get(),
+                        c2.get(),
+                        CBCharacteristicWriteType::WithoutResponse,
+                    );
                     true
                 } else {
                     false

@@ -12,8 +12,9 @@
 //!   `--include-partial-messages` `stream_event`s (message_start, content_block_start text|tool_use,
 //!   content_block_delta text_delta), and one `result` per turn.
 //!
-//! Not ported yet: the one-shot mode (`brain_mode: "oneshot"` runs the session too), the stick
-//! tools (MCP), OpenRouter.
+//! `brain_mode: "oneshot"`: `claude -p "<text>"` per request (the original way), `--resume` within
+//! `followup_minutes`; cancel kills it. Both modes get the stick tools (`--mcp-config`, see
+//! `mcp.rs`) when `mcp_server` is on.
 
 use crate::talk::{Brain, BrainEvent, plain};
 use futures_util::future::BoxFuture;
@@ -186,6 +187,26 @@ struct Inner {
     turn_no: AtomicU64,
     req: AtomicU64,
     idle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// writes the stick tools' `--mcp-config` file (set by the server)
+    mcp: Mutex<Option<McpConfig>>,
+    /// one-shot mode: stops this request's process (cancel), and its pid
+    oneshot_kill: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    oneshot_pid: Mutex<Option<u32>>,
+}
+
+type McpConfig = Box<dyn Fn() -> Option<PathBuf> + Send + Sync>;
+
+/// The last `n` bytes of `s` (on a character boundary).
+fn tail(s: &str, n: usize) -> &str {
+    let mut i = s.len().saturating_sub(n);
+    while !s.is_char_boundary(i) {
+        i += 1;
+    }
+    &s[i..]
+}
+
+fn mode(cfg: &Map<String, Value>) -> &'static str {
+    if cfg.get("brain_mode").and_then(Value::as_str) == Some("oneshot") { "oneshot" } else { "session" }
 }
 
 /// Claude Code as the brain. Cheap to clone.
@@ -215,6 +236,9 @@ impl ClaudeBrain {
                 turn_no: AtomicU64::new(0),
                 req: AtomicU64::new(0),
                 idle: Mutex::new(None),
+                mcp: Mutex::new(None),
+                oneshot_kill: Mutex::new(None),
+                oneshot_pid: Mutex::new(None),
             }),
         }
     }
@@ -225,13 +249,20 @@ impl ClaudeBrain {
         *self.inner.interrupt_wait.lock().unwrap() = interrupt_wait;
     }
 
-    /// The Claude Code process is running.
+    /// A Claude Code process is running (the session's, or a one-shot request's).
     pub fn alive(&self) -> bool {
+        self.session_alive() || self.inner.oneshot_pid.lock().unwrap().is_some()
+    }
+
+    fn session_alive(&self) -> bool {
         self.inner.proc.lock().unwrap().as_mut().is_some_and(|p| matches!(p.child.try_wait(), Ok(None)))
     }
 
     pub fn pid(&self) -> Option<u32> {
-        if !self.alive() {
+        if let Some(p) = *self.inner.oneshot_pid.lock().unwrap() {
+            return Some(p);
+        }
+        if !self.session_alive() {
             return None;
         }
         self.inner.proc.lock().unwrap().as_ref().and_then(|p| p.child.id())
@@ -245,37 +276,165 @@ impl ClaudeBrain {
         Duration::from_secs_f64(cfg.get("brain_idle_min").and_then(Value::as_f64).unwrap_or(10.0).max(0.0) * 60.0)
     }
 
-    fn signature(cfg: &Map<String, Value>, claude: &Path, workspace: &Path) -> String {
-        json!([claude, cfg.get("model"), cfg.get("safe_tools"), workspace]).to_string()
+    fn signature(&self, cfg: &Map<String, Value>, claude: &Path) -> String {
+        json!([claude, cfg.get("model"), cfg.get("safe_tools"), self.inner.workspace, self.mcp(cfg).is_some()])
+            .to_string()
     }
 
-    fn args(cfg: &Map<String, Value>, session: Option<&str>) -> Vec<String> {
-        let tools: Vec<String> = cfg
+    /// The stick tools' `--mcp-config` file, when they're on (config `mcp_server`) and served.
+    fn mcp(&self, cfg: &Map<String, Value>) -> Option<PathBuf> {
+        if !cfg.get("mcp_server").and_then(Value::as_bool).unwrap_or(true) {
+            return None;
+        }
+        self.inner.mcp.lock().unwrap().as_ref().and_then(|f| f())
+    }
+
+    /// The stick tools (`--mcp-config`): `f` writes the config file and returns its path.
+    pub fn set_mcp(&self, f: impl Fn() -> Option<PathBuf> + Send + Sync + 'static) {
+        *self.inner.mcp.lock().unwrap() = Some(Box::new(f));
+    }
+
+    /// brain.py `_common_args`: stream-json out, the model, the stick tools, the safe tools.
+    fn common_args(&self, cfg: &Map<String, Value>) -> Vec<String> {
+        let mut tools: Vec<String> = cfg
             .get("safe_tools")
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
             .unwrap_or_default();
         let model = cfg.get("model").and_then(Value::as_str).filter(|m| !m.is_empty()).unwrap_or("sonnet");
-        let mut a: Vec<String> = [
-            "-p",
-            "--input-format",
-            "stream-json",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--include-partial-messages",
-            "--model",
-            model,
-            "--allowedTools",
-            &tools.join(","),
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+        let mut a: Vec<String> =
+            ["--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", model]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        if let Some(mcp) = self.mcp(cfg) {
+            // the feedback tools run without asking; open_url / open_app / quick_command change the
+            // Mac, so Claude Code asks (our hook -> A / B on the stick). --mcp-config takes several
+            // values, so an option must follow it.
+            a.extend(["--mcp-config".to_string(), mcp.display().to_string()]);
+            for t in crate::mcp::allowed_tool_names() {
+                if !tools.contains(&t) {
+                    tools.push(t);
+                }
+            }
+        }
+        a.extend(["--allowedTools".to_string(), tools.join(",")]);
+        a
+    }
+
+    fn args(&self, cfg: &Map<String, Value>, session: Option<&str>) -> Vec<String> {
+        let mut a: Vec<String> = ["-p", "--input-format", "stream-json"].iter().map(|s| s.to_string()).collect();
+        a.extend(self.common_args(cfg));
         if let Some(s) = session {
             a.extend(["--resume".to_string(), s.to_string()]); // same conversation after a restart
         }
         a
+    }
+
+    fn oneshot_args(&self, cfg: &Map<String, Value>, text: &str) -> Vec<String> {
+        let mut a = vec!["-p".to_string(), text.to_string()];
+        a.extend(self.common_args(cfg));
+        let follow = Duration::from_secs_f64(
+            cfg.get("followup_minutes").and_then(Value::as_f64).unwrap_or(10.0).max(0.0) * 60.0,
+        );
+        let recent = self.inner.last_at.lock().unwrap().is_some_and(|t| t.elapsed() < follow);
+        if let Some(s) = self.session().filter(|_| recent) {
+            a.extend(["--resume".to_string(), s]);
+        }
+        a
+    }
+
+    /// brain.py `_ask_oneshot`: `claude -p "<text>"` for this request only; `--resume` within the
+    /// follow-up time. Cancel kills it.
+    async fn ask_oneshot(
+        &self,
+        text: &str,
+        cfg: &Map<String, Value>,
+        claude: &Path,
+        turn: &mut Turn,
+        info: &mut Value,
+    ) -> (bool, String) {
+        let _ = std::fs::create_dir_all(&self.inner.workspace);
+        let md = self.inner.workspace.join("CLAUDE.md");
+        if !md.exists() {
+            let _ = std::fs::write(&md, CLAUDE_MD);
+        }
+        let args = self.oneshot_args(cfg, text);
+        log::info!(
+            "claude {}",
+            args.iter()
+                .map(|a| if a.contains(' ') { format!("{a:?}") } else { a.clone() })
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let t = Instant::now();
+        let mut child = match Command::new(claude)
+            .args(&args)
+            .current_dir(&self.inner.workspace)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => return (false, format!("Couldn't start Claude Code: {e}")),
+        };
+        info["spawn_ms"] = json!(t.elapsed().as_millis() as u64);
+        let (kill_tx, mut kill_rx) = tokio::sync::oneshot::channel::<()>();
+        *self.inner.oneshot_kill.lock().unwrap() = Some(kill_tx);
+        *self.inner.oneshot_pid.lock().unwrap() = child.id();
+        let mut err = child.stderr.take().expect("piped");
+        let stderr = tokio::spawn(async move {
+            let mut s = String::new();
+            let _ = tokio::io::AsyncReadExt::read_to_string(&mut err, &mut s).await;
+            s
+        });
+        let mut lines = BufReader::new(child.stdout.take().expect("piped")).lines();
+        let timeout = *self.inner.timeout.lock().unwrap();
+        let read = async {
+            loop {
+                tokio::select! {
+                    line = lines.next_line() => match line {
+                        Ok(Some(line)) => {
+                            if let Ok(ev) = serde_json::from_str::<Value>(&line)
+                                && turn.feed(&ev)
+                                && let Some(s) = turn.session.clone()
+                            {
+                                *self.inner.session.lock().unwrap() = Some(s);
+                            }
+                        }
+                        _ => return true,
+                    },
+                    _ = &mut kill_rx => return false,
+                }
+            }
+        };
+        let finished = tokio::time::timeout(timeout, read).await;
+        self.inner.oneshot_kill.lock().unwrap().take();
+        self.inner.oneshot_pid.lock().unwrap().take();
+        match finished {
+            Err(_) => {
+                let _ = child.kill().await;
+                return (false, "Took too long, stopped.".into());
+            }
+            Ok(false) => {
+                let _ = child.kill().await;
+                return (false, "Cancelled.".into());
+            }
+            Ok(true) => {
+                let _ = tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
+            }
+        }
+        match turn.result.clone() {
+            Some(r) => (turn.ok, plain(&r)),
+            None => {
+                let err = stderr.await.unwrap_or_default();
+                let err = err.trim();
+                log::error!("claude failed: {}", tail(err, 500));
+                (false, plain(err.lines().last().unwrap_or("Claude Code failed.")))
+            }
+        }
     }
 
     /// After the idle time a request starts a new conversation.
@@ -293,7 +452,7 @@ impl ClaudeBrain {
             let _ = std::fs::write(&md, CLAUDE_MD);
         }
         let session = self.session();
-        let args = Self::args(cfg, session.as_deref());
+        let args = self.args(cfg, session.as_deref());
         log::info!("claude session: {}", args.join(" "));
         let t = Instant::now();
         let mut child = Command::new(claude)
@@ -335,7 +494,7 @@ impl ClaudeBrain {
         });
         *self.inner.stdin.lock().await = child.stdin.take();
         *self.inner.events.lock().await = Some(rx);
-        let sig = Self::signature(cfg, claude, &self.inner.workspace);
+        let sig = self.signature(cfg, claude);
         *self.inner.proc.lock().unwrap() = Some(Proc { child, sig, stderr, stderr_done });
         Ok(t.elapsed().as_millis() as u64)
     }
@@ -408,8 +567,9 @@ impl ClaudeBrain {
         let cfg = (self.inner.cfg)();
         if cfg.get("brain").and_then(Value::as_str).is_some_and(|b| b != "claude")
             || !cfg.get("brain_prewarm").and_then(Value::as_bool).unwrap_or(true)
+            || mode(&cfg) == "oneshot"
             || self.inner.busy.load(Ordering::Relaxed)
-            || self.alive()
+            || self.session_alive()
         {
             return;
         }
@@ -431,8 +591,16 @@ impl ClaudeBrain {
             return (false, "Claude Code not found. Install it, or set its path in the dashboard.".into());
         };
         let mut turn = Turn::new(out);
-        let mut info = json!({"mode": "session", "warm": false, "spawn_ms": null});
-        let r = self.ask_session(&text, &cfg, &claude, &mut turn, &mut info).await;
+        let mode = mode(&cfg);
+        let mut info = json!({"mode": mode, "warm": false, "spawn_ms": null});
+        let r = if mode == "oneshot" {
+            if self.session_alive() {
+                self.stop().await; // switched from session mode
+            }
+            self.ask_oneshot(&text, &cfg, &claude, &mut turn, &mut info).await
+        } else {
+            self.ask_session(&text, &cfg, &claude, &mut turn, &mut info).await
+        };
         *self.inner.last_at.lock().unwrap() = Some(Instant::now());
         let cancelled = self.inner.cancelled.load(Ordering::Relaxed);
         let mut last = info;
@@ -449,14 +617,16 @@ impl ClaudeBrain {
             rec.push_back(last.clone());
         }
         log::info!(
-            "session{}: first token {}, total {:.1} s{}",
+            "{mode}{}: first token {}, total {:.1} s{}",
             if last["warm"] == true { " (warm)" } else { "" },
             turn.first_token.map(|d| format!("{:.2} s", d.as_secs_f64())).unwrap_or_else(|| "-".into()),
             turn.started.elapsed().as_secs_f64(),
             if cancelled { " (cancelled)" } else { "" }
         );
         *self.inner.last.lock().unwrap() = last;
-        self.arm_idle(&cfg);
+        if mode == "session" {
+            self.arm_idle(&cfg);
+        }
         r
     }
 
@@ -469,16 +639,16 @@ impl ClaudeBrain {
         info: &mut Value,
     ) -> (bool, String) {
         self.expire(cfg);
-        let sig = Self::signature(cfg, claude, &self.inner.workspace);
+        let sig = self.signature(cfg, claude);
         let changed = self.inner.proc.lock().unwrap().as_ref().is_some_and(|p| p.sig != sig);
         let fresh = self.inner.fresh.swap(false, Ordering::Relaxed);
-        if self.alive() && (fresh || changed) {
+        if self.session_alive() && (fresh || changed) {
             log::info!("claude session: {}, restarting it", if fresh { "new chat" } else { "settings changed" });
             self.stop().await;
         }
         let timeout = *self.inner.timeout.lock().unwrap();
         for attempt in 1..=2 {
-            let mut warm = self.alive();
+            let mut warm = self.session_alive();
             if warm && self.drain().await {
                 // it died while idle
                 self.kill().await;
@@ -532,7 +702,7 @@ impl ClaudeBrain {
                 }
                 err = buf.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n").trim().to_string();
             }
-            log::error!("claude session ended mid-request: {}", &err[err.len().saturating_sub(500)..]);
+            log::error!("claude session ended mid-request: {}", tail(&err, 500));
             if attempt == 1 && warm && turn.events == 0 {
                 log::info!("claude session: retrying in a new process (--resume)");
                 continue; // it had died while idle: start again (same conversation) and resend
@@ -568,6 +738,10 @@ impl Brain for ClaudeBrain {
             return;
         }
         self.inner.cancelled.store(true, Ordering::Relaxed);
+        if let Some(kill) = self.inner.oneshot_kill.lock().unwrap().take() {
+            let _ = kill.send(()); // one-shot: the process is the request
+            return;
+        }
         let me = self.clone();
         let turn = self.inner.turn_no.load(Ordering::Relaxed);
         let n = self.inner.req.fetch_add(1, Ordering::Relaxed) + 1;
@@ -582,7 +756,7 @@ impl Brain for ClaudeBrain {
                 return;
             }
             tokio::time::sleep(wait).await;
-            if me.busy() && me.inner.turn_no.load(Ordering::Relaxed) == turn && me.alive() {
+            if me.busy() && me.inner.turn_no.load(Ordering::Relaxed) == turn && me.session_alive() {
                 log::warn!("interrupt not answered in {} s: stopping Claude Code", wait.as_secs_f64());
                 me.kill().await; // the next request starts it again with --resume
             }
@@ -596,7 +770,7 @@ impl Brain for ClaudeBrain {
     fn forget(&self) {
         *self.inner.session.lock().unwrap() = None;
         self.inner.fresh.store(true, Ordering::Relaxed);
-        if !self.busy() && self.alive() {
+        if !self.busy() && self.session_alive() {
             let me = self.clone();
             tokio::spawn(async move { me.stop().await });
         }
@@ -610,18 +784,22 @@ impl Brain for ClaudeBrain {
     fn status(&self) -> Value {
         let cfg = (self.inner.cfg)();
         let rec = self.inner.recent.lock().unwrap();
-        let avg = |k: &str| {
-            let v: Vec<u64> = rec.iter().filter_map(|r| r[k].as_u64()).collect();
-            if v.is_empty() { Value::Null } else { json!(v.iter().sum::<u64>() / v.len() as u64) }
-        };
         let mut a = Map::new();
-        if !rec.is_empty() {
+        for m in ["session", "oneshot"] {
+            let rows: Vec<&Value> = rec.iter().filter(|r| r["mode"] == m).collect();
+            if rows.is_empty() {
+                continue;
+            }
+            let avg = |k: &str| {
+                let v: Vec<u64> = rows.iter().filter_map(|r| r[k].as_u64()).collect();
+                if v.is_empty() { Value::Null } else { json!(v.iter().sum::<u64>() / v.len() as u64) }
+            };
             a.insert(
-                "session".into(),
-                json!({"n": rec.len(), "first_token_ms": avg("first_token_ms"), "total_ms": avg("total_ms")}),
+                m.into(),
+                json!({"n": rows.len(), "first_token_ms": avg("first_token_ms"), "total_ms": avg("total_ms")}),
             );
         }
-        json!({"brain": cfg.get("brain").cloned().unwrap_or(json!("claude")), "mode": "session",
+        json!({"brain": cfg.get("brain").cloned().unwrap_or(json!("claude")), "mode": mode(&cfg),
                "alive": self.alive(), "session": self.session().is_some(),
                "last": self.inner.last.lock().unwrap().clone(), "avg": a})
     }
@@ -928,6 +1106,119 @@ mod tests {
         let a = ask(&f.brain, "slow").await;
         assert_eq!((a.ok, a.reply.as_str()), (false, "Took too long, stopped."));
         assert!(!f.brain.alive());
+    }
+
+    // --- test_brain.py (one-shot mode) ----------------------------------------------------------------
+
+    fn oneshot(name: &str, mode: &str) -> Fake {
+        let f = fake(name, &format!("FAKE_CLAUDE_MODE={mode}"));
+        f.set("brain_mode", json!("oneshot"));
+        f
+    }
+
+    #[tokio::test]
+    async fn oneshot_answer_progress_and_plain_text() {
+        let f = oneshot("os-answer", "answer");
+        let a = ask(&f.brain, "weather?").await;
+        assert!(a.ok);
+        assert_eq!(a.reply, "It's 28°C in Bengaluru."); // markdown and code blocks stripped
+        assert_eq!(a.progress, ["Running: df -h /", "Searching: weather bengaluru"]);
+        assert_eq!(f.brain.session().as_deref(), Some("sess-1"));
+        let args = &f.calls()[0];
+        assert_eq!(args[..2], ["-p", "weather?"]);
+        assert!(!args.contains(&"--resume".to_string()) && !args.contains(&"--input-format".to_string()));
+        assert_eq!(arg(args, "--model"), Some("sonnet"));
+        assert!(arg(args, "--allowedTools").unwrap().contains("WebSearch"));
+        assert!(args.contains(&"--include-partial-messages".to_string()));
+        let st = f.brain.status();
+        assert_eq!((st["mode"].as_str(), st["last"]["mode"].as_str()), (Some("oneshot"), Some("oneshot")));
+        assert!(st["last"]["first_token_ms"].is_u64());
+        assert_eq!(st["avg"]["oneshot"]["n"], 1);
+        assert!(!f.brain.alive() && !f.brain.busy());
+    }
+
+    #[tokio::test]
+    async fn oneshot_follow_up_resumes_the_session() {
+        let f = oneshot("os-follow", "answer");
+        ask(&f.brain, "weather?").await;
+        ask(&f.brain, "and tomorrow?").await;
+        assert_eq!(arg(&f.calls()[1], "--resume"), Some("sess-1"));
+        f.brain.forget();
+        ask(&f.brain, "weather?").await;
+        assert!(!f.calls()[2].contains(&"--resume".to_string()));
+        // after the follow-up time: a new conversation
+        f.set("followup_minutes", json!(0));
+        ask(&f.brain, "again?").await;
+        assert!(!f.calls()[3].contains(&"--resume".to_string()));
+    }
+
+    #[tokio::test]
+    async fn oneshot_denied_error_and_crash() {
+        let f = oneshot("os-denied", "denied");
+        assert_eq!(ask(&f.brain, "x").await.reply, "Not allowed: Running: rm -rf build/");
+        let f = oneshot("os-error", "error");
+        let a = ask(&f.brain, "x").await;
+        assert_eq!((a.ok, a.reply.as_str()), (false, "Rate limited"));
+        let f = oneshot("os-crash", "crash");
+        let a = ask(&f.brain, "x").await;
+        assert!(!a.ok && a.reply.contains("not logged in"), "{}", a.reply);
+    }
+
+    #[tokio::test]
+    async fn oneshot_timeout_and_cancel() {
+        let f = oneshot("os-slow", "slow");
+        f.brain.set_timings(Duration::from_millis(500), INTERRUPT_WAIT);
+        let a = ask(&f.brain, "x").await;
+        assert_eq!((a.ok, a.reply.as_str()), (false, "Took too long, stopped."));
+        f.brain.set_timings(TIMEOUT, INTERRUPT_WAIT);
+        let b = f.brain.clone();
+        let task = tokio::spawn(async move { ask(&b, "long job").await });
+        until(|| f.brain.alive()).await;
+        assert!(f.brain.busy() && f.brain.pid().is_some());
+        f.brain.cancel();
+        let a = tokio::time::timeout(Duration::from_secs(5), task).await.unwrap().unwrap();
+        assert!(!a.ok && f.brain.cancelled() && !f.brain.busy() && !f.brain.alive());
+    }
+
+    #[tokio::test]
+    async fn switching_to_oneshot_stops_the_session_and_skips_prewarm() {
+        let f = fake("os-switch", "");
+        assert!(ask(&f.brain, "hi").await.ok);
+        assert!(f.brain.alive());
+        f.set("brain_mode", json!("oneshot"));
+        let a = ask(&f.brain, "hi").await;
+        assert!(a.ok, "{}", a.reply);
+        assert!(!f.brain.alive());
+        assert_eq!(f.calls()[1][..2], ["-p", "hi"]);
+        f.brain.prewarm_now().await;
+        assert!(!f.brain.alive() && f.calls().len() == 2);
+    }
+
+    #[tokio::test]
+    async fn the_stick_tools_are_given_to_both_modes() {
+        let f = fake("os-mcp", "FAKE_CLAUDE_MODE=answer");
+        let file = f.dir.join("mcp-voice.json");
+        let f2 = file.clone();
+        f.brain.set_mcp(move || Some(f2.clone()));
+        ask(&f.brain, "hi").await;
+        let args = &f.calls()[0];
+        assert_eq!(arg(args, "--mcp-config"), Some(file.to_str().unwrap()));
+        let allowed = arg(args, "--allowedTools").unwrap();
+        assert!(allowed.contains("mcp__stick__notify") && allowed.contains("WebSearch"));
+        assert!(!allowed.contains("mcp__stick__open_url"));
+        // off in Settings: neither the config nor the tools; the session restarts for it
+        f.set("mcp_server", json!(false));
+        f.set("brain_mode", json!("oneshot"));
+        ask(&f.brain, "hi").await;
+        let args = &f.calls()[1];
+        assert!(arg(args, "--mcp-config").is_none());
+        assert!(!arg(args, "--allowedTools").unwrap().contains("mcp__"));
+    }
+
+    #[test]
+    fn tail_keeps_whole_characters() {
+        assert_eq!(tail("héllo", 4), "llo");
+        assert_eq!(tail("ab", 10), "ab");
     }
 
     #[tokio::test]
