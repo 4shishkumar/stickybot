@@ -14,12 +14,15 @@ use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 const WINDOW: &str = "dashboard";
 
-fn label(state: LinkState, stick: Option<&str>) -> String {
+fn label(state: LinkState, stick: Option<&str>, reason: Option<&str>) -> String {
     let name = stick.unwrap_or("stick");
     match state {
         LinkState::Starting => "Starting…".into(),
         LinkState::NoStick => "No stick picked yet".into(),
-        LinkState::Searching => format!("Looking for {name}…"),
+        LinkState::Searching => match reason {
+            Some(why) => format!("{name}: {why}"),
+            None => format!("Looking for {name}…"),
+        },
         LinkState::Connected => format!("{name}: connected"),
         LinkState::Paused => "Paused".into(),
     }
@@ -94,14 +97,17 @@ fn main() {
 
             // keep the status line and the tooltip in step with the link
             let mut w = state.link.watch_state();
+            let mut why = state.link.watch_reason();
             tauri::async_runtime::spawn(async move {
                 loop {
                     let s = *w.borrow_and_update();
-                    let text = label(s, state.stick().as_ref().map(|t| t.name.as_str()));
+                    let reason = why.borrow_and_update().clone();
+                    let text = label(s, state.stick().as_ref().map(|t| t.name.as_str()), reason.as_deref());
                     let _ = status.set_text(&text);
                     let _ = tray.set_tooltip(Some(format!("StickyBot (Rust) — {text}")));
-                    if w.changed().await.is_err() {
-                        break;
+                    tokio::select! {
+                        r = w.changed() => if r.is_err() { break; },
+                        r = why.changed() => if r.is_err() { break; },
                     }
                 }
             });
@@ -125,8 +131,12 @@ mod tests {
 
     #[test]
     fn menu_labels() {
-        assert_eq!(label(LinkState::Connected, Some("Arbaaz")), "Arbaaz: connected");
-        assert_eq!(label(LinkState::Searching, None), "Looking for stick…");
-        assert_eq!(label(LinkState::NoStick, Some("x")), "No stick picked yet");
+        assert_eq!(label(LinkState::Connected, Some("Arbaaz"), None), "Arbaaz: connected");
+        assert_eq!(label(LinkState::Searching, None, None), "Looking for stick…");
+        assert_eq!(
+            label(LinkState::Searching, Some("Arbaaz"), Some(stick_link::NOT_FOUND_REASON)),
+            "Arbaaz: stick not found — is it awake?"
+        );
+        assert_eq!(label(LinkState::NoStick, Some("x"), None), "No stick picked yet");
     }
 }

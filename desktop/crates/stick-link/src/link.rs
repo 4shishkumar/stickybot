@@ -75,7 +75,13 @@ struct Inner<C: Connector> {
     hello_extra: Mutex<Option<HelloExtra>>,
     gate: Mutex<Option<Gate>>,
     held_back: Mutex<Option<String>>,
+    /// why the link is searching and not connected, for the status line (the gate's answer or
+    /// "stick not found"); `None` when there's nothing to say
+    reason: watch::Sender<Option<String>>,
 }
+
+/// The status line while the picked stick doesn't answer a connect (asleep, out of range, off).
+pub const NOT_FOUND_REASON: &str = "stick not found — is it awake?";
 
 /// The link. Cheap to clone; every clone is the same link.
 pub struct Link<C: Connector> {
@@ -112,6 +118,7 @@ impl<C: Connector> Link<C> {
                 hello_extra: Mutex::new(None),
                 gate: Mutex::new(None),
                 held_back: Mutex::new(None),
+                reason: watch::channel(None).0,
             }),
         }
     }
@@ -158,6 +165,24 @@ impl<C: Connector> Link<C> {
     /// Why the link isn't connecting right now (the gate's answer), if it's held back.
     pub fn held_back(&self) -> Option<String> {
         self.inner.held_back.lock().unwrap().clone()
+    }
+
+    /// Why the link is searching without connecting: the gate's answer, or [`NOT_FOUND_REASON`]
+    /// while connect attempts keep finding no stick. `None` otherwise.
+    pub fn reason(&self) -> Option<String> {
+        self.inner.reason.borrow().clone()
+    }
+
+    pub fn watch_reason(&self) -> watch::Receiver<Option<String>> {
+        self.inner.reason.subscribe()
+    }
+
+    fn set_reason(&self, why: Option<String>) {
+        self.inner.reason.send_if_modified(|cur| {
+            let changed = *cur != why;
+            *cur = why;
+            changed
+        });
     }
 
     pub fn state(&self) -> LinkState {
@@ -241,6 +266,7 @@ impl<C: Connector> Link<C> {
 
     async fn run(self) {
         let mut ctl = self.inner.ctl.subscribe();
+        let mut not_found = false; // in a streak of "not found" (logged once per streak)
         loop {
             let c = ctl.borrow_and_update().clone();
             let target = match (&c.target, c.paused) {
@@ -255,6 +281,8 @@ impl<C: Connector> Link<C> {
                 (Some(t), false) => Some(t.clone()),
             };
             let Some(target) = target else {
+                not_found = false;
+                self.set_reason(None);
                 if ctl.changed().await.is_err() {
                     return;
                 }
@@ -272,6 +300,8 @@ impl<C: Connector> Link<C> {
             }
             *self.inner.held_back.lock().unwrap() = why.clone();
             if why.is_some() {
+                not_found = false;
+                self.set_reason(why.clone());
                 tokio::select! {
                     _ = tokio::time::sleep(self.inner.opts.retry_after) => {}
                     r = ctl.changed() => if r.is_err() { return; }
@@ -285,8 +315,16 @@ impl<C: Connector> Link<C> {
             match attempt {
                 None => continue,
                 Some(Err(e)) => {
-                    if !e.not_found {
+                    if e.not_found {
+                        if !not_found {
+                            log::info!("{NOT_FOUND_REASON} ({}; still looking)", e.message);
+                        }
+                        not_found = true;
+                        self.set_reason(Some(NOT_FOUND_REASON.into()));
+                    } else {
                         log::info!("link: {e}");
+                        not_found = false;
+                        self.set_reason(None);
                     }
                     tokio::select! {
                         _ = tokio::time::sleep(self.inner.opts.retry_after) => {}
@@ -294,6 +332,11 @@ impl<C: Connector> Link<C> {
                     }
                 }
                 Some(Ok((conn, rx))) => {
+                    if not_found {
+                        log::info!("found the stick again");
+                    }
+                    not_found = false;
+                    self.set_reason(None);
                     log::info!("connected to {} (MTU {})", target.name, conn.mtu());
                     self.serve(Arc::new(conn), rx, &target, &mut ctl).await;
                     if !self.paused() {
@@ -548,8 +591,10 @@ mod tests {
         wait_for(&link, LinkState::Searching).await;
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert!(fake.connect_attempts() >= 3);
+        assert_eq!(link.reason().as_deref(), Some(NOT_FOUND_REASON));
         fake.set_absent(false);
         wait_for(&link, LinkState::Connected).await;
+        assert_eq!(link.reason(), None);
     }
 
     #[tokio::test(start_paused = true)]
@@ -615,6 +660,7 @@ mod tests {
         assert_eq!(fake.connect_attempts(), 0);
         assert_eq!(link.state(), LinkState::Searching);
         assert_eq!(link.held_back().as_deref(), Some("the Python agent holds the stick"));
+        assert_eq!(link.reason().as_deref(), Some("the Python agent holds the stick"));
         busy.store(false, Ordering::Relaxed);
         wait_for(&link, LinkState::Connected).await;
         assert_eq!(link.held_back(), None);

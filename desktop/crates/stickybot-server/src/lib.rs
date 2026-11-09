@@ -94,16 +94,22 @@ impl AppState {
         }
     }
 
+    /// The status line under the pill: why the link waits / searches, else what this app is.
+    pub fn detail(&self) -> String {
+        match (self.fake, self.link.held_back(), self.link.reason()) {
+            (true, _, _) => "Rust preview with a fake stick".to_string(),
+            (false, Some(why), _) => format!("Waiting: {why}"),
+            (false, None, Some(why)) => format!("Searching: {why}"),
+            (false, None, None) => "Rust preview: Bluetooth link + Stick page".to_string(),
+        }
+    }
+
     /// `GET /api/status`: the Python shape, with what isn't ported left empty (the pages cope).
     pub fn status(&self) -> Value {
         let cfg = self.cfg.lock().unwrap();
         json!({
             "state": self.agent_state(),
-            "detail": match (self.fake, self.link.held_back()) {
-                (true, _) => "Rust preview with a fake stick".to_string(),
-                (false, Some(why)) => format!("Waiting: {why}"),
-                (false, None) => "Rust preview: Bluetooth link + Stick page".to_string(),
-            },
+            "detail": self.detail(),
             "held_back": self.link.held_back(),
             "link": self.link.state().as_str(),
             "stick": cfg.get("stick").cloned().unwrap_or(Value::Null),
@@ -183,15 +189,22 @@ pub async fn start(opts: Options) -> Result<Running, String> {
 /// Link changes become `link` + `state` events (the pill, Overview), like core.py `_on_link`.
 fn spawn_link_watcher(state: Arc<AppState>) {
     let mut w = state.link.watch_state();
+    let mut why = state.link.watch_reason();
     let mut msgs = state.link.messages();
     let st = state.clone();
     tokio::spawn(async move {
+        let mut last = None;
         loop {
             let s = *w.borrow_and_update();
-            st.hub.emit("link", json!({"state": s.as_str()}));
-            st.hub.emit("state", json!({"state": st.agent_state(), "detail": ""}));
-            if w.changed().await.is_err() {
-                return;
+            why.borrow_and_update();
+            if last != Some(s) {
+                st.hub.emit("link", json!({"state": s.as_str()}));
+                last = Some(s);
+            }
+            st.hub.emit("state", json!({"state": st.agent_state(), "detail": st.detail()}));
+            tokio::select! {
+                r = w.changed() => if r.is_err() { return; },
+                r = why.changed() => if r.is_err() { return; },
             }
         }
     });
