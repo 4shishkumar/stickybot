@@ -6,6 +6,7 @@
 
 pub mod api;
 pub mod approvals;
+pub mod brain;
 pub mod clips;
 pub mod commands;
 pub mod config;
@@ -313,6 +314,10 @@ pub async fn start(opts: Options) -> Result<Running, String> {
         .await
         .map_err(|e| format!("can't listen on 127.0.0.1:{}: {e}", opts.port))?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
+    let weak = Arc::downgrade(&state);
+    let cfg: brain::Config =
+        Arc::new(move || weak.upgrade().map(|s| s.cfg.lock().unwrap().clone()).unwrap_or_else(config::defaults));
+    state.set_brain(Arc::new(brain::ClaudeBrain::new(cfg, state.paths.home.join("workspace"))));
     spawn_link_watcher(state.clone());
     talk::spawn(state.clone());
     if std::env::var("STICKYBOT_RS_NO_STT").as_deref() != Ok("1") {
@@ -348,6 +353,9 @@ fn spawn_link_watcher(state: Arc<AppState>) {
             why.borrow_and_update();
             if last != Some(s) {
                 st.hub.emit("link", json!({"state": s.as_str()}));
+                if s == LinkState::Connected {
+                    st.brain().prewarm(); // Claude Code ready before the first request (if picked)
+                }
                 last = Some(s);
             }
             st.hub.emit("state", json!({"state": st.agent_state(), "detail": st.detail()}));

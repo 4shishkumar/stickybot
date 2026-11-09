@@ -95,6 +95,8 @@ pub trait Brain: Send + Sync {
     fn cancelled(&self) -> bool;
     /// The next request starts a new conversation.
     fn forget(&self);
+    /// Gets ready before the first request (the stick connected).
+    fn prewarm(&self) {}
     fn status(&self) -> Value {
         Value::Null
     }

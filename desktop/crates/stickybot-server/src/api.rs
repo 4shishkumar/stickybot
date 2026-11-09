@@ -53,6 +53,7 @@ pub const PORTED: &[&str] = &[
     "POST /api/clips/play",
     "POST /api/permission",
     "POST /api/permission/decide",
+    "POST /api/new-chat",
     "GET /api/firmware",
     "POST /api/firmware/ota",
     "GET /api/firmware/jobs/{id}",
@@ -86,7 +87,6 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
     ("/api/update/*", "updates (agent / firmware)"),
     ("GET /api/components", "installer components"),
     ("/api/components/*", "installer components"),
-    ("POST /api/new-chat", "brain conversation"),
     ("POST /api/restart", "restart the agent"),
     ("POST /api/window", "show the window at a page"),
 ];
@@ -110,6 +110,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/commands/test", post(test_command))
         .route("/api/speech", get(speech_status))
         .route("/api/speech/retry", post(speech_retry))
+        .route("/api/new-chat", post(new_chat))
         .route("/api/permission", post(permission))
         .route("/api/permission/decide", post(permission_decide))
         .route("/api/clips", get(clip_list))
@@ -365,6 +366,13 @@ async fn speech_retry(State(st): State<Arc<AppState>>) -> Response {
         }
         _ => err(StatusCode::CONFLICT, "the speech model is already loading or ready"),
     }
+}
+
+/// The next request starts a new conversation.
+async fn new_chat(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    st.brain().forget();
+    st.hub.emit("info", json!({"text": "Next request starts a new conversation"}));
+    axum::Json(json!({"ok": true}))
 }
 
 /// Long-poll from the Claude Code hook: waits for A / B on the stick or the dashboard.
