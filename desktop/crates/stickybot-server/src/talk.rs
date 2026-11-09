@@ -249,6 +249,15 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
 }
 
 fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<Recording>) {
+    let evt = msg.get("evt").and_then(Value::as_str);
+    let from_agent = msg.get("src").and_then(Value::as_str) == Some("agent");
+    if msg.get("cmd").and_then(Value::as_str) == Some("permission")
+        || (from_agent
+            && (matches!(evt, Some("talk" | "cancel"))
+                || (evt == Some("wispr") && msg.get("state").and_then(Value::as_str) != Some("stop"))))
+    {
+        st.pressed(); // a button press or a gesture (for stick_status)
+    }
     if msg.get("cmd").and_then(Value::as_str) == Some("permission") {
         // A / B on an approval prompt
         let (id, decision) = (msg.get("id").and_then(Value::as_str), msg.get("decision").and_then(Value::as_str));
@@ -262,6 +271,7 @@ fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<Recording>) {
     }
     match (msg.get("evt").and_then(Value::as_str), msg.get("state").and_then(Value::as_str)) {
         (Some("talk"), Some("start")) => {
+            crate::speak::stop(st); // talking again interrupts a reply being read out
             *rec = Some(Recording::new());
             st.set_activity("listening", "");
         }
@@ -273,6 +283,7 @@ fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<Recording>) {
         (Some("cancel"), _) => {
             log::info!("cancelled on the stick");
             st.brain().cancel();
+            crate::speak::stop(st);
             st.set_idle();
         }
         _ => {}
@@ -364,6 +375,7 @@ pub async fn handle_text(st: Arc<AppState>, text: String, source: &str) {
             tell_stick(&st, "done", &text, &result).await;
             st.history(&with(json!({"via": "quick", "command": cmd.get("name"), "reply": result})));
             st.set_idle();
+            crate::speak::speak(&st, &result, true, false);
             return;
         }
     }
@@ -382,12 +394,18 @@ pub async fn handle_text(st: Arc<AppState>, text: String, source: &str) {
         (live, Duration::from_secs_f64((ms / 1000.0).max(0.1)))
     };
     let stream = StickStream::new(st.clone(), text.clone(), interval);
+    // speech sentence by sentence as the answer is written (speak.rs)
+    let speech_cap = crate::speak::stream_speech(&st.cfg.lock().unwrap());
+    let utter = speech_cap.map(|n| crate::speak::start(&st, Some(n)));
+    let sentences = Arc::new(std::sync::Mutex::new(crate::speak::Sentences::default()));
+    let (utter_ref, sentences_ref) = (utter.clone(), sentences.clone());
     let (etx, mut erx) = mpsc::unbounded_channel();
     let mut ask = brain.ask(text.clone(), etx);
     let (st2, stream_ref) = (st.clone(), &stream);
     let on_event = move |ev: BrainEvent| {
         let st = st2.clone();
         let stream = stream_ref;
+        let (utter, sentences) = (utter_ref.clone(), sentences_ref.clone());
         async move {
             match ev {
                 BrainEvent::Progress(line) => {
@@ -396,6 +414,12 @@ pub async fn handle_text(st: Arc<AppState>, text: String, source: &str) {
                     stream.send_now(line).await;
                 }
                 BrainEvent::Text(answer) => {
+                    if let Some(u) = &utter {
+                        let done = sentences.lock().unwrap().feed(&answer);
+                        for s in done {
+                            u.add(&s);
+                        }
+                    }
                     let shown = plain(&answer);
                     if live && !shown.is_empty() {
                         stream.push(shown);
@@ -417,6 +441,9 @@ pub async fn handle_text(st: Arc<AppState>, text: String, source: &str) {
     let sent = stream.close().await;
     if brain.cancelled() {
         // dismissed on the stick: say nothing more
+        if let Some(u) = &utter {
+            u.cancel();
+        }
         st.history(&with(json!({"via": "claude", "ok": false, "reply": "(cancelled)"})));
         return;
     }
@@ -430,6 +457,26 @@ pub async fn handle_text(st: Arc<AppState>, text: String, source: &str) {
     tell_stick(&st, if ok { "done" } else { "error" }, &text, &reply).await;
     st.history(&with(json!({"via": "claude", "ok": ok, "reply": reply})));
     st.set_idle();
+    let started_speech = !sentences.lock().unwrap().text.is_empty();
+    match utter {
+        Some(u) if ok && started_speech && !u.cancelled() => {
+            let rest = sentences.lock().unwrap().finish();
+            for s in rest {
+                u.add(&s);
+            }
+            u.close();
+            let spoken = u.spoken();
+            if !spoken.is_empty() {
+                st.hub.emit("spoken", json!({"text": spoken.join(" ")}));
+            }
+        }
+        u => {
+            if let Some(u) = u {
+                u.cancel();
+            }
+            crate::speak::speak(&st, &reply, false, false);
+        }
+    }
 }
 
 #[cfg(test)]

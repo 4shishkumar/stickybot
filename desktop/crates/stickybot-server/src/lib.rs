@@ -15,6 +15,7 @@ pub mod hub;
 pub mod mcp;
 pub mod migrate;
 pub mod python_agent;
+pub mod speak;
 pub mod speech;
 pub mod talk;
 pub mod wmic;
@@ -92,6 +93,14 @@ pub struct AppState {
     pub wmic: wmic::WirelessMic,
     /// the Python app's folder (read-only; see `migrate.rs`)
     pub import_from: Option<PathBuf>,
+    /// reading replies aloud
+    pub speaker: speak::Speaker,
+    /// the stick tools (MCP): rate limit, calls
+    pub mcp: mcp::McpState,
+    /// runs `claude mcp …` for terminal sessions (tests swap it)
+    pub claude_runner: Mutex<mcp::ClaudeRunner>,
+    /// when a button was last pressed on the stick (`hub::now()` seconds)
+    last_input: Mutex<Option<f64>>,
     me: OnceLock<Weak<AppState>>,
 }
 
@@ -134,6 +143,10 @@ impl AppState {
             ota_timings: Mutex::new(firmware::UpdateTimings::default()),
             wmic: wmic::WirelessMic::new(),
             import_from: opts.import_from.clone(),
+            speaker: speak::Speaker::default(),
+            mcp: mcp::McpState::default(),
+            claude_runner: Mutex::new(mcp::system_claude_runner()),
+            last_input: Mutex::new(None),
             me: OnceLock::new(),
         });
         let _ = st.me.set(Arc::downgrade(&st));
@@ -284,8 +297,8 @@ impl AppState {
             "mtu": self.link.mtu(),
             "stats": Value::Object(self.stats.lock().unwrap().clone()),
             "prompts": self.approvals.list(),
-            "asks": [],
-            "mcp": false,
+            "asks": self.approvals.asks(),
+            "mcp": cfg.get("mcp_server").cloned().unwrap_or(json!(true)),
             "model": cfg.get("model").cloned().unwrap_or(Value::Null),
             "weather": null,
             "github": null,
@@ -295,6 +308,15 @@ impl AppState {
             "brain": brain_status,
             "app": {"name": "StickyBot (Rust)", "window": true, "rust": true, "fake_stick": self.fake},
         })
+    }
+
+    /// A button press or a gesture on the stick (for the stick tools' `stick_status`).
+    pub fn pressed(&self) {
+        *self.last_input.lock().unwrap() = Some(hub::now());
+    }
+
+    pub fn last_input(&self) -> Option<f64> {
+        *self.last_input.lock().unwrap()
     }
 
     /// Takes over the Python app's settings (see `migrate.rs`) and applies them to the running app.
@@ -374,7 +396,10 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     let weak = Arc::downgrade(&state);
     let cfg: brain::Config =
         Arc::new(move || weak.upgrade().map(|s| s.cfg.lock().unwrap().clone()).unwrap_or_else(config::defaults));
-    state.set_brain(Arc::new(brain::ClaudeBrain::new(cfg, state.paths.home.join("workspace"))));
+    let claude = brain::ClaudeBrain::new(cfg, state.paths.home.join("workspace"));
+    let (home, port, token) = (state.paths.home.clone(), addr.port(), state.token.clone());
+    claude.set_mcp(move || mcp::brain_config(&home, port, &token));
+    state.set_brain(Arc::new(claude));
     spawn_link_watcher(state.clone());
     talk::spawn(state.clone());
     wmic::spawn(state.clone());

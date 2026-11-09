@@ -402,6 +402,17 @@ fn handle(s: &mut State, msg: &Value) {
     if msg.get("wmic").is_some() {
         return;
     }
+    if msg.get("cmd").and_then(Value::as_str) == Some("status") {
+        // the Hardware Buddy status (PROTOCOL.md: the stick tools' stick_status)
+        let name = s.stick["name"].clone();
+        let (pct, usb) = (s.stick["battery"].clone(), s.stick["charging"].clone());
+        emit(
+            s,
+            &json!({"ack": "status", "ok": true, "data": {"name": name, "sec": true,
+                    "bat": {"pct": pct, "mV": 4000, "usb": usb}, "sys": {"up": 3600, "heap": 120000}}}),
+        );
+        return;
+    }
     if msg.get("src").and_then(Value::as_str) == Some("agent")
         && let Some(state) = msg.get("state").and_then(Value::as_str)
     {

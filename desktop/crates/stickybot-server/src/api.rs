@@ -63,6 +63,12 @@ pub const PORTED: &[&str] = &[
     "GET /api/import",
     "POST /api/import",
     "GET /static-rs/*",
+    "POST /mcp",
+    "GET /api/mcp",
+    "POST /api/mcp/terminal/{action}",
+    "POST /api/mcp/answer",
+    "GET /api/voices",
+    "POST /api/voice/test",
 ];
 
 /// The Python agent's endpoints that aren't here yet, by the phase that brings them.
@@ -74,16 +80,10 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
     ("GET /api/install", "setup page (#install)"),
     ("/api/install/*", "setup page steps and jobs"),
     ("GET /api/logs", "log viewer (Logs)"),
-    ("GET /api/voices", "macOS voices (say)"),
-    ("POST /api/voice/test", "speech"),
     ("POST /api/events/test", "stick events"),
     ("GET /api/events/history", "stick events"),
     ("GET /api/events/kinds", "stick events"),
     ("POST /api/claude-event", "Claude Code Stop hook"),
-    ("GET /api/mcp", "stick tools (MCP)"),
-    ("POST /mcp", "stick tools (MCP server)"),
-    ("POST /api/mcp/terminal/{action}", "stick tools (MCP)"),
-    ("POST /api/mcp/answer", "stick tools (MCP)"),
     ("GET /api/brain", "brains (Claude Code / OpenRouter)"),
     ("/api/brain/*", "brains (OpenRouter key, models, test)"),
     ("GET /api/update", "update check (releases)"),
@@ -125,6 +125,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/wireless-mic/show", post(wireless_mic_show))
         .route("/api/wireless-mic/check", post(wireless_mic_check))
         .route("/api/import", get(import_info).post(import_run))
+        .route("/mcp", post(mcp_post).get(mcp_405).delete(mcp_405))
+        .route("/api/mcp", get(mcp_status))
+        .route("/api/mcp/terminal/{action}", post(mcp_terminal))
+        .route("/api/mcp/answer", post(mcp_answer))
+        .route("/api/voices", get(voices))
+        .route("/api/voice/test", post(voice_test))
         .route("/static-rs/{*path}", get(rust_static))
         .fallback(not_ported)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
@@ -144,9 +150,12 @@ async fn guard(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Res
     if host != format!("localhost:{}", st.port) && host != format!("127.0.0.1:{}", st.port) {
         return err(StatusCode::FORBIDDEN, "bad host");
     }
-    if req.method() != Method::GET && req.method() != Method::HEAD {
-        let tok = req.headers().get("x-stick-token").map(|v| v.as_bytes()).unwrap_or(b"");
-        if !same(tok, st.token.as_bytes()) {
+    let mcp = req.uri().path() == "/mcp"; // every method; MCP clients send the token as a bearer token
+    if mcp || (req.method() != Method::GET && req.method() != Method::HEAD) {
+        let h = |k: &str| req.headers().get(k).map(|v| v.as_bytes()).unwrap_or(b"");
+        let bearer = h("authorization").strip_prefix(b"Bearer ").unwrap_or(b"");
+        let ok = same(h("x-stick-token"), st.token.as_bytes()) || (mcp && same(bearer, st.token.as_bytes()));
+        if !ok {
             return err(StatusCode::FORBIDDEN, "bad token");
         }
     }
@@ -180,6 +189,85 @@ async fn rust_static(Path(path): Path<String>) -> Response {
         Some((_, mime, body)) => ([(header::CONTENT_TYPE, *mime)], *body).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+async fn mcp_post(State(st): State<Arc<AppState>>, headers: axum::http::HeaderMap, body: Bytes) -> Response {
+    crate::mcp::post(st, headers, &body).await
+}
+
+async fn mcp_405() -> Response {
+    (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "POST")]).into_response()
+}
+
+/// The server switch, recent use, and whether terminal Claude Code sessions have the tools.
+async fn mcp_status(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    let cfg = st.cfg.lock().unwrap().clone();
+    let claude = crate::brain::claude_path(&cfg);
+    let run = st.claude_runner.lock().unwrap().clone();
+    let (port, token) = (st.port, st.token.clone());
+    let terminal =
+        tokio::task::spawn_blocking(move || crate::mcp::terminal_status(claude.as_deref(), port, &token, &run))
+            .await
+            .unwrap_or(Value::Null);
+    let tools: Vec<Value> = crate::mcp::tools()
+        .iter()
+        .map(|t| {
+            json!({"name": t["name"], "title": t["title"],
+                   "approval": crate::mcp::MAC_TOOLS.contains(&t["name"].as_str().unwrap_or(""))})
+        })
+        .collect();
+    axum::Json(json!({"enabled": cfg.get("mcp_server").and_then(Value::as_bool).unwrap_or(true),
+                      "url": crate::mcp::url(st.port), "terminal": terminal,
+                      "calls": *st.mcp.calls.lock().unwrap(), "last_call": st.mcp.last_call.lock().unwrap().clone(),
+                      "tools": tools}))
+}
+
+/// `claude mcp add|remove` for terminal sessions; the page shows the command first, the request
+/// must say `{"confirm": true}`.
+async fn mcp_terminal(State(st): State<Arc<AppState>>, Path(action): Path<String>, body: Bytes) -> Response {
+    if action != "install" && action != "uninstall" {
+        return err(StatusCode::NOT_FOUND, "install or uninstall");
+    }
+    if body_obj(&body).get("confirm") != Some(&json!(true)) {
+        return err(StatusCode::BAD_REQUEST, "needs {\"confirm\": true}");
+    }
+    let claude = crate::brain::claude_path(&st.cfg.lock().unwrap());
+    let run = st.claude_runner.lock().unwrap().clone();
+    let (port, token) = (st.port, st.token.clone());
+    let (ok, msg, ran) =
+        tokio::task::spawn_blocking(move || crate::mcp::terminal(&action, claude.as_deref(), port, &token, &run))
+            .await
+            .unwrap_or((false, "failed".into(), Vec::new()));
+    log::info!("mcp for terminal sessions: {msg}");
+    let status = if ok { StatusCode::OK } else { StatusCode::INTERNAL_SERVER_ERROR };
+    (status, axum::Json(json!({"ok": ok, "message": msg, "ran": ran}))).into_response()
+}
+
+/// A question from a Claude session answered on the dashboard: `{"id", "choice": 0 | 1 | null}`.
+async fn mcp_answer(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    let b = body_obj(&body);
+    let id = b.get("id").and_then(Value::as_str).unwrap_or("");
+    let decision = match b.get("choice").and_then(Value::as_i64) {
+        Some(0) => "once",
+        Some(1) => "deny",
+        _ => "dismiss",
+    };
+    let ok = st.approvals.answer(id, decision, "dashboard");
+    (if ok { StatusCode::OK } else { StatusCode::NOT_FOUND }, axum::Json(json!({"ok": ok}))).into_response()
+}
+
+/// Installed macOS voices `[{name, lang}]` (`say -v ?`).
+async fn voices() -> axum::Json<Value> {
+    let out = tokio::process::Command::new("say").args(["-v", "?"]).output().await;
+    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    axum::Json(Value::Array(crate::speak::parse_voices(&text)))
+}
+
+async fn voice_test(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<Value> {
+    let b = body_obj(&body);
+    let text = b.get("text").and_then(Value::as_str).filter(|t| !t.is_empty());
+    crate::speak::speak(&st, text.unwrap_or("It's 28 degrees in Bangalore with light rain."), false, true);
+    axum::Json(json!({"ok": true}))
 }
 
 /// Is there a Python app to import from, and the last import.
