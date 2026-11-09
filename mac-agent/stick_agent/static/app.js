@@ -6,6 +6,7 @@ import * as activity from "./pages/activity.js";
 import * as commands from "./pages/commands.js";
 import * as stick from "./pages/stick.js";
 import * as sounds from "./pages/sounds.js";
+import * as remote from "./pages/remote.js";
 import * as events from "./pages/events.js";
 import * as settings from "./pages/settings.js";
 import * as logs from "./pages/logs.js";
@@ -18,6 +19,7 @@ const ICON = {
   activity: '<path d="M4 5h16v10H9l-5 4z"/>',
   commands: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>',
   stick: '<rect x="7" y="2.5" width="10" height="19" rx="3"/><path d="M10 9.5v1.5M14 9.5v1.5M10.5 17.5h3"/>',
+  remote: '<rect x="7" y="2.5" width="10" height="19" rx="3"/><circle cx="12" cy="7.5" r="1.6"/><path d="M10 12.5h4M10 15.5h4"/><path d="M9 1.5a5 5 0 0 1 6 0"/>',
   sounds: '<path d="M4 9.5h3l5-4v13l-5-4H4z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"/>',
   events: '<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
@@ -28,6 +30,7 @@ const PAGES = [
   ["activity", "Activity", activity],
   ["commands", "Quick commands", commands],
   ["stick", "Stick", stick],
+  ["remote", "Remote", remote],
   ["sounds", "Sounds", sounds],
   ["events", "Events", events],
   ["settings", "Settings", settings],

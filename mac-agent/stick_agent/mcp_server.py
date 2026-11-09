@@ -169,9 +169,27 @@ TOOLS = [
      "inputSchema": {"type": "object", "additionalProperties": False, "required": ["text"], "properties": {
          "text": _text(300, "What to say, one or two short sentences.")}},
      "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}},
+    {"name": "ir_list", "title": "List the IR remotes",
+     "description": ("The infrared remotes the stick can play (TV, AC, soundbar...) and their buttons, as "
+                     "{device: [button, ...]}: buttons learned on the stick plus built-in TV code sets. Read-only. "
+                     "Call it before ir_send to pick the button whose name fits the request (e.g. 'set the AC to "
+                     "24' -> device 'ac', button 'cool 24')."),
+     "inputSchema": {"type": "object", "additionalProperties": False, "properties": {}},
+     "annotations": {"readOnlyHint": True, "openWorldHint": False}},
+    {"name": "ir_send", "title": "Press a remote button",
+     "description": ("Send an infrared remote button from the stick (it must point roughly at the device), "
+                     "e.g. device='tv', button='power'. Names as ir_list() gives them. repeat: extra presses "
+                     "(volume steps). Returns 'tv: power sent' or why not."),
+     "inputSchema": {"type": "object", "additionalProperties": False, "required": ["device", "button"],
+                     "properties": {
+                         "device": {"type": "string", "maxLength": 32, "description": "The remote, e.g. 'tv'."},
+                         "button": {"type": "string", "maxLength": 32, "description": "The button, e.g. 'volume up'."},
+                         "repeat": {"type": "integer", "minimum": 0, "maximum": 10, "default": 0}}},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True}},
 ]
 BY_NAME = {t["name"]: t for t in TOOLS}
-FEEDBACK_TOOLS = ("notify", "ask", "celebrate", "progress", "pin_home", "stick_status", "speak")  # pre-allowed
+FEEDBACK_TOOLS = ("notify", "ask", "celebrate", "progress", "pin_home", "stick_status", "speak",
+                  "ir_list", "ir_send")  # pre-allowed (ir_send: the user asked for it by voice)
 MAC_TOOLS = ("open_url", "open_app", "quick_command")  # change the Mac: Claude Code asks first
 
 
@@ -426,6 +444,24 @@ class StickTools:
         mins = a.get("minutes") or 30
         await self._card("pin", f"Pinned · {who}", text, mins * 60)
         return f"pinned for {mins} min"
+
+    async def t_ir_list(self, a, who):
+        from .ir import IRError
+        try:
+            devices = await self.agent.ir.listing()
+        except IRError as e:
+            raise ToolError(str(e)) from None
+        if not devices:
+            return "no remotes yet: learn one on the stick (menu: Remote) or in the dashboard", {"devices": {}}
+        text = "; ".join(f"{d}: {', '.join(b) or '(no buttons)'}" for d, b in devices.items())
+        return text, {"devices": devices}
+
+    async def t_ir_send(self, a, who):
+        from .ir import IRError
+        try:
+            return await self.agent.ir.send(a["device"], a["button"], a.get("repeat") or 0)
+        except IRError as e:
+            raise ToolError(str(e)) from None
 
     async def t_speak(self, a, who):
         text = " ".join(a["text"].split())

@@ -95,6 +95,7 @@ and can be ignored.
 | `mode` | `name=mouse\|presenter\|media\|home` | StickS3 2.5.0+: start a remote mode on the stick (air mouse, presenter, media remote), or end it (`home`). Human form: `mode <name>` |
 | `air` | any of `sens=1..10`, `invx=0\|1`, `invy=0\|1`, `scroll=1..10`, `invscroll=0\|1`, `talk=0..600`, `keys=arrows\|pages` | StickS3 2.5.0+: the remote modes' settings (pointer speed, invert, tilt-scroll speed and direction, the presenter's talk length in minutes (0 = none), the slide keys). Replies `{"ok":true,"air":{…}}` |
 | `games` | | StickS3 2.5.0+: the games and their best scores (kept on the stick, NVS): `{"ok":true,"games":[{"id":"stack","title":"Stack","best":23,"tilt":false,"low":false},…]}` — `best` 0 = not played yet; `low`: lower is better (Reaction, milliseconds). See section 5, *Games* |
+| `ir` | `<op> ...` | StickS3 2.5.0+: the IR remote (see section 5, *IR remote*; state: `ir`) |
 
 Responses that end in a restart include `"restarting":true`.
 
@@ -128,6 +129,7 @@ Errors: `@{"ok":false,"error":"<message>"}`.
   pair again, once). The HID report map is keyboard (ID 1) + consumer (ID 2) + mouse (ID 3).
 - StickS3 2.4.0+: `clock24` (true: 24-hour time), `pkgFaces` (`{"n":<installed face packages>,"fmt":[1]}`;
   their list is `@faces`, section 5)
+- StickS3 2.5.0+: `ir` (`{"v":1,"n":<remotes>,"tx":46,"rx":42}`; the IR remote, section 5)
 
 ## 4. Wi-Fi settings page + OTA
 
@@ -476,3 +478,61 @@ a face that doesn't load (the stick draws Classic instead), `free` the room left
 page=1` has the next 6. `@faces rm=<id|all>` removes (`{"ok":true,"removed":N}`; 404 if it isn't
 installed). Removing the Home face makes Classic the Home face. Names and titles stay on the Mac (the
 catalog has them). `@state`'s `faces` still lists only the built-in faces.
+
+### IR remote (StickS3 2.5.0+)
+
+The stick's infrared LED and receiver (pins in `src/ir/pins.h`: TX G46, RX G42 by M5Stack's pin map;
+`@ir diag` checks it) make it a learning remote. It keeps the codes itself, so its **Remote** screen
+(menu → *Remote*) works without the Mac: LittleFS `/ir/<device>.json` (the face packages' partition),
+at most 16 remotes of 48 buttons, 48 KB a file (`src/logic/ir_doc.h`).
+
+**Support:** `@state` has `"ir":{"v":1,"n":<remotes>,"tx":46,"rx":42}`. Older firmware answers `@ir`
+with `Unknown command`.
+
+**Codes** are strings (`src/logic/ir_codec.h`): `nec:<addr>:<cmd>` (hex; an address / command that
+isn't followed by its inverse is NEC-extended, 16 bits), `samsung:7:2`, `lg:88:c05` (LG's 28-bit AC
+protocol; LG TVs are NEC), `sony12|sony15|sony20:<addr>:<cmd>`, `rc5:<addr>:<cmd>`, `rc6:<addr>:<cmd>`
+(mode 0), `panasonic:<addr>:<cmd>` / `kaseikyo:<vendor>:<addr>:<cmd>`, and `raw:<kHz>:<µs>,<µs>,...`
+(marks and spaces from a mark) or its compact form `raw:<kHz>:<v0>,<v1>,...:<one character 0-9a-z per
+duration>`. Remotes the decoders don't know (air conditioners' long state frames) are kept raw.
+
+**Commands** (`@ir <op> name=value&...` — on the serial port also space-separated: `ir send dev=tv
+btn=volume up`). Names: devices `[a-z0-9-]`, 1–16 (`"Living Room TV"` → `living-room-tv`); buttons
+lower case, letters, digits, spaces, `+ - _ . #`, 1–24.
+
+| Op | Parameters | Answer |
+|---|---|---|
+| `list` | — or `dev=` (+ `page=`) | `{"devices":[{"id","n","fav"}],"max":16,"maxButtons":48,"free":<KB>}`; with `dev`: `{"dev","buttons":[{"n","p","f"}],"page","total","more"}`, 12 a page |
+| `get` | `dev= btn=` | `{"dev","btn","c":"<code>","f"}` (export) |
+| `send` | `dev= btn= [repeat=]` or `code= [repeat=]` | `{"sent":…}` at once; the stick sends in the background. `repeat` = extra frames (NEC/LG: repeat frames; the others the frame again; Sony at least 3) |
+| `learn` | `dev= [btn=] [once=1]` | `{"learning":true,"dev","btn"}`; events follow. No `btn`: "button N". `once`: one press is enough (state remotes) |
+| `listen` | `[secs=10]` | the receiver on for a while: a `heard` event per signal (finding the right pin / remote) |
+| `cancel` | | stops a learn / listen |
+| `put` | `dev= btn= code= [fav=]` | stores a code (import, built-in code sets) |
+| `rm` | `dev= [btn=]` | removes a button, or the whole remote |
+| `rename` | `dev= [btn=] to=` | renames a button, or the remote |
+| `fav` | `dev= btn= [on=0\|1]` | favourites come first on the stick |
+| `diag` | | `{"tx":46,"rx":42,"txIdle","rxIdle","pins":"ok"\|"swapped"\|"unknown","rmtTx","rmtRx",...}`: a receiver idles high, the LED driver's input low |
+
+Errors: `{"ok":false,"error":"<words>","code":"notfound"|"code"|"name"|"full"|"exists"|"hardware"|"storage"}`.
+
+Over Bluetooth the agent sends these as `{"proto":"@ir op=…"}`, or as `{"src":"agent","ir":{"<op>":{…args}}}`
+(answered `{"src":"agent","evt":"ir","op":"<op>","reply":{…}}`). Learning and listening report
+(board → Mac, `"src":"agent","evt":"ir"`):
+
+| `state` | Fields | When |
+|---|---|---|
+| `learning` | `dev`, `btn`, `step` 1 / 2 | started; first press heard (press again) |
+| `mismatch` | `dev`, `btn` | the second press differed: press again (it counts as the first) |
+| `saved` | `dev`, `btn`, `p` (protocol or `raw`), `code` (≤ 64 chars), `n` | learned and stored |
+| `timeout` / `error` (`error`) / `cancelled` (`by`) | | nothing for 30 s / couldn't store / stopped (B on the stick or `cancel`) |
+| `listening` / `heard` (`code` or `p:"raw"`, `n`) / `listened` | | `listen` |
+
+**Receiving** uses the RMT peripheral (DMA, two buffers taking turns, a 1 µs glitch filter, 12 ms idle
+ends a frame; frames < 150 ms apart are one capture with their gap). Learning compares two presses (the
+same protocol code, or every duration within 25 %). **Sending**: RMT at 1 µs with the protocol's carrier
+(38 kHz; Sony 40, RC5/RC6 36, Panasonic 37; raw: its own), 33 % duty.
+
+**On the stick:** menu → *Remote*: the remotes (and *Favourites*), A opens, B next, B-B previous, hold B
+leaves; in a remote A sends (held: repeats), B-B-B stars, *+ Learn a button* learns. A learn started
+from the Mac shows on the stick too (B cancels).

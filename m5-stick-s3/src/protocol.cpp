@@ -15,6 +15,8 @@
 #include "faces/pkg/package.h"
 #include "air.h"
 #include "games/games.h"
+#include "ir/ir.h"
+#include "logic/ir_names.h"
 
 namespace protocol {
 
@@ -67,6 +69,7 @@ static String stateJson() {
   j += ",\"face\":" + q(faces::active().id()) + ",\"faces\":" + faces::json();  // 2.0.0
   j += "," + faces::pkg::stateJson();  // 2.4.0: the face packages (their list: @faces)
   j += "," + air::stateJson();  // 2.5.0: the remote modes (air mouse / presenter / media) and their settings
+  j += "," + ir::stateJson();           // 2.5.0: the IR remote (its devices: @ir list)
   j += String(",\"wirelessMic\":") + (settings::wirelessMic() ? "true" : "false");
   j += String(",\"ota\":1,\"otaPending\":") + (ota::pendingVerify() ? "true" : "false");  // Bluetooth update (1.8.0+)
   j += String(",\"usbMounted\":") + (mic::usbMounted() ? "true" : "false");
@@ -262,6 +265,7 @@ Result run(const String& action, const Args& arg) {
   if (action == "games") {  // the games and their best scores (2.5.0)
     return ok(games::json());
   }
+  if (action == "ir") return ir::run(arg);  // the IR remote (2.5.0, src/ir/ir.h)
 
   if (action == "wmic") {
     String v = arg("on");
@@ -336,6 +340,10 @@ Result runLine(const String& line) {
   int sp = line.indexOf(' ');
   String action = line.substring(1, sp < 0 ? line.length() : sp);
   String query = sp < 0 ? "" : line.substring(sp + 1);
+  if (action == "ir") {  // "@ir send dev=tv btn=volume up" -> op=send&dev=tv&btn=volume%20up
+    std::string q(query.length() * 3 + 16, '\0');
+    if (irnames::normalizeQuery(query.c_str(), &q[0], q.size()) || !query.length()) query = q.c_str();
+  }
   return run(action, [&](const char* name) { return queryArg(query, name); });
 }
 
@@ -357,7 +365,7 @@ static void runHuman(const String& line) {
   if (cmd == "help") {
     Log.println("Commands: show | set <combo> | enter off|<ms> | name <text> | slot <1-3> | disconnect | reconnect | "
                    "forget <1-3|all> | web on | web off | standby <min> | brightness <pct> | face <id> | face demo [<id>] | "
-                   "screens [landscape|faces]");
+                   "screens [landscape|faces] | ir list|diag|listen|send|learn ...");
     return;
   } else if (cmd == "show") {
     Log.printf("%s | combo %s | %s | Wi-Fi %s %s\n", hid::name().c_str(),
@@ -471,6 +479,11 @@ static void runHuman(const String& line) {
     demo.trim();
     if (rest.startsWith("demo") && !demo.length()) demo = "all";
     r = run("face", [=](const char* n) { return String(n) == "demo" ? demo : String(n) == "id" ? rest : String(); });
+  }
+  else if (cmd == "ir") {  // ir list | ir diag | ir send dev=tv btn=power | ir learn dev=tv btn=power ...
+    Result ir = runLine("@ir " + rest);
+    Log.println(ir.json);
+    return;
   }
   else if (cmd == "standby")      r = run("standby", with("min"));
   else if (cmd == "mode")         r = run("mode", with("name"));  // mode mouse|presenter|media|home

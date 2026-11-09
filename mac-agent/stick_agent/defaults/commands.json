@@ -1,22 +1,92 @@
 {
-  "_help": "Quick commands: run instantly, no AI. Phrases are matched against what you say (case and punctuation ignored). {n} = a number, {app} / {q} = any words. Actions: open_url (+ optional browser), open_app, shell. Edit in the dashboard.",
+  "_help": "Quick commands: run instantly, no AI. Phrases are matched against what you say (case and punctuation ignored). {n} = a number, {app} / {q} = any words. Actions: open_url (+ optional browser), open_app, shell, ir ({\"dev\": \"tv\", \"btn\": \"power\"}: a button of a remote the stick learned, or a built-in TV code set). Edit in the dashboard.",
   "commands": [
     {
       "name": "GitHub PR",
-      "phrases": ["pr {n}", "open pr {n}", "pull request {n}", "open pull request {n}", "github pr {n}"],
+      "phrases": [
+        "pr {n}",
+        "open pr {n}",
+        "pull request {n}",
+        "open pull request {n}",
+        "github pr {n}"
+      ],
       "open_url": "https://github.com/<org>/<repo>/pull/{n}",
       "browser": "Brave Browser"
     },
     {
       "name": "Devin review",
-      "phrases": ["devin review {n}", "devin pr {n}", "devin {n}", "review pr {n} in devin"],
+      "phrases": [
+        "devin review {n}",
+        "devin pr {n}",
+        "devin {n}",
+        "review pr {n} in devin"
+      ],
       "open_url": "https://app.devin.ai/review/<org>/<repo>/pull/{n}",
       "browser": "Brave Browser"
     },
     {
       "name": "Open app",
-      "phrases": ["open {app}", "launch {app}", "start {app}", "switch to {app}"],
+      "phrases": [
+        "open {app}",
+        "launch {app}",
+        "start {app}",
+        "switch to {app}"
+      ],
       "open_app": "{app}"
+    },
+    {
+      "name": "TV power",
+      "phrases": [
+        "turn off the tv",
+        "turn on the tv",
+        "tv off",
+        "tv on",
+        "tv power",
+        "switch off the tv",
+        "switch on the tv"
+      ],
+      "ir": {
+        "dev": "tv",
+        "btn": "power"
+      }
+    },
+    {
+      "name": "TV volume up",
+      "phrases": [
+        "tv volume up",
+        "turn the tv up",
+        "louder"
+      ],
+      "ir": {
+        "dev": "tv",
+        "btn": "volume up",
+        "repeat": 2
+      }
+    },
+    {
+      "name": "TV volume down",
+      "phrases": [
+        "tv volume down",
+        "turn the tv down",
+        "quieter"
+      ],
+      "ir": {
+        "dev": "tv",
+        "btn": "volume down",
+        "repeat": 2
+      }
+    },
+    {
+      "name": "TV mute",
+      "phrases": [
+        "mute the tv",
+        "unmute the tv",
+        "tv mute"
+      ],
+      "ir": {
+        "dev": "tv",
+        "btn": "mute"
+      }
     }
   ]
 }

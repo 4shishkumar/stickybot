@@ -9,7 +9,7 @@
 
 namespace menu {
 
-enum class Action { NONE, REDRAW, TEST, WEB, FLIP, BT_TOGGLE, FORGET, BRIGHTNESS, VOLUME, POWER_OFF, SAVE, CANCEL, AIR, GAMES };
+enum class Action { NONE, REDRAW, TEST, WEB, FLIP, BT_TOGGLE, FORGET, BRIGHTNESS, VOLUME, POWER_OFF, SAVE, CANCEL, AIR, GAMES, REMOTE };
 
 struct Draft {
   Combo   combo;

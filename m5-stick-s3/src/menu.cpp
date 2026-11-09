@@ -13,6 +13,7 @@ enum Item {
   SLOT, BT, FORGET, STANDBY, SOUND, VOLUME, WMIC, M_LIFT, M_FACE, M_SHAKE, BRIGHT, HOME_FACE, CLOCK24, AUTOROT, LANDSCAPE, FLIP, WEB, DEV, POWER, SAVE, CANCEL,
   // 2.5.0: the new screens come after the settings, so the existing items keep their places
   GAMES,                        // the games (games/games.h)
+  REMOTE,                       // the IR remote screen (src/ir/screen.cpp)
   R_MOUSE, R_PRESENT, R_MEDIA,  // the remote modes (air.h): start one
   COUNT
 };
@@ -79,6 +80,7 @@ Action select() {
     case TEST:
       if (!draft_.combo.valid()) { emptyWarning = true; return Action::REDRAW; }
       return Action::TEST;
+    case REMOTE:  return Action::REMOTE;  // the IR remote screen (src/ir/screen.cpp)
     case ENTER: {
       size_t n = sizeof(ENTER_STEPS) / sizeof(ENTER_STEPS[0]), i = 0;
       while (i < n && ENTER_STEPS[i] != draft_.enterDelayMs) i++;
@@ -137,6 +139,7 @@ ui::MenuView view() {
   v.lines[KEY]     = String("Key: ") + KEYS[max(0, keyIndex(draft_.combo.key))].name;
   v.lines[TEST]    = "Test combo";
   v.lines[GAMES]   = "Games";
+  v.lines[REMOTE]  = "Remote (IR)";
   v.lines[ENTER]   = draft_.enterDelayMs ? String("Enter after: ") + String(draft_.enterDelayMs / 1000.0f, 1) + "s"
                                          : String("Enter after: off");
   v.lines[SLOT]    = String("Mac slot: ") + draft_.slot + (draft_.slot != originalSlot ? " *" : "");
@@ -172,6 +175,7 @@ ui::MenuView view() {
   else if (sel == WMIC) v.hint = "A hold: Wispr mic by BT";
   else if (sel == HOME_FACE) v.hint = "Home screen look";
   else if (sel == GAMES) v.hint = "B: play a game";
+  else if (sel == REMOTE) v.hint = "TV / AC: send, learn";
   else if (sel == LANDSCAPE) v.hint = draft_.autoRotate ? "Held sideways: wide" : "Needs auto-rotate";
   else if (sel >= R_MOUSE && sel <= R_MEDIA) v.hint = "B start  A+B hold: exit";
   else if (sel == TEST || sel == BT || sel == FLIP || sel == WEB || sel == POWER || sel == SAVE || sel == CANCEL) v.hint = "A next  B select";

@@ -17,6 +17,7 @@ from . import (
     feed,
     github,
     home,
+    ir,
     link,
     pet,
     stt,
@@ -153,6 +154,13 @@ class Agent:
                                             emit=self.emit_soon, removed=lambda: self.wispr.release())
         if self.wispr.enabled:
             self._apply_carrier()
+        # The IR remote (ir.py): learned buttons on the stick, voice commands, the brain's tools
+        self.ir = ir.IR(self)
+        ir.ensure_voice_commands(self.cfg, self._save_cfg)
+
+    def _save_cfg(self, changes):
+        self.cfg.update(changes)
+        config.save(self.cfg)
 
     # --- the carrier: the Apple audio tap or BlackHole ------------------------------
 
@@ -523,6 +531,15 @@ class Agent:
                 return
             text = rest
         hit = commands.match(text)
+        if hit and "ir" in hit[0]:  # an IR remote button (ir.py): sent by the stick
+            cmd = hit[0]
+            ok, result = await self.ir.voice(cmd["ir"])
+            self.stats["quick"] += 1
+            self.emit("reply", text=result, via="quick", ms=int((time.time() - started) * 1000))
+            await self.tell_stick("done" if ok else "error", text, result)
+            self._history({**entry, "via": "quick", "command": cmd.get("name"), "reply": result})
+            self.set_state("ready")
+            return
         if hit:
             cmd, slots = hit
             result = await asyncio.get_running_loop().run_in_executor(None, commands.run, cmd, slots)

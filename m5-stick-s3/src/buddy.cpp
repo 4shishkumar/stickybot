@@ -14,6 +14,7 @@
 #include "ota.h"
 #include "faces/faces.h"
 #include "faces/pkg/install.h"
+#include "ir/ir.h"
 
 namespace buddy {
 
@@ -205,6 +206,10 @@ static void handleAgent(JsonDocument& d) {
   }
   if (d["faces"].is<JsonObject>()) {  // a face package: install, remove (faces/pkg/install.cpp)
     faces::pkg::install::control(d["faces"].as<JsonObjectConst>());
+    return;
+  }
+  if (d["ir"].is<JsonObject>()) {  // the IR remote: learn, send, cancel... (ir/ir.cpp)
+    ir::control(d["ir"].as<JsonObjectConst>());
     return;
   }
   if (fresh || !usbSent_ || millis() - usbSentAt_ > 20000) sendUsb();

@@ -13,14 +13,6 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 ## [Unreleased]
 
 ### Added
-- **Games on the stick (firmware 2.5.0).** A **Games** entry in the stick's menu with seven
-  little games and their best scores: **Stack**, **Flappy** and **Dino** (StickyBot as the
-  hero), **Reaction** with button A; **Maze** (a new maze every level), **Balance** and
-  **Catch** by tilting the stick (it calibrates "flat" when a game starts). The same pause
-  (B: Resume / Restart / Quit) and game over in every game, little sound effects (off with
-  the stick's sounds, at its volume). Each game played gives StickyBot a little XP (+1, +3
-  for a new best, at most 10 a day from games), and the dashboard's Stick page has a Games
-  card with the bests (`@games`; PROTOCOL.md, *Games*).
 - **Face packages, the design.** A format for Home faces made of
   data (a manifest + small pixel-art images) that anyone can publish and the dashboard will
   install over Bluetooth without reflashing: `docs/faces/` (format, guidelines, catalog,
@@ -67,6 +59,30 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
     reconnects (the stick tells it its services changed). If the air mouse says *Pair again
     once* (or the pointer doesn't move), forget the stick in the Mac's Bluetooth settings and
     connect it again, once. The keyboard, the password key and the combos work as before.
+- **Games on the stick (firmware 2.5.0).** A **Games** entry in the stick's menu with seven
+  little games and their best scores: **Stack**, **Flappy** and **Dino** (StickyBot as the
+  hero), **Reaction** with button A; **Maze** (a new maze every level), **Balance** and
+  **Catch** by tilting the stick (it calibrates "flat" when a game starts). The same pause
+  (B: Resume / Restart / Quit) and game over in every game, little sound effects (off with
+  the stick's sounds, at its volume). Each game played gives StickyBot a little XP (+1, +3
+  for a new best, at most 10 a day from games), and the dashboard's Stick page has a Games
+  card with the bests (`@games`; PROTOCOL.md, *Games*).
+- **The stick is an IR remote (firmware 2.5.0).** It learns the buttons of your TV, air
+  conditioner or soundbar (menu → **Remote** → *+ Learn*, or the dashboard: press the button
+  twice; air conditioners once) and keeps them in its flash, up to 16 remotes of 48 buttons.
+  NEC (and extended), Samsung, LG, Sony 12/15/20, RC5, RC6 and Panasonic/Kaseikyo are
+  recognised; anything else (air conditioners' long state frames) is kept as raw timings.
+  The Remote screen sends them (A, hold to repeat; favourites first). Receiving and sending
+  use the ESP32's RMT peripheral (our own encoders/decoders with native tests: IRremoteESP8266's
+  release is written for the core-2 timer API, and neither it nor Arduino-IRremote receives with RMT). `@ir list|send|learn|
+  rm|rename|fav|diag` (PROTOCOL.md, *IR remote*); `@ir diag` checks the IR pins (G46 / G42).
+- **Remote, in the dashboard.** A new page: the remotes on the stick (send, star, rename,
+  delete), learning with live status, built-in codes for Samsung, LG, Sony and Philips TVs
+  that work without learning, import / export as JSON.
+- **"Turn off the TV".** Quick commands can press a remote button (`"ir": {"dev": "tv",
+  "btn": "power"}`); new phrases for TV power, volume and mute are added to your commands.
+  The brain gets `ir_list()` / `ir_send()` stick tools, so "set the AC to 24" picks the learned
+  button by its name.
 
 ### Fixed
 - **The wireless Wispr mic failed or lagged with Bluetooth headphones as the Mac's output**

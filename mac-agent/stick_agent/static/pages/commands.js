@@ -5,7 +5,7 @@ import {h, clear, get, put, post, report, toast} from "../lib.js";
 export const title = "Quick commands";
 export const subtitle = "Phrases that run straight away, without Claude. {n} is a number, {app} and {q} are any words.";
 
-const ACTIONS = [["open_url", "Open a link"], ["open_app", "Open an app"], ["shell", "Run a command"]];
+const ACTIONS = [["open_url", "Open a link"], ["open_app", "Open an app"], ["shell", "Run a command"], ["ir", "Press a remote button"]];
 let doc = null, list = null, jsonMode = false, dirty = false, saveBtn = null, jsonBox = null;
 
 export function actions() {
@@ -115,19 +115,27 @@ function cmdCard(c, i) {
   paintChips();
 
   const sel = h("select", {id: `cmdAct${i}`, "aria-label": "Action", onchange: e => {
-    const target = c[act] || "";
+    const target = act === "ir" ? "" : c[act] || "";
     for (const [k] of ACTIONS) delete c[k];
-    c[e.target.value] = target;
+    c[e.target.value] = e.target.value === "ir" ? {dev: "tv", btn: "power"} : target;
     if (e.target.value !== "open_url") delete c.browser;
     markDirty(); paint();
   }}, ACTIONS.map(([k, label]) => h("option", {value: k, selected: k === act}, label)));
-  const placeholder = {open_url: "https://github.com/<org>/<repo>/pull/{n}", open_app: "{app}  or  Slack", shell: "say hello {q}"}[act];
-  const target = h("input", {id: `cmdTarget${i}`, class: "mono", value: c[act] || "", placeholder, "aria-label": "Target",
-    oninput: e => { c[act] = e.target.value; markDirty(); }});
+  const placeholder = {open_url: "https://github.com/<org>/<repo>/pull/{n}", open_app: "{app}  or  Slack", shell: "say hello {q}", ir: "tv / power"}[act];
+  // ir: {"dev", "btn"} edited as "tv / power"
+  const shown = act === "ir" ? `${(c.ir || {}).dev || ""} / ${(c.ir || {}).btn || ""}` : c[act] || "";
+  const target = h("input", {id: `cmdTarget${i}`, class: "mono", value: shown, placeholder, "aria-label": "Target",
+    oninput: e => {
+      if (act === "ir") {
+        const [dev, ...rest] = e.target.value.split("/");
+        c.ir = {...(c.ir || {}), dev: dev.trim(), btn: rest.join("/").trim()};
+      } else c[act] = e.target.value;
+      markDirty();
+    }});
   const browser = act === "open_url"
     ? h("input", {id: `cmdBrowser${i}`, value: c.browser || "", placeholder: "Browser (default)", "aria-label": "Browser",
         oninput: e => { if (e.target.value) c.browser = e.target.value; else delete c.browser; markDirty(); }})
-    : h("span", {class: "small faint", style: "align-self:center"}, act === "shell" ? "Runs in a shell; output shows on the stick." : "Spoken app names are matched to installed apps.");
+    : h("span", {class: "small faint", style: "align-self:center"}, act === "shell" ? "Runs in a shell; output shows on the stick." : act === "ir" ? "Remote / button, as on the Remote page; the stick sends it." : "Spoken app names are matched to installed apps.");
 
   return h("section", {class: "cmd-card"}, top,
     h("div", null, h("div", {class: "eyebrow", style: "margin-bottom:6px"}, "When I say"), chips),
