@@ -220,7 +220,7 @@ until the mic is off). Older agents never send `wmic`, so the board never stream
 
 *The mic device* (firmware 1.7.1 + agent with `wready`): the agent shows a public CoreAudio
 aggregate device named **<stick>-bt-mic** (config `wispr_mic_name`; UID
-`com.stickkey.wireless-mic`) only around a hold, and the user ranks it first in Wispr's
+`com.stickkey.wireless-mic`; the Rust app: the same name, UID `com.stickkey.rust-wireless-mic`) only around a hold, and the user ranks it first in Wispr's
 microphone list once; Wispr switches to the highest-ranked mic present whenever devices
 change. What the agent plays becomes its input through one of two *carriers* (config
 `wireless_mic_carrier`: `auto` (default) | `tap` | `blackhole`):

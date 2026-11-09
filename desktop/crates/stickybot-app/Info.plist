@@ -7,5 +7,7 @@
   <true/>
   <key>NSBluetoothAlwaysUsageDescription</key>
   <string>StickyBot talks to your stick over Bluetooth: its settings, approvals, alerts and voice requests.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>StickyBot taps only its own sound to make the stick's Bluetooth mic.</string>
 </dict>
 </plist>

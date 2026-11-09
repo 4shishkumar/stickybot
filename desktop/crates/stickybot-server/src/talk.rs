@@ -233,7 +233,10 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
         loop {
             match rx.recv().await {
                 Ok(FromStick::Audio(frame)) => {
-                    if let Some(r) = rec.as_mut() {
+                    // a Wispr stream's frames are the wireless mic's (wmic.rs), not a talk's
+                    if let Some(r) = rec.as_mut()
+                        && !st.wmic.streaming()
+                    {
                         r.add(&frame);
                     }
                 }

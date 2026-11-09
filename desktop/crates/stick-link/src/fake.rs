@@ -44,6 +44,10 @@ struct State {
     audio_in_acked: usize,
     /// no AUDIO_IN / OTA_DATA (old firmware)
     old_firmware: bool,
+    /// `{"src":"agent","wispr":"ready",…}` answers to `prepare`, and when they came
+    wispr_ready: Vec<(std::time::Instant, Value)>,
+    /// the last `wmic` the agent sent (in a hello or on its own)
+    wmic: Option<bool>,
     pub ota: Ota,
     tx: Option<mpsc::UnboundedSender<Incoming>>,
     decoder: LineDecoder,
@@ -183,6 +187,60 @@ impl FakeStick {
         }
         self.notify(&json!({"src": "agent", "evt": "talk", "state": "stop"}));
     }
+    /// The agent's `wispr: ready` answers so far.
+    pub fn wispr_readies(&self) -> Vec<Value> {
+        self.with(|s| s.wispr_ready.iter().map(|(_, v)| v.clone()).collect())
+    }
+    /// The last `wmic` the agent sent: may the stick stream its mic for Wispr?
+    pub fn wmic(&self) -> Option<bool> {
+        self.with(|s| s.wmic)
+    }
+    /// A held for Wispr away from USB, like firmware 1.7.1+ does it with an agent that said
+    /// `wready`: `prepare` (with `id`), then `frames` streamed in real time (one per `every`) from
+    /// the start; the key goes down on the agent's `ready` with this id (or after 800 ms without
+    /// one); on release the stream goes on for the 250 ms tail (silence), then `stop`.
+    pub async fn wispr_hold(&self, id: u64, frames: &[Vec<u8>], every: Duration) -> WisprHold {
+        let t0 = std::time::Instant::now();
+        let seen = self.with(|s| s.wispr_ready.len());
+        self.notify(&json!({"src": "agent", "evt": "wispr", "state": "prepare", "id": id, "rate": 16000,
+                            "codec": "ima-adpcm"}));
+        let mut tick = tokio::time::interval(every);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
+        let mut hold = WisprHold::default();
+        let check_ready = |hold: &mut WisprHold| {
+            if hold.pressed_after.is_some() {
+                return;
+            }
+            let ready = self.with(|s| {
+                s.wispr_ready[seen..].iter().find(|(_, v)| v.get("id").and_then(Value::as_u64) == Some(id)).cloned()
+            });
+            if let Some((at, v)) = ready {
+                hold.pressed_after = Some(at.duration_since(t0));
+                hold.ready = Some(v);
+            } else if t0.elapsed() >= READY_TIMEOUT {
+                hold.pressed_after = Some(t0.elapsed()); // pressed anyway
+            }
+        };
+        let tail = crate::adpcm::encode(&vec![0i16; 320 * (TAIL.as_millis() / 20) as usize], 320);
+        let last_seq = frames.last().and_then(|f| crate::adpcm::decode_frame(f)).map(|(q, _)| q).unwrap_or(0);
+        let tail: Vec<Vec<u8>> = tail
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut f)| {
+                f[..2].copy_from_slice(&last_seq.wrapping_add(1 + i as u16).to_le_bytes());
+                f
+            })
+            .collect();
+        for f in frames.iter().chain(tail.iter()) {
+            tick.tick().await;
+            self.notify_audio(f);
+            check_ready(&mut hold);
+        }
+        check_ready(&mut hold);
+        self.notify(&json!({"src": "agent", "evt": "wispr", "state": "stop"}));
+        hold.streamed = t0.elapsed();
+        hold
+    }
     pub fn notify_audio(&self, frame: &[u8]) {
         self.with(|s| {
             if let Some(tx) = &s.tx {
@@ -251,6 +309,22 @@ impl FakeStick {
     }
 }
 
+/// The firmware presses the key after this long without the agent's `ready` (`wispr::READY_TIMEOUT_MS`).
+pub const READY_TIMEOUT: Duration = Duration::from_millis(800);
+/// On release the key-up waits this long, streaming, so the audio on its way reaches Wispr.
+pub const TAIL: Duration = Duration::from_millis(250);
+
+/// What [`FakeStick::wispr_hold`] saw.
+#[derive(Debug, Clone, Default)]
+pub struct WisprHold {
+    /// when the key went down (after `prepare`): on `ready`, or at the timeout
+    pub pressed_after: Option<Duration>,
+    /// the agent's `ready` for this hold (`None`: it never came)
+    pub ready: Option<Value>,
+    /// prepare -> stop
+    pub streamed: Duration,
+}
+
 fn emit(s: &State, msg: &Value) {
     if let Some(tx) = &s.tx {
         let data = format!("{msg}\n").into_bytes();
@@ -265,9 +339,21 @@ fn handle(s: &mut State, msg: &Value) {
     if msg.get("hello").is_some() {
         s.hellos += 1;
         s.last_hello = Some(msg.clone());
+    }
+    if let Some(on) = msg.get("wmic").and_then(Value::as_bool) {
+        s.wmic = Some(on); // hello or on its own
+    }
+    if msg.get("hello").is_some() {
         return;
     }
     if s.silent {
+        return;
+    }
+    if msg.get("wispr").and_then(Value::as_str) == Some("ready") {
+        s.wispr_ready.push((std::time::Instant::now(), msg.clone()));
+        return;
+    }
+    if msg.get("wmic").is_some() {
         return;
     }
     if msg.get("src").and_then(Value::as_str) == Some("agent")

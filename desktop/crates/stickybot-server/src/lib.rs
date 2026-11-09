@@ -15,11 +15,12 @@ pub mod hub;
 pub mod python_agent;
 pub mod speech;
 pub mod talk;
+pub mod wmic;
 
 use serde_json::{Map, Value, json};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use stick_link::{Backend, Link, LinkState, Target};
 
 pub use config::DEFAULT_PORT;
@@ -81,6 +82,9 @@ pub struct AppState {
     pub approvals: approvals::Approvals,
     /// how long a firmware update waits for things (tests shorten it)
     pub ota_timings: Mutex<firmware::UpdateTimings>,
+    /// the wireless Wispr mic (the "<stick>-bt-mic" device and the stick's audio played into it)
+    pub wmic: wmic::WirelessMic,
+    me: OnceLock<Weak<AppState>>,
 }
 
 impl AppState {
@@ -120,7 +124,11 @@ impl AppState {
             jobs: firmware::Jobs::default(),
             approvals: approvals::Approvals::default(),
             ota_timings: Mutex::new(firmware::UpdateTimings::default()),
+            wmic: wmic::WirelessMic::new(),
+            me: OnceLock::new(),
         });
+        let _ = st.me.set(Arc::downgrade(&st));
+        wmic::init(&st);
         let weak = Arc::downgrade(&st);
         st.speech.on_change(move |p| {
             if let Some(st) = weak.upgrade() {
@@ -242,11 +250,18 @@ impl AppState {
         }
     }
 
+    /// Quit / Ctrl-C: nothing left behind (the wireless mic's device and tap outlive the process
+    /// otherwise). Blocking; call it outside the runtime's worker threads.
+    pub fn shutdown(&self) {
+        wmic::shutdown(self);
+    }
+
     /// `GET /api/status`: the Python shape, with what isn't ported left empty (the pages cope).
     pub fn status(&self) -> Value {
-        // the brain reads the settings itself: ask it before taking the settings lock
+        // the brain and the wireless mic read the settings themselves: ask them before taking the lock
         let brain = self.brain();
         let (brain_status, busy) = (brain.status(), brain.busy());
+        let wireless_mic = wmic::status(self);
         let cfg = self.cfg.lock().unwrap();
         json!({
             "state": self.agent_state(),
@@ -266,7 +281,7 @@ impl AppState {
             "weather": null,
             "github": null,
             "stick_approvals": cfg.get("stick_approvals").cloned().unwrap_or(json!(true)),
-            "wireless_mic": null,
+            "wireless_mic": wireless_mic,
             "update": {},
             "brain": brain_status,
             "app": {"name": "StickyBot (Rust)", "window": true, "rust": true, "fake_stick": self.fake},
@@ -277,6 +292,7 @@ impl AppState {
     pub fn update_config(&self, changes: Map<String, Value>) -> Result<Map<String, Value>, String> {
         let stick_changed;
         let hints_changed;
+        let changed_keys: Map<String, Value> = changes.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         let snapshot = {
             let mut cfg = self.cfg.lock().unwrap();
             stick_changed = changes.get("stick").is_some_and(|s| cfg.get("stick") != Some(s));
@@ -292,6 +308,9 @@ impl AppState {
         if hints_changed && self.speech.ready() && speech::model_ready(&dir) {
             log::info!("word hints changed: reloading the speech model");
             self.speech.start(speech::parakeet(&dir, &self.stt_hints()));
+        }
+        if let Some(st) = self.me.get().and_then(Weak::upgrade) {
+            wmic::config_changed(&st, &changed_keys);
         }
         self.hub.emit("config", json!({"config": snapshot}));
         Ok(snapshot)
@@ -323,6 +342,8 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     state.set_brain(Arc::new(brain::ClaudeBrain::new(cfg, state.paths.home.join("workspace"))));
     spawn_link_watcher(state.clone());
     talk::spawn(state.clone());
+    wmic::spawn(state.clone());
+    tokio::spawn(wmic::startup(state.clone())); // left-overs of a crashed run, then the tap check
     if std::env::var("STICKYBOT_RS_NO_STT").as_deref() != Ok("1") {
         state.spawn_speech();
     }

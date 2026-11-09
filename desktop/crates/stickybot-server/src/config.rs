@@ -201,6 +201,16 @@ pub fn invalid(body: &Map<String, Value>) -> String {
             return "stt_hints must be a list of words (at most 50, each up to 40 characters)".into();
         }
     }
+    if let Some(c) = body.get("wireless_mic_carrier")
+        && !c.as_str().is_some_and(|c| macos_audio::carrier::PREFS.contains(&c))
+    {
+        return "wireless_mic_carrier must be one of: auto, tap, blackhole".into();
+    }
+    if let Some(b) = body.get("wireless_mic")
+        && !b.is_boolean()
+    {
+        return "wireless_mic must be true or false".into();
+    }
     if let Some(s) = body.get("stick")
         && !s.is_null()
         && serde_json::from_value::<stick_link::Target>(s.clone()).is_err()

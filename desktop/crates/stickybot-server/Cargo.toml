@@ -8,6 +8,7 @@ description = "StickyBot's dashboard + local API (axum) on top of the stick link
 
 [dependencies]
 stick-link = { path = "../stick-link" }
+macos-audio = { path = "../macos-audio" }
 stt = { path = "../stt" }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "tower-log"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal", "io-util", "process"] }
@@ -33,6 +34,9 @@ hound = "3"
 tokio = { version = "1", features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+cpal = "0.18"
 
 [[bin]]
 name = "stickybot-headless"

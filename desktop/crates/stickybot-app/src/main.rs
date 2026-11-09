@@ -117,11 +117,16 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("couldn't start the app");
 
-    app.run(|_app, event| {
+    app.run(|app, event| match event {
         // closing the window keeps the menu bar app running; Quit (or cmd+q in the menu) ends it
-        if let RunEvent::ExitRequested { api, code: None, .. } = event {
-            api.prevent_exit();
+        RunEvent::ExitRequested { api, code: None, .. } => api.prevent_exit(),
+        // the wireless mic's device and tap outlive the process: remove them on the way out
+        RunEvent::Exit => {
+            if let Some(st) = app.try_state::<Arc<AppState>>() {
+                st.shutdown();
+            }
         }
+        _ => {}
     });
 }
 

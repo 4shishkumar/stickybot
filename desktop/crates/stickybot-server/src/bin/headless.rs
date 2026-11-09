@@ -26,12 +26,18 @@ async fn main() {
             }
         }
     }
-    match start(opts).await {
-        Ok(r) => println!("StickyBot (Rust) dashboard: {}", r.state.url()),
+    let running = match start(opts).await {
+        Ok(r) => {
+            println!("StickyBot (Rust) dashboard: {}", r.state.url());
+            r
+        }
         Err(e) => {
             eprintln!("{e}");
             std::process::exit(1);
         }
-    }
+    };
     let _ = tokio::signal::ctrl_c().await;
+    // the wireless mic's device and tap outlive the process: remove them first
+    let st = running.state.clone();
+    let _ = tokio::task::spawn_blocking(move || st.shutdown()).await;
 }

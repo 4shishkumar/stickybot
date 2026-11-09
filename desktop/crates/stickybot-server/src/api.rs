@@ -58,6 +58,8 @@ pub const PORTED: &[&str] = &[
     "POST /api/firmware/ota",
     "GET /api/firmware/jobs/{id}",
     "POST /api/firmware/jobs/{id}/cancel",
+    "POST /api/wireless-mic/show",
+    "POST /api/wireless-mic/check",
 ];
 
 /// The Python agent's endpoints that aren't here yet, by the phase that brings them.
@@ -75,8 +77,6 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
     ("GET /api/events/history", "stick events"),
     ("GET /api/events/kinds", "stick events"),
     ("POST /api/claude-event", "Claude Code Stop hook"),
-    ("POST /api/wireless-mic/show", "wireless Wispr mic (Core Audio tap)"),
-    ("POST /api/wireless-mic/check", "wireless Wispr mic (Core Audio tap)"),
     ("GET /api/mcp", "stick tools (MCP)"),
     ("POST /mcp", "stick tools (MCP server)"),
     ("POST /api/mcp/terminal/{action}", "stick tools (MCP)"),
@@ -119,6 +119,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/firmware/ota", post(ota_update))
         .route("/api/firmware/jobs/{id}", get(job_events))
         .route("/api/firmware/jobs/{id}/cancel", post(job_cancel))
+        .route("/api/wireless-mic/show", post(wireless_mic_show))
+        .route("/api/wireless-mic/check", post(wireless_mic_check))
         .fallback(not_ported)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -369,6 +371,37 @@ async fn speech_retry(State(st): State<Arc<AppState>>) -> Response {
 }
 
 /// The next request starts a new conversation.
+/// The Bluetooth mic device ("<stick>-bt-mic") for a minute, so it can be ranked in Wispr's settings.
+/// `{"secs"}` (5-300, 60) -> `{"ok", "error", "secs", "name"}`, 409 when it can't be now.
+async fn wireless_mic_show(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    let secs = body_obj(&body).get("secs").and_then(Value::as_u64).unwrap_or(crate::wmic::SHOW_S).clamp(5, 300);
+    let why = crate::wmic::show_mic(&st, secs).await;
+    let name = st.wmic.device().name;
+    let code = if why.is_empty() { StatusCode::OK } else { StatusCode::CONFLICT };
+    let error = if why.is_empty() { Value::Null } else { json!(why) };
+    (code, axum::Json(json!({"ok": why.is_empty(), "error": error, "secs": secs, "name": name}))).into_response()
+}
+
+/// Runs the Apple audio tap check now (inaudible; the first one makes macOS ask for the System
+/// Audio Recording permission). -> `{"ok", "state", "detail", "wireless_mic"}`.
+async fn wireless_mic_check(State(st): State<Arc<AppState>>) -> Response {
+    if !crate::wmic::status(&st)["tap"]["supported"].as_bool().unwrap_or(false) {
+        let e = json!({"ok": false, "error": "the Apple audio tap needs macOS 14.2 or newer"});
+        return (StatusCode::CONFLICT, axum::Json(e)).into_response();
+    }
+    match crate::wmic::check_tap(&st, true).await {
+        None => {
+            let e = json!({"ok": false, "error": "not now: the mic is in use (try again in a moment)"});
+            (StatusCode::CONFLICT, axum::Json(e)).into_response()
+        }
+        Some(res) => axum::Json(json!({
+            "ok": res.state == Some(macos_audio::carrier::CheckState::Ok),
+            "state": res.state, "detail": res.detail, "wireless_mic": crate::wmic::status(&st),
+        }))
+        .into_response(),
+    }
+}
+
 async fn new_chat(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
     st.brain().forget();
     st.hub.emit("info", json!({"text": "Next request starts a new conversation"}));
@@ -908,5 +941,79 @@ mod tests {
         let (_, v, _) = call(&app, req("GET", "/api/speech", None, None)).await;
         assert_eq!(v["phase"], "idle");
         assert_eq!(v["hints"], json!(["Tauri", "StickyBot", "Claude"]));
+    }
+
+    /// The wireless mic with fake audio (BlackHole present; `tap`: this Mac has process taps).
+    fn fake_audio(st: &AppState, tap: bool) -> macos_audio::fake::FakeCoreAudio {
+        use macos_audio::fake::{FakeCoreAudio, FakeOutputs};
+        let ca = FakeCoreAudio::new();
+        let out = FakeOutputs::new(vec![FakeOutputs::speakers(), FakeOutputs::blackhole()]);
+        st.wmic.use_audio(macos_audio::Audio::fake(&ca, &out, tap));
+        ca
+    }
+
+    /// test_stick_mic_device.py: the dashboard API
+    #[tokio::test]
+    async fn wireless_mic_show_from_the_dashboard() {
+        let (app, st, fake) = app("wmshow", true).await;
+        let ca = fake_audio(&st, false);
+        crate::wmic::spawn(st.clone()); // the stick's messages (start() runs it)
+        let tok = Some(st.token.as_str());
+        let (s, _, _) = call(&app, req("POST", "/api/wireless-mic/show", Some(json!({})), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN); // needs the token
+        let (s, v, _) = call(&app, req("POST", "/api/wireless-mic/show", Some(json!({"secs": 60})), tok)).await;
+        assert_eq!((s, v["error"].as_str()), (StatusCode::CONFLICT, Some("the wireless Wispr mic is off")));
+        let (s, _, _) = call(&app, req("PUT", "/api/config", Some(json!({"wireless_mic": true})), tok)).await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, v, _) = call(&app, req("POST", "/api/wireless-mic/show", Some(json!({"secs": 60})), tok)).await;
+        assert_eq!((s, v["ok"].as_bool(), v["name"].as_str()), (StatusCode::OK, Some(true), Some("fake-bt-mic")));
+        assert_eq!(ca.ours(macos_audio::naming::RUST_UID).len(), 1);
+        let (_, v, _) = call(&app, req("GET", "/api/status", None, None)).await;
+        let w = &v["wireless_mic"];
+        assert!(w["device_mic"]["present"] == true && w["device_mic"]["showing_s"].as_u64().unwrap() > 50);
+        assert_eq!((w["unavailable"].as_str(), w["carrier"].as_str()), (Some(""), Some("blackhole")));
+        // the stick on USB: refused, and it goes
+        fake.notify(&json!({"src": "agent", "evt": "usb", "mounted": true}));
+        for _ in 0..200 {
+            if ca.ours(macos_audio::naming::RUST_UID).is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(ca.ours(macos_audio::naming::RUST_UID).is_empty());
+        let (s, v, _) = call(&app, req("POST", "/api/wireless-mic/show", Some(json!({})), tok)).await;
+        assert!(s == StatusCode::CONFLICT && v["error"].as_str().unwrap().contains("USB"));
+        let (_, v, _) = call(&app, req("GET", "/api/status", None, None)).await;
+        assert!(v["wireless_mic"]["unavailable"].as_str().unwrap().contains("USB"));
+        // timings and a bad carrier
+        let (s, _, _) =
+            call(&app, req("PUT", "/api/config", Some(json!({"wispr_switch_ms": 400, "wispr_tail_ms": 1200})), tok))
+                .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(crate::wmic::settings(&st), (400, 1200));
+        let (s, _, _) =
+            call(&app, req("PUT", "/api/config", Some(json!({"wireless_mic_carrier": "cable"})), tok)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+
+    /// test_tap_mic.py: the dashboard API
+    #[tokio::test]
+    async fn wireless_mic_check_from_the_dashboard() {
+        let (app, st, _) = app("wmcheck", true).await;
+        let tok = Some(st.token.as_str());
+        fake_audio(&st, false); // older macOS
+        let (s, v, _) = call(&app, req("POST", "/api/wireless-mic/check", Some(json!({})), tok)).await;
+        assert!(s == StatusCode::CONFLICT && v["error"].as_str().unwrap().contains("14.2"));
+        let ca = fake_audio(&st, true);
+        let (s, _, _) = call(&app, req("POST", "/api/wireless-mic/check", Some(json!({})), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, v, _) = call(&app, req("POST", "/api/wireless-mic/check", Some(json!({})), tok)).await;
+        assert_eq!((s, v["ok"].as_bool(), v["state"].as_str()), (StatusCode::OK, Some(true), Some("ok")));
+        assert_eq!(v["wireless_mic"]["tap"]["state"], "ok");
+        assert_eq!(ca.measured(), 1);
+        ca.set(|s| s.tap_hears = false);
+        let (_, v, _) = call(&app, req("POST", "/api/wireless-mic/check", Some(json!({})), tok)).await;
+        assert_eq!((v["ok"].as_bool(), v["state"].as_str()), (Some(false), Some("failed")));
+        assert!(v["detail"].as_str().unwrap().contains("System Audio Recording"));
     }
 }
