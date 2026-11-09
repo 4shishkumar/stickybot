@@ -153,6 +153,11 @@ impl Job {
         self.events.lock().unwrap().get(i..).map(<[Value]>::to_vec).unwrap_or_default()
     }
 
+    /// What Cancel stops (a Bluetooth transfer), or nothing.
+    pub(crate) fn set_cancel(&self, h: Option<CancelHandle>) {
+        *self.cancel.lock().unwrap() = h;
+    }
+
     /// Stops a running Bluetooth update; false if there's nothing to stop.
     pub fn cancel(&self) -> bool {
         if self.is_done() {
@@ -296,6 +301,10 @@ pub fn start_ota(st: &Arc<AppState>, force: bool, t: UpdateTimings) -> Result<St
     }
     if !st.link.connected() {
         return Err((409, "the stick isn't connected by Bluetooth".into()));
+    }
+    if st.faces.busy() {
+        // one transfer at a time over the OTA characteristic
+        return Err((409, "a face is being installed; try again when it's done".into()));
     }
     let img = bundled_app(st.firmware().first()).map_err(|e| (400, e))?;
     let job = Job::new();

@@ -13,6 +13,7 @@ pub mod commands;
 pub mod config;
 pub mod events;
 pub mod feed;
+pub mod faces;
 pub mod firmware;
 pub mod github;
 pub mod home;
@@ -136,6 +137,8 @@ pub struct AppState {
     pub login_item: Mutex<Arc<dyn login::LoginItem>>,
     /// API keys (the Keychain; in memory with the fake stick: tests never reach the Keychain)
     pub keys: keys::Keys,
+    /// face packages: the catalog, installs (`faces.rs`)
+    pub faces: faces::Faces,
     openrouter: OnceLock<openrouter::OpenRouterBrain>,
     me: OnceLock<Weak<AppState>>,
 }
@@ -211,6 +214,7 @@ impl AppState {
             last_input: Mutex::new(None),
             login_item: Mutex::new(Arc::new(login::NoLoginItem)),
             keys: if fake { keys::Keys::new(Arc::new(keys::MemoryStore::default())) } else { keys::Keys::system() },
+            faces: faces::Faces::new(fake),
             openrouter: OnceLock::new(),
             me: OnceLock::new(),
         });

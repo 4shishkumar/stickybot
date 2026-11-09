@@ -53,6 +53,7 @@ struct State {
     radio: Option<crate::pacing::RadioQueue>,
     radio_ready: Arc<tokio::sync::Notify>,
     pub ota: Ota,
+    pub faces: Faces,
     tx: Option<mpsc::UnboundedSender<Incoming>>,
     decoder: LineDecoder,
 }
@@ -181,6 +182,15 @@ impl FakeStick {
     /// The firmware update side: knobs and what happened.
     pub fn ota<R>(&self, f: impl FnOnce(&mut Ota) -> R) -> R {
         self.with(|s| f(&mut s.ota))
+    }
+    /// Face packages (firmware 2.4.0+): knobs and what's installed. The transfer itself shares
+    /// [`FakeStick::ota`]'s session and packet knobs (the same characteristic).
+    pub fn faces<R>(&self, f: impl FnOnce(&mut Faces) -> R) -> R {
+        self.with(|s| f(&mut s.faces))
+    }
+    /// Sets one field of what `@state` reports (e.g. `fw`).
+    pub fn set_stick(&self, key: &str, value: Value) {
+        self.with(|s| s.stick[key] = value);
     }
     /// B held while saying `frames` (ADPCM, see [`crate::adpcm::encode`]): `talk start`, the
     /// frames, `talk stop`, in the order the firmware sends them.
@@ -423,13 +433,22 @@ fn handle(s: &mut State, msg: &Value) {
     if let Some(line) = msg.get("proto").and_then(Value::as_str) {
         let id: String =
             msg.get("id").and_then(Value::as_str).unwrap_or("").chars().filter(|c| *c != '"' && *c != '\\').collect();
-        let reply = run_line(&mut s.stick, line.trim());
+        let reply = match faces_line(s, line.trim()) {
+            Some(r) => r,
+            None => run_line(&mut s.stick, line.trim()),
+        };
         emit(s, &json!({"src": "agent", "evt": "proto", "id": id, "reply": reply}));
         return;
     }
     if let Some(o) = msg.get("ota").and_then(Value::as_object) {
         if !s.old_firmware {
             ota_message(s, o);
+        }
+        return;
+    }
+    if let Some(o) = msg.get("faces").and_then(Value::as_object) {
+        if s.faces.supported && !s.faces.silent {
+            faces_message(s, o);
         }
         return;
     }
@@ -615,6 +634,16 @@ pub struct Ota {
     pub rollback: bool,
     /// the largest number of bytes past the last ack a packet reached
     pub max_in_flight: usize,
+    /// whose session it is: `"ota"` (firmware) or `"faces"` (a face package); the acks carry it
+    /// as their `evt`
+    pub family: &'static str,
+}
+
+impl Ota {
+    /// A transfer of `family` is under way (one bulk transfer at a time on OTA_DATA).
+    pub fn active(&self, family: &str) -> bool {
+        self.family == family && self.session.is_some() && !self.committed
+    }
 }
 
 impl Default for Ota {
@@ -638,6 +667,7 @@ impl Default for Ota {
             lose_tail: false,
             packets: Vec::new(),
             max_in_flight: 0,
+            family: "ota",
             reboot: true,
             rollback: false,
         }
@@ -648,7 +678,7 @@ const OTA_ACK_EVERY: usize = 4096;
 
 fn ota_reply(s: &mut State, mut m: Value) {
     m["src"] = json!("agent");
-    m["evt"] = json!("ota");
+    m["evt"] = json!(s.ota.family);
     if m["state"] == "ack" && s.ota.lose_acks > 0 {
         s.ota.lose_acks -= 1;
         return;
@@ -659,6 +689,12 @@ fn ota_reply(s: &mut State, mut m: Value) {
 fn ota_message(s: &mut State, o: &serde_json::Map<String, Value>) {
     if let Some(b) = o.get("begin") {
         s.ota.begins.push(b.clone());
+        if s.ota.active("faces") {
+            // a face is arriving: it owns OTA_DATA
+            emit(s, &json!({"src": "agent", "evt": "ota", "state": "refused", "error": "busy", "why": "faces"}));
+            return;
+        }
+        s.ota.family = "ota";
         if let Some(code) = s.ota.refuse.clone() {
             ota_reply(s, json!({"state": "refused", "error": code, "why": "dictation"}));
             return;
@@ -784,6 +820,150 @@ fn ota_packet(s: &mut State, pkt: &[u8]) -> bool {
         return true;
     }
     false
+}
+
+// --- face packages (PROTOCOL.md "Face packages over Bluetooth"; test_face_install.py's FacesStick) ----
+
+/// The stick's face packages (firmware 2.4.0+), with test knobs.
+#[derive(Debug, Clone, Default)]
+pub struct Faces {
+    /// the face engine is there: `pkgFaces` in `@state`, `@faces`, `faces` messages
+    pub supported: bool,
+    /// id -> (version, sha256)
+    pub installed: std::collections::BTreeMap<String, (String, String)>,
+    /// every `put` the agent sent
+    pub puts: Vec<Value>,
+    pub ends: usize,
+    /// the next `put` is refused with this code (`why`: "dictation")
+    pub refuse: Option<String>,
+    /// `end` answers `invalid` with this `why`
+    pub invalid: Option<String>,
+    /// `{"faces":…}` messages are taken but never answered
+    pub silent: bool,
+    pub removed: Vec<String>,
+    /// the `@face…` protocol lines the stick got
+    pub lines: Vec<String>,
+}
+
+const FACES_PAGE: usize = 6;
+const FACES_MAX: usize = 12;
+
+fn faces_reply(s: &State, mut m: Value) {
+    m["src"] = json!("agent");
+    m["evt"] = json!("faces");
+    emit(s, &m);
+}
+
+/// `@state` (with `pkgFaces`), `@faces [page=N]`; `None` for any other line.
+fn faces_line(s: &mut State, line: &str) -> Option<Value> {
+    if line == "@state" {
+        let mut st = s.stick.clone();
+        if s.faces.supported {
+            st["pkgFaces"] = json!({"n": s.faces.installed.len(), "fmt": [1]});
+        }
+        return Some(st);
+    }
+    if line.starts_with("@face") {
+        s.faces.lines.push(line.to_string());
+    }
+    let rest = line.strip_prefix("@faces")?;
+    if !s.faces.supported {
+        return Some(json!({"ok": false, "error": "unknown command: faces"}));
+    }
+    let page = rest.trim().strip_prefix("page=").and_then(|p| p.parse::<usize>().ok()).unwrap_or(0);
+    let items: Vec<Value> = s
+        .faces
+        .installed
+        .iter()
+        .map(|(id, (v, sha))| json!({"id": id, "v": v, "sz": 100, "sha": &sha[..8.min(sha.len())]}))
+        .collect();
+    let from = (page * FACES_PAGE).min(items.len());
+    let to = ((page + 1) * FACES_PAGE).min(items.len());
+    Some(json!({"ok": true, "faces": items[from..to], "free": 700, "max": FACES_MAX,
+                "more": items.len() > (page + 1) * FACES_PAGE}))
+}
+
+fn faces_message(s: &mut State, o: &serde_json::Map<String, Value>) {
+    if let Some(p) = o.get("put") {
+        s.faces.puts.push(p.clone());
+        if let Some(code) = s.faces.refuse.clone() {
+            faces_reply(s, json!({"state": "refused", "error": code, "why": "dictation"}));
+            return;
+        }
+        if s.ota.active("ota") {
+            faces_reply(s, json!({"state": "refused", "error": "ota"}));
+            return;
+        }
+        let id = p["id"].as_str().unwrap_or("").to_string();
+        let size = p["size"].as_u64().unwrap_or(0) as usize;
+        let sha = p["sha256"].as_str().unwrap_or("").to_string();
+        let (window, chunk) = (s.ota.window, s.ota.chunk);
+        if s.ota.family == "faces"
+            && let Some((sz, sh, data)) = &s.ota.session
+            && *sz == size
+            && *sh == sha
+            && !s.ota.committed
+        {
+            let have = data.len();
+            s.ota.gap = false;
+            faces_reply(
+                s,
+                json!({"state": "ready", "id": id, "offset": have, "size": size, "resumed": true, "window": window, "chunk": chunk}),
+            );
+            return;
+        }
+        s.ota.family = "faces";
+        s.ota.committed = false;
+        s.ota.session = Some((size, sha, Vec::new()));
+        s.ota.acked = 0;
+        faces_reply(
+            s,
+            json!({"state": "ready", "id": id, "offset": 0, "size": size, "resumed": false, "window": window, "chunk": chunk}),
+        );
+    } else if o.contains_key("end") {
+        s.faces.ends += 1;
+        let put = s.faces.puts.last().cloned().unwrap_or(Value::Null);
+        match s.ota.session.clone().filter(|_| s.ota.family == "faces") {
+            None => faces_reply(s, json!({"state": "error", "error": "not_started", "offset": 0})),
+            Some((size, _, data)) if data.len() != size => {
+                faces_reply(s, json!({"state": "error", "error": "incomplete", "offset": data.len()}))
+            }
+            Some((size, sha, data)) => {
+                let got: String = Sha256::digest(&data).iter().map(|b| format!("{b:02x}")).collect();
+                if got != sha {
+                    s.ota.session = None;
+                    faces_reply(s, json!({"state": "error", "error": "sha", "offset": size}));
+                } else if let Some(why) = s.faces.invalid.clone() {
+                    s.ota.session = None;
+                    faces_reply(s, json!({"state": "error", "error": "invalid", "why": why, "offset": size}));
+                } else {
+                    s.ota.committed = true;
+                    let id = put["id"].as_str().unwrap_or("").to_string();
+                    let version = put["version"].as_str().unwrap_or("").to_string();
+                    s.faces.installed.insert(id.clone(), (version.clone(), sha));
+                    faces_reply(s, json!({"state": "done", "id": id, "version": version}));
+                }
+            }
+        }
+    } else if o.contains_key("cancel") {
+        if s.ota.family == "faces" {
+            s.ota.session = None;
+        }
+        faces_reply(s, json!({"state": "cancelled", "by": "agent", "offset": 0}));
+    } else if let Some(id) = o.get("rm").and_then(Value::as_str) {
+        if id == "all" {
+            let n = s.faces.installed.len();
+            s.faces.removed.extend(s.faces.installed.keys().cloned());
+            s.faces.installed.clear();
+            faces_reply(s, json!({"state": "removed", "id": "all", "n": n}));
+        } else if s.faces.installed.remove(id).is_some() {
+            s.faces.removed.push(id.to_string());
+            let n = s.faces.installed.len();
+            faces_reply(s, json!({"state": "removed", "id": id, "n": n}));
+        } else {
+            faces_reply(s, json!({"state": "error", "error": "notfound", "id": id}));
+        }
+    }
 }
 
 /// Its connection.
