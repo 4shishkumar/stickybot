@@ -22,6 +22,7 @@ from . import (
     faces_api,
     firmware_api,
     install_flow,
+    ir_api,
     link,
     mcp_server,
     mcp_setup,
@@ -309,6 +310,7 @@ def make_app(agent):
     app.add_routes(mcp_server.routes(agent))
     app.add_routes(updates.routes(agent))
     app.add_routes(brain_api.routes(agent))
+    app.add_routes(ir_api.routes(agent))  # the IR remote (Remote page)
     app.add_routes([
         web.get("/api/mcp", mcp_status), web.post("/api/mcp/terminal/{action:install|uninstall}", mcp_terminal),
         web.post("/api/mcp/answer", mcp_answer),

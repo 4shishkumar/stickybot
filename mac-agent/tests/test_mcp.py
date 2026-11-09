@@ -141,7 +141,7 @@ async def test_legacy_requests(client):
     _, body = await client.rpc("tools/list", headers={"MCP-Protocol-Version": "2025-11-25"})
     names = [t["name"] for t in body["result"]["tools"]]
     assert names == ["notify", "ask", "celebrate", "progress", "pin_home", "open_url", "open_app", "quick_command",
-                     "stick_status", "speak"]
+                     "stick_status", "speak", "ir_list", "ir_send"]
     for t in body["result"]["tools"]:
         assert t["description"] and t["inputSchema"]["type"] == "object"
     status, body = await client.rpc("tools/list", headers={"MCP-Protocol-Version": "1999-01-01"})
