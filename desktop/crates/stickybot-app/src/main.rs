@@ -12,6 +12,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
+mod appctl;
 mod login;
 
 const WINDOW: &str = "dashboard";
@@ -31,14 +32,26 @@ fn label(state: LinkState, stick: Option<&str>, reason: Option<&str>) -> String 
 }
 
 fn show_dashboard(app: &AppHandle) {
+    show_dashboard_at(app, "");
+}
+
+/// Shows and focuses the dashboard window (made if it was closed), at `#page` if given.
+pub(crate) fn show_dashboard_at(app: &AppHandle, page: &str) {
     if let Some(w) = app.get_webview_window(WINDOW) {
+        if !page.is_empty() {
+            let _ = w.eval(format!("location.hash = {page:?}")); // letters, digits and - (checked)
+        }
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
         return;
     }
     let st = app.state::<Arc<AppState>>();
-    let url = match st.url().parse() {
+    let mut url = st.url();
+    if !page.is_empty() {
+        url = format!("{url}#{page}");
+    }
+    let url = match url.parse() {
         Ok(u) => u,
         Err(e) => {
             log::error!("bad dashboard url: {e}");
@@ -59,6 +72,12 @@ fn show_dashboard(app: &AppHandle) {
 }
 
 fn main() {
+    // Claude Code's hooks run this program with `--hook permission|prompt|stop` (the server's
+    // hooks.rs): answer and exit before anything else starts
+    if std::env::args().nth(1).as_deref() == Some("--hook") {
+        let kind = std::env::args().nth(2).unwrap_or_default();
+        std::process::exit(stickybot_server::hooks::main(&kind));
+    }
     let opts = Options::from_env();
     stickybot_server::logs::init(&opts.home.join("app.log")); // stderr + app.log + the Logs page
 
@@ -70,6 +89,7 @@ fn main() {
             let running = tauri::async_runtime::block_on(stickybot_server::start(opts.clone()))?;
             let state = running.state.clone();
             *state.login_item.lock().unwrap() = Arc::new(login::AppLoginItem);
+            *state.setup.app.lock().unwrap() = Arc::new(appctl::TauriApp(app.handle().clone()));
             app.manage(state.clone());
 
             let status = MenuItem::with_id(app, "status", "Starting…", false, None::<&str>)?;

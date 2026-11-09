@@ -110,19 +110,24 @@ pub const PORTED: &[&str] = &[
     "POST /api/faces/jobs/{id}/cancel",
     "POST /api/faces/remove",
     "POST /api/faces/use",
+    // the setup page, components, the stick wizard's progress, restart / window (setup.rs)
+    "GET /api/onboarding",
+    "POST /api/onboarding",
+    "GET /api/install",
+    "GET /api/install/{step}",
+    "POST /api/install/{step}/skip|unskip|run",
+    "POST /api/install/github/repo",
+    "GET /api/install/jobs/{job}",
+    "POST /api/install/jobs/{job}/cancel",
+    "GET /api/components",
+    "POST /api/components/{id}/install|uninstall",
+    "GET /api/components/jobs/{job}",
+    "POST /api/restart",
+    "POST /api/window",
 ];
 
 /// The Python agent's endpoints that aren't here yet, by the phase that brings them.
-pub const NOT_PORTED: &[(&str, &str)] = &[
-    ("GET /api/onboarding", "setup wizard progress (the wizard keeps it in the browser meanwhile)"),
-    ("POST /api/onboarding", "setup wizard progress"),
-    ("GET /api/install", "setup page (#install)"),
-    ("/api/install/*", "setup page steps and jobs"),
-    ("GET /api/components", "installer components"),
-    ("/api/components/*", "installer components"),
-    ("POST /api/restart", "restart the agent"),
-    ("POST /api/window", "show the window at a page"),
-];
+pub const NOT_PORTED: &[(&str, &str)] = &[];
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
@@ -182,6 +187,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/update/jobs/{id}", get(job_events))
         .merge(crate::ir::routes())
         .merge(crate::faces::routes())
+        .merge(crate::setup::routes())
         .fallback(not_ported)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -1106,10 +1112,10 @@ mod tests {
         call(&app, req("POST", "/api/pause", Some(json!({"paused": true})), tok)).await;
         let mut w = st.link.watch_state();
         tokio::time::timeout(Duration::from_secs(5), w.wait_for(|s| *s == LinkState::Paused)).await.unwrap().unwrap();
-        let (s, v, _) = call(&app, req("GET", "/api/onboarding", None, None)).await;
+        let (s, v, _) = call(&app, req("GET", "/api/nope", None, None)).await;
         assert_eq!((s, v["missing"].as_bool()), (StatusCode::NOT_FOUND, Some(true)));
         let (s, _, _) = call(&app, req("POST", "/api/onboarding", Some(json!({})), tok)).await;
-        assert_eq!(s, StatusCode::NOT_FOUND);
+        assert_eq!(s, StatusCode::BAD_REQUEST); // ported: the step is missing
         let (_, v, _) = call(&app, req("GET", "/api/rust", None, None)).await;
         assert!(v["ported"].as_array().unwrap().iter().any(|e| e == "POST /api/stick/proto"));
     }

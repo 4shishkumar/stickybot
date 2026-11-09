@@ -5,6 +5,7 @@
 //! Everything else answers 404, which the page already shows as "not available in this version".
 
 pub mod api;
+pub mod appctl;
 pub mod approvals;
 pub mod brain;
 pub mod brains;
@@ -30,6 +31,9 @@ pub mod openrouter;
 pub mod pet;
 pub mod python_agent;
 pub mod switch;
+pub mod setup;
+pub mod sysrun;
+pub mod hooks;
 pub mod speak;
 pub mod speech;
 pub mod talk;
@@ -143,6 +147,9 @@ pub struct AppState {
     /// face packages: the catalog, installs (`faces.rs`)
     pub faces: faces::Faces,
     openrouter: OnceLock<openrouter::OpenRouterBrain>,
+    /// the setup page, the components, restart / window (`setup.rs`); with the fake stick a
+    /// pretend Mac (`sysrun::FakeSystem`: tests never run gh / claude or touch ~/.claude)
+    pub setup: setup::Setup,
     me: OnceLock<Weak<AppState>>,
 }
 
@@ -220,6 +227,11 @@ impl AppState {
             keys: if fake { keys::Keys::new(Arc::new(keys::MemoryStore::default())) } else { keys::Keys::system() },
             faces: faces::Faces::new(fake),
             openrouter: OnceLock::new(),
+            setup: setup::Setup::new(if fake {
+                Arc::new(sysrun::FakeSystem::new(&paths_home))
+            } else {
+                Arc::new(sysrun::MacSystem)
+            }),
             me: OnceLock::new(),
         });
         let _ = st.me.set(Arc::downgrade(&st));
