@@ -106,6 +106,12 @@ void screenOpen() {
 
 bool screenActive() { return open_ || learning() || learnShown; }
 
+void screenClose() {
+  if (!open_) return;
+  open_ = false;
+  releaseHeld();
+}
+
 static String title(const String& s) {
   if (!s.length()) return s;
   String t = s;

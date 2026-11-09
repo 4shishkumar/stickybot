@@ -365,7 +365,7 @@ static void runHuman(const String& line) {
   if (cmd == "help") {
     Log.println("Commands: show | set <combo> | enter off|<ms> | name <text> | slot <1-3> | disconnect | reconnect | "
                    "forget <1-3|all> | web on | web off | standby <min> | brightness <pct> | face <id> | face demo [<id>] | "
-                   "screens [landscape|faces] | ir list|diag|listen|send|learn ...");
+                   "screens [landscape|faces] | mode mouse|presenter|media|home | ir list|diag|listen|send|learn ...");
     return;
   } else if (cmd == "show") {
     Log.printf("%s | combo %s | %s | Wi-Fi %s %s\n", hid::name().c_str(),

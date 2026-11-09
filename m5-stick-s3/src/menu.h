@@ -1,7 +1,8 @@
 // On-device settings menu.
 //   BtnA (front) = next item
 //   BtnB (side)  = change / select; hold on "Key" to scroll fast
-// "Games" leaves the menu (unsaved changes are dropped, as with Cancel) for the games.
+// The last items (2.5.0) open a screen: Games, Remote (IR), Air mouse, Presenter, Media remote;
+// like Cancel they leave the menu and drop the unsaved changes.
 // Changes to combo, Mac slot and standby are drafts until "Save & exit".
 #pragma once
 #include "combo.h"

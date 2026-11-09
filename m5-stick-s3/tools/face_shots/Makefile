@@ -5,6 +5,7 @@
 #   make -C tools/face_shots            every face's demo, a picture per step -> out/
 #   make -C tools/face_shots FACE=<id>  one face's demo
 #   make -C tools/face_shots air        the remote modes' screens (air mouse, presenter, media) -> out/air/
+#   make -C tools/face_shots menu       the stick's menu, a picture per item -> out/menu/
 #   make -C tools/face_shots previews   the dashboard's face pictures (mac-agent static/faces/)
 #   make -C tools/face_shots pkg PKG=<dir> [PREVIEWS=1]
 #                                       a face package (docs/faces/FORMAT.md): validated and
@@ -36,19 +37,21 @@ SANFLAGS := $(if $(SAN),-g -fsanitize=address -fsanitize=undefined -fno-omit-fra
 CXXFLAGS := -std=gnu++17 -O1 -w -Imock -I$(SRC) -I$(GFX) -I$(JSON) $(SANFLAGS)
 CFLAGS   := -O1 -w -Imock -I$(GFX) $(SANFLAGS)
 
-APP  := shots.cpp $(SRC)/ui.cpp $(SRC)/air_ui.cpp $(SRC)/fonts_vlw.cpp $(wildcard $(SRC)/faces/*.cpp) $(SRC)/faces/pkg/engine.cpp $(SRC)/games/draw.cpp $(wildcard $(SRC)/logic/*.cpp)
+APP  := shots.cpp $(SRC)/ui.cpp $(SRC)/menu.cpp $(SRC)/air_ui.cpp $(SRC)/fonts_vlw.cpp $(wildcard $(SRC)/faces/*.cpp) $(SRC)/faces/pkg/engine.cpp $(SRC)/games/draw.cpp $(wildcard $(SRC)/logic/*.cpp)
 LGFX := $(GFX)/lgfx/v1/LGFXBase.cpp $(GFX)/lgfx/v1/lgfx_v1.cpp $(GFX)/lgfx/v1/lgfx_fonts.cpp \
         $(GFX)/lgfx/v1/lgfx_v1_panel.cpp fbbase.cpp
 CSRC := $(wildcard $(GFX)/lgfx/utility/*.c) fontstubs.c
 OBJ  := $(addprefix $(B)/,$(notdir $(APP:.cpp=.o) $(LGFX:.cpp=.o) $(CSRC:.c=.o)))
 VPATH := $(SRC) $(SRC)/faces $(SRC)/faces/pkg $(SRC)/logic $(SRC)/games $(GFX)/lgfx/v1 $(GFX)/lgfx/utility .
 
-.PHONY: demo previews pkg fuzz air games clean
+.PHONY: demo previews pkg fuzz air games menu clean
 OUT ?= out/games
 demo: $(B)/shots
 	cd $(B)/.. && $(B)/shots demo out $(FACE)
 air: $(B)/shots
 	mkdir -p out/air && $(B)/shots air out/air
+menu: $(B)/shots
+	mkdir -p out/menu && $(B)/shots menu out/menu
 games: $(B)/shots
 	$(B)/shots games $(OUT)
 previews: $(B)/shots

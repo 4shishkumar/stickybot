@@ -30,6 +30,7 @@ struct Input {
 };
 void screenOpen();                     // the menu's "Remote"
 bool screenActive();                   // open, or a learn from the Mac is running (it shows)
+void screenClose();                    // another mode takes the screen (main.cpp: an air mode)
 // Draws it and handles the input; false when it isn't showing (nothing used)
 bool screenLoop(const Input& in);
 

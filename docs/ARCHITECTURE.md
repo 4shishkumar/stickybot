@@ -97,7 +97,7 @@ So the installer builds `~/Applications/StickyBot.app` on this Mac (`stick_agent
 | `~/.stick-agent/github_state.json`, `claude_sessions.json` | what the watchers last saw |
 | `~/.cache/huggingface/` | the speech models (~2.5 GB each) |
 | `~/.claude/settings.json` | Claude Code settings — our three hooks are registered here |
-| on the stick (flash, NVS) | combo, name, Mac slots, sounds, volume, brightness, motion options, Mac password (write-only), the games' best scores (2.5.0) |
+| on the stick (flash, NVS) | combo, name, Mac slots, sounds, volume, brightness, motion options, Mac password (write-only), the games' best scores and the air mouse / presenter settings (2.5.0); in its flash file system (LittleFS) the face packages (2.4.0) and the learned IR remotes (2.5.0) |
 
 ## The flows
 
