@@ -91,6 +91,12 @@ static void undim() {
   if (awake_) M5.Display.setBrightness(brightness);
 }
 
+void useSide(int side) {
+  want_ = side;
+  applyOrientation(side);
+  undim();
+}
+
 void dockEnd() {  // portrait-only screens
   applyOrientation(0);
   undim();

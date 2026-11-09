@@ -1,6 +1,7 @@
 // On-device settings menu.
 //   BtnA (front) = next item
 //   BtnB (side)  = change / select; hold on "Key" to scroll fast
+// "Games" leaves the menu (unsaved changes are dropped, as with Cancel) for the games.
 // Changes to combo, Mac slot and standby are drafts until "Save & exit".
 #pragma once
 #include "combo.h"
@@ -8,7 +9,7 @@
 
 namespace menu {
 
-enum class Action { NONE, REDRAW, TEST, WEB, FLIP, BT_TOGGLE, FORGET, BRIGHTNESS, VOLUME, POWER_OFF, SAVE, CANCEL };
+enum class Action { NONE, REDRAW, TEST, WEB, FLIP, BT_TOGGLE, FORGET, BRIGHTNESS, VOLUME, POWER_OFF, SAVE, CANCEL, GAMES };
 
 struct Draft {
   Combo   combo;

@@ -13,6 +13,7 @@
 #include <Preferences.h>
 #include "faces/faces.h"
 #include "faces/pkg/package.h"
+#include "games/games.h"
 
 namespace protocol {
 
@@ -254,6 +255,10 @@ Result run(const String& action, const Args& arg) {
       return ok("\"removed\":" + String(n));
     }
     return ok(faces::pkg::listJson(arg("page").toInt()));
+  }
+
+  if (action == "games") {  // the games and their best scores (2.5.0)
+    return ok(games::json());
   }
 
   if (action == "wmic") {

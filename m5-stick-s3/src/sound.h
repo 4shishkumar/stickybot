@@ -30,6 +30,13 @@ void describe(JsonObject out);                   // {tunes:[...], map:{event: tu
 bool busy();
 void playListen();  // the "speak now" cue: pauses the mic, plays, resumes it
 
+// Games (2.5.0): short effects ("g-flap", "g-score", "g-perfect", "g-hit", "g-over", "g-best",
+// "g-go", "g-level", "g-bonus", "g-tap"), only with sounds on, at the volume setting. Each one
+// replaces the one playing. keepOn(true) keeps the speaker up between them (no start-up
+// delay or click per effect) until keepOn(false).
+void effect(const char* name);
+void keepOn(bool on);
+
 // Sound clips sent by the Mac (Kenney sound packs, spoken replies...), as
 // packets on the "audio in" characteristic, all in order (see PROTOCOL.md):
 //   [0][samples u32][rate u16]   start a clip (drops an unfinished one)
