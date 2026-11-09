@@ -63,6 +63,7 @@ pub const PORTED: &[&str] = &[
     "GET /api/import",
     "POST /api/import",
     "GET /static-rs/*",
+    "GET /api/logs",
 ];
 
 /// The Python agent's endpoints that aren't here yet, by the phase that brings them.
@@ -73,7 +74,6 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
     ("POST /api/onboarding", "setup wizard progress"),
     ("GET /api/install", "setup page (#install)"),
     ("/api/install/*", "setup page steps and jobs"),
-    ("GET /api/logs", "log viewer (Logs)"),
     ("GET /api/voices", "macOS voices (say)"),
     ("POST /api/voice/test", "speech"),
     ("POST /api/events/test", "stick events"),
@@ -126,6 +126,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/wireless-mic/check", post(wireless_mic_check))
         .route("/api/import", get(import_info).post(import_run))
         .route("/static-rs/{*path}", get(rust_static))
+        .route("/api/logs", get(logs_tail))
         .fallback(not_ported)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -349,6 +350,12 @@ async fn play_sound(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<
 #[derive(serde::Deserialize)]
 struct HistoryQuery {
     n: Option<usize>,
+}
+
+/// The log file's last `n` (300) lines, oldest first (server.py `logs`).
+async fn logs_tail(State(st): State<Arc<AppState>>, Query(q): Query<HistoryQuery>) -> axum::Json<Value> {
+    let n = q.n.unwrap_or(300).min(5000);
+    axum::Json(json!(crate::logs::tail(&st.paths.log(), n)))
 }
 
 /// The last `n` (50) requests, newest first (server.py `history`).
@@ -1059,6 +1066,19 @@ mod tests {
         let (_, v, _) = call(&app, req("POST", "/api/wireless-mic/check", Some(json!({})), tok)).await;
         assert_eq!((v["ok"].as_bool(), v["state"].as_str()), (Some(false), Some("failed")));
         assert!(v["detail"].as_str().unwrap().contains("System Audio Recording"));
+    }
+
+    #[tokio::test]
+    async fn the_log_page_reads_the_last_lines() {
+        let (app, st, _) = app("logs", false).await;
+        let (_, v, _) = call(&app, req("GET", "/api/logs", None, None)).await;
+        assert_eq!(v, json!([]));
+        let text: String = (0..400).map(|i| format!("12:00:00 x: line {i}\n")).collect();
+        std::fs::write(st.paths.log(), text).unwrap();
+        let (_, v, _) = call(&app, req("GET", "/api/logs?n=2", None, None)).await;
+        assert_eq!(v, json!(["12:00:00 x: line 398", "12:00:00 x: line 399"]));
+        let (_, v, _) = call(&app, req("GET", "/api/logs", None, None)).await;
+        assert_eq!(v.as_array().unwrap().len(), 300);
     }
 
     #[tokio::test]

@@ -12,6 +12,7 @@ pub mod commands;
 pub mod config;
 pub mod firmware;
 pub mod hub;
+pub mod logs;
 pub mod migrate;
 pub mod python_agent;
 pub mod speech;
@@ -374,6 +375,12 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     let cfg: brain::Config =
         Arc::new(move || weak.upgrade().map(|s| s.cfg.lock().unwrap().clone()).unwrap_or_else(config::defaults));
     state.set_brain(Arc::new(brain::ClaudeBrain::new(cfg, state.paths.home.join("workspace"))));
+    let weak = Arc::downgrade(&state);
+    logs::set_live(Some(Box::new(move |text| {
+        if let Some(st) = weak.upgrade() {
+            st.hub.emit("log", json!({"text": text}));
+        }
+    })));
     spawn_link_watcher(state.clone());
     talk::spawn(state.clone());
     wmic::spawn(state.clone());

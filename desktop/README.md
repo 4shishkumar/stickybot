@@ -92,13 +92,13 @@ Guard as in `server.py`: only `Host: localhost:8670` / `127.0.0.1:8670`, and eve
 
 **Not ported yet** (they answer a JSON 404, which the page already shows as "not available in this
 version"; `GET /api/rust` lists them): `/api/pet`, `/api/firmware/flash` (USB), `/api/onboarding`
-(the wizard keeps its progress in the browser meanwhile), `/api/install*`, `/api/logs`,
+(the wizard keeps its progress in the browser meanwhile), `/api/install*`,
 `/api/voices`, `/api/voice/test`, `/api/events/test|history|kinds`, `/api/claude-event`,
 `/api/mcp*` and `/mcp`, `/api/brain*`, `/api/update*`, `/api/components*`,
 `/api/restart`, `/api/window`.
 
 How the pages degrade: the **Stick** page works except the Face card's pet line and USB flashing.
-Overview, Activity, Quick commands, Sounds (clips) and Settings → Wireless mic work. Events, Logs,
+Overview, Activity, Quick commands, Sounds (clips) and Settings → Wireless mic work. Logs works (`app.log`). Events,
 Settings → Brain (the OpenRouter part) show their "not available" states; the setup page's wireless-mic
 step (`/api/install`) isn't ported (use Settings). With no stick picked, the setup wizard opens as in the Python app;
 its *Pick your stick* step scans and saves the stick to **this** app's config.
@@ -112,6 +112,7 @@ its *Pick your stick* step scans and saves the stick to **this** app's config.
 | **Approvals** | `POST /api/permission` (the hook's long-poll), `POST /api/permission/decide`; the prompt on the stick every 3 s, A / B answers, `prompt` / `prompt_done` events, `status.prompts`. The hook still points at the Python agent (:8660); see *Testing*. |
 | **Sound clips** | `GET /api/clips`, `POST /api/clips/play`: packs in `~/.stickybot-rs/sounds/<pack>/` (ogg, wav, flac, mp3, aiff), made loud, AUDIO_IN packets (first / last acknowledged, the rest paced writes without response). |
 | **Wireless Wispr mic** | Hold A away from USB: the stick streams its mic (`prepare` → ADPCM → `stop`); this app makes the **`<stick>-bt-mic`** device (the Python app's name, `stick_mic_device.py`'s slug rules, so Wispr's ranking finds it; UID **`com.stickkey.rust-wireless-mic`**, never the Python agent's `com.stickkey.wireless-mic`), waits `wispr_switch_ms` (250) after creating it, answers `ready`, plays the frames (in order by seq, a lost one = 20 ms of silence, resampled, ~80 ms jitter buffer) into the carrier, keeps the device `wispr_tail_ms` (800) after `stop` (≤ 4 s more while Wispr still reads it), then removes it. `wmic` / `wready` in the hello. Carrier as `wireless_mic_carrier` (`auto`: the tap once its inaudible -80 dBFS check passed, else BlackHole 2ch; `tap`; `blackhole`). The stick on USB (`evt: usb`): no device, `ready` with `"device": false` (Wispr uses the stick's USB mic). `POST /api/wireless-mic/show` `{secs}`, `POST /api/wireless-mic/check`, `status.wireless_mic`, `wispr_mic` / `stick_mic` events. Cleanup of *our UID only* at start, on quit (Tauri `Exit`, headless Ctrl-C) and on disconnect / USB / off / rename. |
+| **Logs** | `GET /api/logs?n=` (300): the last lines of `~/.stickybot-rs/app.log` (`logs.rs`: every log line goes to stderr as before (`RUST_LOG`, default `info`), to `app.log` (rotated at 2 MB, `app.log.1`/`.2` kept, like the Python `RotatingFileHandler`) and to the live feed as `log` events, the Logs page's *Follow live*). |
 | **Firmware over Bluetooth** | `GET /api/firmware` (bundle + connected stick; `usb` always empty), `POST /api/firmware/ota` `{force}`, `GET /api/firmware/jobs/{id}` (SSE), `POST /api/firmware/jobs/{id}/cancel`. Bundles in `~/.stickybot-rs/firmware/<version>|local/` or `$STICKYBOT_RS_FIRMWARE`. `ota.py`'s checks (support, pending, versions / force, manifest SHA-256), windowed transfer, resume, then waits for the stick to come back with the new version (confirmed / rolled back). |
 
 ### Importing the Python app's settings (`migrate.rs`)
@@ -279,7 +280,7 @@ identity, and macOS asks for Bluetooth again**. See *Open decisions*.
    panic hook that removes the device (today: the next start does).
 2. Brain: one-shot mode, the stick tools (MCP server), OpenRouter; questions from a session
    (`ask_user`); speech output.
-3. Events / GitHub / pet / world / home card / weather in the hello; logs page; onboarding /
+3. Events / GitHub / pet / world / home card / weather in the hello; onboarding /
    install / updates (release downloads for firmware bundles); USB serial + esptool flashing.
 4. Packaging: a stable signing identity, login item, and the switch-over from the Python app.
 
