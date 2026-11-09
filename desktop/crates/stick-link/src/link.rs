@@ -5,6 +5,8 @@ use crate::proto::{self, Line, LineDecoder};
 use crate::transport::{BleError, Connection, Connector, Found, Incoming, Target};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -49,6 +51,9 @@ impl Default for Options {
 
 type HelloExtra = Box<dyn Fn() -> Map<String, Value> + Send + Sync>;
 
+/// Asked before every connect: `Some(why)` = not now (e.g. another app holds the stick).
+pub type Gate = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Option<String>> + Send>> + Send + Sync>;
+
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Control {
     target: Option<Target>,
@@ -68,6 +73,8 @@ struct Inner<C: Connector> {
     next_id: AtomicU64,
     mtu: AtomicUsize,
     hello_extra: Mutex<Option<HelloExtra>>,
+    gate: Mutex<Option<Gate>>,
+    held_back: Mutex<Option<String>>,
 }
 
 /// The link. Cheap to clone; every clone is the same link.
@@ -103,6 +110,8 @@ impl<C: Connector> Link<C> {
                 next_id: AtomicU64::new(1),
                 mtu: AtomicUsize::new(0),
                 hello_extra: Mutex::new(None),
+                gate: Mutex::new(None),
+                held_back: Mutex::new(None),
             }),
         }
     }
@@ -138,6 +147,17 @@ impl<C: Connector> Link<C> {
     /// Merged into every hello (later: the home card, weather, `wmic`...).
     pub fn set_hello_extra(&self, f: impl Fn() -> Map<String, Value> + Send + Sync + 'static) {
         *self.inner.hello_extra.lock().unwrap() = Some(Box::new(f));
+    }
+
+    /// Checked before each connect attempt; while it says why not, the link waits (state
+    /// `searching`) and asks again after `retry_after`.
+    pub fn set_gate(&self, gate: Gate) {
+        *self.inner.gate.lock().unwrap() = Some(gate);
+    }
+
+    /// Why the link isn't connecting right now (the gate's answer), if it's held back.
+    pub fn held_back(&self) -> Option<String> {
+        self.inner.held_back.lock().unwrap().clone()
     }
 
     pub fn state(&self) -> LinkState {
@@ -241,6 +261,23 @@ impl<C: Connector> Link<C> {
                 continue;
             };
             self.set_state(LinkState::Searching);
+            let gate = self.inner.gate.lock().unwrap().clone();
+            let why = match gate {
+                Some(g) => g().await,
+                None => None,
+            };
+            let changed = *self.inner.held_back.lock().unwrap() != why;
+            if changed && let Some(w) = &why {
+                log::warn!("not connecting: {w}");
+            }
+            *self.inner.held_back.lock().unwrap() = why.clone();
+            if why.is_some() {
+                tokio::select! {
+                    _ = tokio::time::sleep(self.inner.opts.retry_after) => {}
+                    r = ctl.changed() => if r.is_err() { return; }
+                }
+                continue;
+            }
             let attempt = tokio::select! {
                 r = self.inner.connector.connect(&target) => Some(r),
                 r = ctl.changed() => { if r.is_err() { return; } None }  // re-picked / paused meanwhile
@@ -560,6 +597,27 @@ mod tests {
         assert!(last["t"].as_i64().unwrap() > 1_600_000_000);
         assert!(last["tz"].is_i64());
         assert_eq!(last["wmic"], false);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_gate_holds_the_link_back() {
+        let fake = FakeStick::new();
+        let link = Link::with_options(fake.clone(), quiet());
+        let busy = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let b = busy.clone();
+        link.set_gate(Arc::new(move || {
+            let held = b.load(Ordering::Relaxed);
+            Box::pin(async move { held.then(|| "the Python agent holds the stick".to_string()) })
+        }));
+        link.spawn();
+        link.set_target(Some(Target { address: "FAKE".into(), name: "x".into() }));
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(fake.connect_attempts(), 0);
+        assert_eq!(link.state(), LinkState::Searching);
+        assert_eq!(link.held_back().as_deref(), Some("the Python agent holds the stick"));
+        busy.store(false, Ordering::Relaxed);
+        wait_for(&link, LinkState::Connected).await;
+        assert_eq!(link.held_back(), None);
     }
 
     #[tokio::test(start_paused = true)]

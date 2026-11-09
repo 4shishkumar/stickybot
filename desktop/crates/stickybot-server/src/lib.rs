@@ -7,6 +7,7 @@
 pub mod api;
 pub mod config;
 pub mod hub;
+pub mod python_agent;
 
 use serde_json::{Map, Value, json};
 use std::net::SocketAddr;
@@ -98,7 +99,12 @@ impl AppState {
         let cfg = self.cfg.lock().unwrap();
         json!({
             "state": self.agent_state(),
-            "detail": if self.fake { "Rust preview with a fake stick" } else { "Rust preview: Bluetooth link + Stick page" },
+            "detail": match (self.fake, self.link.held_back()) {
+                (true, _) => "Rust preview with a fake stick".to_string(),
+                (false, Some(why)) => format!("Waiting: {why}"),
+                (false, None) => "Rust preview: Bluetooth link + Stick page".to_string(),
+            },
+            "held_back": self.link.held_back(),
             "link": self.link.state().as_str(),
             "stick": cfg.get("stick").cloned().unwrap_or(Value::Null),
             "stt_ready": false,
@@ -157,6 +163,11 @@ pub async fn start(opts: Options) -> Result<Running, String> {
         .map_err(|e| format!("can't listen on 127.0.0.1:{}: {e}", opts.port))?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
     spawn_link_watcher(state.clone());
+    if !state.fake && std::env::var("STICKYBOT_RS_ALLOW_SHARED").as_deref() != Ok("1") {
+        let port =
+            std::env::var("STICKYBOT_RS_PYTHON_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(python_agent::PORT);
+        state.link.set_gate(Arc::new(move || Box::pin(python_agent::check(port))));
+    }
     state.link.spawn();
     state.link.set_target(state.stick());
     let app = api::router(state.clone());

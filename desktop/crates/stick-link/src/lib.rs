@@ -15,7 +15,7 @@ pub mod transport;
 #[cfg(target_os = "macos")]
 pub mod corebt;
 
-pub use link::{Link, LinkState, Options};
+pub use link::{Gate, Link, LinkState, Options};
 pub use transport::{BleError, Connection, Connector, Found, Incoming, Target};
 
 use std::time::Duration;
