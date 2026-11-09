@@ -12,6 +12,7 @@ pub mod commands;
 pub mod config;
 pub mod firmware;
 pub mod hub;
+pub mod migrate;
 pub mod python_agent;
 pub mod speech;
 pub mod talk;
@@ -33,11 +34,14 @@ pub struct Options {
     /// a stick in memory instead of Bluetooth (demos, screenshots, UI work while the Python agent
     /// has the real stick)
     pub fake_stick: bool,
+    /// the Python app's folder to import from (first start, Settings → Import); `None`: never
+    /// (tests). `from_env` sets it (`$STICKYBOT_RS_IMPORT_FROM`, else `~/.stick-agent`).
+    pub import_from: Option<PathBuf>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { port: DEFAULT_PORT, home: config::default_home(), fake_stick: false }
+        Self { port: DEFAULT_PORT, home: config::default_home(), fake_stick: false, import_from: None }
     }
 }
 
@@ -49,6 +53,7 @@ impl Options {
             o.port = p;
         }
         o.fake_stick = std::env::var("STICKYBOT_RS_FAKE_STICK").is_ok_and(|v| v == "1");
+        o.import_from = migrate::default_source();
         o
     }
 }
@@ -84,6 +89,8 @@ pub struct AppState {
     pub ota_timings: Mutex<firmware::UpdateTimings>,
     /// the wireless Wispr mic (the "<stick>-bt-mic" device and the stick's audio played into it)
     pub wmic: wmic::WirelessMic,
+    /// the Python app's folder (read-only; see `migrate.rs`)
+    pub import_from: Option<PathBuf>,
     me: OnceLock<Weak<AppState>>,
 }
 
@@ -125,6 +132,7 @@ impl AppState {
             approvals: approvals::Approvals::default(),
             ota_timings: Mutex::new(firmware::UpdateTimings::default()),
             wmic: wmic::WirelessMic::new(),
+            import_from: opts.import_from.clone(),
             me: OnceLock::new(),
         });
         let _ = st.me.set(Arc::downgrade(&st));
@@ -288,6 +296,29 @@ impl AppState {
         })
     }
 
+    /// Takes over the Python app's settings (see `migrate.rs`) and applies them to the running app.
+    pub fn import_python(&self, mode: migrate::Mode) -> Result<migrate::Report, String> {
+        let from = self.import_from.clone().ok_or("no StickyBot (Python) folder to import from")?;
+        let sounds = clips::sounds_dir(&self.paths.home);
+        let r = migrate::import(&from, &self.paths, &sounds, mode);
+        match &r {
+            Ok(r) => {
+                log::info!("imported from {}: {}", from.display(), r.imported.join("; "));
+                if !r.skipped.is_empty() {
+                    log::info!("not imported: {}", r.skipped.join("; "));
+                }
+                if !r.config.is_empty()
+                    && let Err(e) = self.update_config(r.config.clone())
+                {
+                    log::warn!("import: {e}");
+                }
+            }
+            Err(e) if mode == migrate::Mode::FirstRun => log::info!("nothing to import: {e}"),
+            Err(e) => log::warn!("import: {e}"),
+        }
+        r
+    }
+
     /// Settings changed (PUT /api/config): save, tell the pages, follow a new stick.
     pub fn update_config(&self, changes: Map<String, Value>) -> Result<Map<String, Value>, String> {
         let stick_changed;
@@ -328,6 +359,9 @@ pub struct Running {
 pub async fn start(opts: Options) -> Result<Running, String> {
     let backend = if opts.fake_stick { Backend::Fake(stick_link::fake::FakeStick::new()) } else { Backend::system() };
     let state = AppState::new(&opts, backend)?;
+    if !state.fake && migrate::first_run(&state.paths) {
+        let _ = state.import_python(migrate::Mode::FirstRun);
+    }
     if state.fake && state.stick().is_none() {
         // the fake stick is "picked" so the pages show a connected stick right away (not saved)
         state.cfg.lock().unwrap().insert("stick".into(), json!({"address": "FAKE", "name": "StickyBot (fake)"}));

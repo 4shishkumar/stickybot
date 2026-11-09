@@ -60,6 +60,9 @@ pub const PORTED: &[&str] = &[
     "POST /api/firmware/jobs/{id}/cancel",
     "POST /api/wireless-mic/show",
     "POST /api/wireless-mic/check",
+    "GET /api/import",
+    "POST /api/import",
+    "GET /static-rs/*",
 ];
 
 /// The Python agent's endpoints that aren't here yet, by the phase that brings them.
@@ -121,6 +124,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/firmware/jobs/{id}/cancel", post(job_cancel))
         .route("/api/wireless-mic/show", post(wireless_mic_show))
         .route("/api/wireless-mic/check", post(wireless_mic_check))
+        .route("/api/import", get(import_info).post(import_run))
+        .route("/static-rs/{*path}", get(rust_static))
         .fallback(not_ported)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -160,7 +165,42 @@ async fn not_ported(req: Request) -> Response {
 }
 
 async fn page(State(st): State<Arc<AppState>>) -> Html<String> {
-    Html(PAGE.replace("{{TOKEN}}", &st.token).replace("<title>StickyBot</title>", "<title>StickyBot (Rust)</title>"))
+    Html(
+        PAGE.replace("{{TOKEN}}", &st.token)
+            .replace("<title>StickyBot</title>", "<title>StickyBot (Rust)</title>")
+            .replace("</body>", "<script type=\"module\" src=\"/static-rs/rust.js\"></script>\n</body>"),
+    )
+}
+
+/// This app's own additions to the shared page (`assets/`): e.g. Settings → Import from StickyBot.
+const RUST_ASSETS: &[(&str, &str, &str)] = &[("rust.js", "text/javascript", include_str!("../assets/rust.js"))];
+
+async fn rust_static(Path(path): Path<String>) -> Response {
+    match RUST_ASSETS.iter().find(|(p, _, _)| *p == path) {
+        Some((_, mime, body)) => ([(header::CONTENT_TYPE, *mime)], *body).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// Is there a Python app to import from, and the last import.
+async fn import_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    let from = st.import_from.clone();
+    let available = from.as_ref().is_some_and(|f| f.join("config.json").is_file() || f.join("commands.json").is_file());
+    let last = std::fs::read_to_string(st.paths.home.join(crate::migrate::MARKER))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok());
+    axum::Json(json!({"available": available, "from": from, "last": last}))
+}
+
+/// Settings → Import from StickyBot: the Python app's settings, commands, sounds, history (read
+/// only there; this app's replaced files are kept as `*.before-import`).
+async fn import_run(State(st): State<Arc<AppState>>) -> Response {
+    let st2 = st.clone();
+    match tokio::task::spawn_blocking(move || st2.import_python(crate::migrate::Mode::Explicit)).await {
+        Ok(Ok(r)) => axum::Json(r.to_json()).into_response(),
+        Ok(Err(e)) => err(StatusCode::NOT_FOUND, &e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
 }
 
 async fn static_file(Path(path): Path<String>) -> Response {
@@ -551,7 +591,7 @@ mod tests {
     async fn app(name: &str, connect: bool) -> (Router, Arc<AppState>, FakeStick) {
         let home = std::env::temp_dir().join(format!("stickybot-rs-api-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
-        let opts = Options { port: PORT, home, fake_stick: true };
+        let opts = Options { port: PORT, home, fake_stick: true, import_from: None };
         let fake = FakeStick::new();
         let st = AppState::new(&opts, Backend::Fake(fake.clone())).unwrap();
         st.link.spawn();
@@ -1019,5 +1059,55 @@ mod tests {
         let (_, v, _) = call(&app, req("POST", "/api/wireless-mic/check", Some(json!({})), tok)).await;
         assert_eq!((v["ok"].as_bool(), v["state"].as_str()), (Some(false), Some("failed")));
         assert!(v["detail"].as_str().unwrap().contains("System Audio Recording"));
+    }
+
+    #[tokio::test]
+    async fn import_from_the_python_app_applies_the_settings() {
+        // a fake home: the Python folder is made up here, never the real ~/.stick-agent
+        let root = std::env::temp_dir().join(format!("stickybot-rs-api-import-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let py = root.join(".stick-agent");
+        std::fs::create_dir_all(&py).unwrap();
+        let opts = Options { port: PORT, home: root.join(".stickybot-rs"), fake_stick: true, import_from: Some(py.clone()) };
+        let st = AppState::new(&opts, Backend::Fake(FakeStick::new())).unwrap();
+        st.link.spawn();
+        let app = router(st.clone());
+        let tok = Some(st.token.as_str());
+
+        let (_, v, _) = call(&app, req("GET", "/api/import", None, None)).await;
+        assert_eq!((v["available"].as_bool(), v["last"].clone()), (Some(false), Value::Null));
+        let (s, v, _) = call(&app, req("POST", "/api/import", Some(json!({})), tok)).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        assert!(v["error"].as_str().unwrap().contains("no StickyBot settings"));
+
+        std::fs::write(
+            py.join("config.json"),
+            json!({"stick": {"address": "S1", "name": "Ash"}, "github": {"on": true, "interval_s": 120,
+                   "primary_repo": "acme/w"}, "model": "opus"})
+            .to_string(),
+        )
+        .unwrap();
+        let (_, v, _) = call(&app, req("GET", "/api/import", None, None)).await;
+        assert_eq!(v["available"], true);
+        let (s, v, _) = call(&app, req("POST", "/api/import", Some(json!({})), None)).await;
+        assert_eq!((s, v["error"].as_str()), (StatusCode::FORBIDDEN, Some("bad token")));
+        let (s, v, _) = call(&app, req("POST", "/api/import", Some(json!({})), tok)).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert!(v["imported"][0].as_str().unwrap().starts_with("config: 3 settings"), "{v}");
+        // applied to the running app: the link follows the imported stick
+        assert_eq!(st.cfg.lock().unwrap()["github"]["primary_repo"], "acme/w");
+        assert_eq!(st.stick().unwrap().address, "S1");
+        let (_, v, _) = call(&app, req("GET", "/api/config", None, None)).await;
+        assert_eq!(v["model"], "opus");
+        let (_, v, _) = call(&app, req("GET", "/api/import", None, None)).await;
+        assert_eq!(v["last"]["mode"], "Explicit");
+
+        // the page loads the Rust-only script that adds the button
+        let (_, v, _) = call(&app, req("GET", "/", None, None)).await;
+        assert!(v.as_str().unwrap().contains("/static-rs/rust.js"));
+        let (s, v, ctype) = call(&app, req("GET", "/static-rs/rust.js", None, None)).await;
+        assert_eq!((s, ctype.as_str()), (StatusCode::OK, "text/javascript"));
+        assert!(v.as_str().unwrap().contains("/api/import"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

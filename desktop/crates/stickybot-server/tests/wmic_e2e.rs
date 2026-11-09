@@ -180,7 +180,7 @@ async fn the_sticks_audio_reaches_the_device() {
     let home = std::env::temp_dir().join(format!("stickybot-rs-wmic-e2e-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     let fake = FakeStick::new();
-    let st = AppState::new(&Options { port: 8670, home: home.clone(), fake_stick: true }, Backend::Fake(fake.clone()))
+    let st = AppState::new(&Options { port: 8670, home: home.clone(), fake_stick: true, import_from: None }, Backend::Fake(fake.clone()))
         .unwrap();
     st.link.spawn();
     wmic::spawn(st.clone());

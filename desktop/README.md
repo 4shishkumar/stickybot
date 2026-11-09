@@ -40,7 +40,8 @@ Environment: `STICKYBOT_RS_PORT` (8670), `STICKYBOT_RS_HOME` (`~/.stickybot-rs`)
 (see *Safety*), `RUST_LOG=debug` (every message from the stick is logged at debug),
 `STICKYBOT_RS_MODELS` (`<home>/models`, the speech model), `STICKYBOT_RS_NO_STT=1` (don't download /
 load it), `STICKYBOT_RS_FIRMWARE` (a firmware bundle folder), `STICKYBOT_RS_SOUNDS`
-(`<home>/sounds`, sound packs), `STICKYBOT_RS_AUDIO_E2E=1` (runs the wireless-mic test against real
+(`<home>/sounds`, sound packs), `STICKYBOT_RS_IMPORT_FROM` (`~/.stick-agent`, read-only: what
+*Import from StickyBot* copies), `STICKYBOT_RS_AUDIO_E2E=1` (runs the wireless-mic test against real
 Core Audio).
 
 The first start downloads the speech model (Parakeet TDT 0.6b v3 int8 ONNX, 487 MB, from
@@ -112,6 +113,30 @@ its *Pick your stick* step scans and saves the stick to **this** app's config.
 | **Sound clips** | `GET /api/clips`, `POST /api/clips/play`: packs in `~/.stickybot-rs/sounds/<pack>/` (ogg, wav, flac, mp3, aiff), made loud, AUDIO_IN packets (first / last acknowledged, the rest paced writes without response). |
 | **Wireless Wispr mic** | Hold A away from USB: the stick streams its mic (`prepare` → ADPCM → `stop`); this app makes the **`<stick>-bt-mic`** device (the Python app's name, `stick_mic_device.py`'s slug rules, so Wispr's ranking finds it; UID **`com.stickkey.rust-wireless-mic`**, never the Python agent's `com.stickkey.wireless-mic`), waits `wispr_switch_ms` (250) after creating it, answers `ready`, plays the frames (in order by seq, a lost one = 20 ms of silence, resampled, ~80 ms jitter buffer) into the carrier, keeps the device `wispr_tail_ms` (800) after `stop` (≤ 4 s more while Wispr still reads it), then removes it. `wmic` / `wready` in the hello. Carrier as `wireless_mic_carrier` (`auto`: the tap once its inaudible -80 dBFS check passed, else BlackHole 2ch; `tap`; `blackhole`). The stick on USB (`evt: usb`): no device, `ready` with `"device": false` (Wispr uses the stick's USB mic). `POST /api/wireless-mic/show` `{secs}`, `POST /api/wireless-mic/check`, `status.wireless_mic`, `wispr_mic` / `stick_mic` events. Cleanup of *our UID only* at start, on quit (Tauri `Exit`, headless Ctrl-C) and on disconnect / USB / off / rename. |
 | **Firmware over Bluetooth** | `GET /api/firmware` (bundle + connected stick; `usb` always empty), `POST /api/firmware/ota` `{force}`, `GET /api/firmware/jobs/{id}` (SSE), `POST /api/firmware/jobs/{id}/cancel`. Bundles in `~/.stickybot-rs/firmware/<version>|local/` or `$STICKYBOT_RS_FIRMWARE`. `ota.py`'s checks (support, pending, versions / force, manifest SHA-256), windowed transfer, resume, then waits for the stick to come back with the new version (confirmed / rolled back). |
+
+### Importing the Python app's settings (`migrate.rs`)
+
+At switch-over this app takes over `~/.stick-agent/` (**read-only**: files are read and copied,
+never written, moved or deleted there; a test checks every byte and mtime):
+
+- `config.json`: every key both apps know (the stick, `github` incl. `primary_repo`, the wireless
+  mic and Wispr timings, `brain` / `model` / OpenRouter model, sounds, approvals, events, quiet hours,
+  updates…), each checked like `PUT /api/config` (an invalid or wrong-type value keeps the default).
+  Not taken: `stt_model` (a different speech model here), removed keys (`wispr_fallback_mic`), the
+  token (each app has its own).
+- `commands.json` (your voice commands, with their real repo URLs), `sounds/<pack>/*` (sound files
+  only; a clip already here is kept), `history.jsonl` (same format; merged in time order, no
+  duplicates; unknown lines skipped), `workspace/CLAUDE.md` (if you changed it).
+
+When: on the **first start** (no `config.json` and no `imported.json` in `~/.stickybot-rs/`; not with
+the fake stick) it fills the empty app: commands only if still the defaults. And on demand:
+**Settings → Import from StickyBot** (a Rust-only card the page gets from `/static-rs/rust.js`) or
+`POST /api/import`: the Python app's settings and commands win, this app's are kept as
+`config.json.before-import` / `commands.json.before-import`. `GET /api/import` says whether there is
+anything to import and when the last import was (`imported.json`). The source is
+`$STICKYBOT_RS_IMPORT_FROM` or `~/.stick-agent`; tests use a fake home (`Options::import_from`).
+The settings are applied to the running app (a new stick re-targets the link; the Python-agent
+check still holds it back while the Python app has the stick).
 
 **Write-without-response pacing** (`pacing.rs`, used by `corebt.rs`): before each packet on
 AUDIO_IN / OTA_DATA, `canSendWriteWithoutResponse` is checked and the packet queued in one block on

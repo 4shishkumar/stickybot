@@ -58,7 +58,7 @@ async fn hold_b_with_real_speech() {
     let home = std::env::temp_dir().join(format!("stickybot-rs-e2e-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     let fake = FakeStick::new();
-    let st = AppState::new(&Options { port: 8670, home: home.clone(), fake_stick: true }, Backend::Fake(fake.clone()))
+    let st = AppState::new(&Options { port: 8670, home: home.clone(), fake_stick: true, import_from: None }, Backend::Fake(fake.clone()))
         .unwrap();
     let opened = Arc::new(Mutex::new(Vec::new()));
     let o = opened.clone();

@@ -935,7 +935,7 @@ mod tests {
         let home = std::env::temp_dir().join(format!("stickybot-rs-wmic-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         let fake = FakeStick::new();
-        let st = AppState::new(&Options { port: 8670, home, fake_stick: true }, Backend::Fake(fake.clone())).unwrap();
+        let st = AppState::new(&Options { port: 8670, home, fake_stick: true, import_from: None }, Backend::Fake(fake.clone())).unwrap();
         let ca = FakeCoreAudio::new();
         let out = FakeOutputs::new(outs);
         st.wmic.use_audio(Audio::fake(&ca, &out, tap));

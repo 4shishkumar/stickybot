@@ -23,7 +23,7 @@ pub fn sounds_dir(home: &Path) -> PathBuf {
     }
 }
 
-fn is_sound(p: &Path) -> bool {
+pub fn is_sound(p: &Path) -> bool {
     p.extension().and_then(|e| e.to_str()).is_some_and(|e| EXTS.contains(&e.to_lowercase().as_str()))
 }
 

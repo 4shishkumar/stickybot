@@ -506,7 +506,7 @@ pub(crate) mod tests {
     pub async fn agent(name: &str, stt_ready: bool) -> T {
         let home = std::env::temp_dir().join(format!("stickybot-rs-talk-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
-        let opts = Options { port: 8670, home, fake_stick: true };
+        let opts = Options { port: 8670, home, fake_stick: true, import_from: None };
         let fake = FakeStick::new();
         let st = AppState::new(&opts, Backend::Fake(fake.clone())).unwrap();
         let ran = Arc::new(Mutex::new(Vec::new()));
