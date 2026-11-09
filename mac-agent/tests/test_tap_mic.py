@@ -139,6 +139,94 @@ def test_no_default_output(no_core_audio):
     assert d.ensure_present() == "" and "output" in d.error
 
 
+# --- Bluetooth default output: clocked by and played into the built-in speakers ------------------
+
+BUDS = {"name": "OnePlus Buds 3", "max_output_channels": 2, "max_input_channels": 1,
+        "default_samplerate": 44100.0, "default": True}
+
+
+def bluetooth_default(ca, transport="blue"):
+    """The OnePlus Buds 3 (Bluetooth / Bluetooth LE) as the default output."""
+    ca.list[130] = ("OnePlus Buds 3", "Buds-UID")
+    ca.transports[130] = transport
+    ca.outputs.add(130)
+    ca.output_uid = "Buds-UID"
+
+
+@pytest.mark.parametrize("transport", ["blue", "blea"])
+def test_bluetooth_default_clocks_the_tap_by_the_built_in_speakers(no_core_audio, transport):
+    bluetooth_default(no_core_audio, transport)
+    d = tapped()
+    assert d.ensure_present() == "created"
+    assert no_core_audio.created[0][2] == "BuiltInSpeaker"  # not the Buds
+    assert no_core_audio.aggregates[d.dev]["master"] == "BuiltInSpeaker"
+    assert d.tap_output == {"uid": "BuiltInSpeaker", "name": "MacBook Pro Speakers", "redirected": True,
+                            "why": "default output is Bluetooth (OnePlus Buds 3): playing into MacBook Pro Speakers"}
+    assert d.output_for_tap()["name"] == "MacBook Pro Speakers"
+
+
+def test_built_in_default_is_unchanged(no_core_audio):
+    bluetooth_default(no_core_audio)
+    no_core_audio.output_uid = "BuiltInSpeaker"  # Buds connected, but the speakers are the default
+    d = tapped()
+    d.ensure_present()
+    assert no_core_audio.created[0][2] == "BuiltInSpeaker"
+    assert d.tap_output == {"uid": "BuiltInSpeaker", "name": "MacBook Pro Speakers", "redirected": False, "why": ""}
+
+
+def test_usb_default_is_unchanged(no_core_audio):
+    no_core_audio.list[140] = ("USB Headset", "USB-UID")
+    no_core_audio.transports[140] = "usb "
+    no_core_audio.outputs.add(140)
+    no_core_audio.output_uid = "USB-UID"
+    d = tapped()
+    d.ensure_present()
+    assert no_core_audio.created[0][2] == "USB-UID" and not d.tap_output["redirected"]
+
+
+def test_bluetooth_default_without_built_in_speakers_uses_a_wired_output(no_core_audio):
+    bluetooth_default(no_core_audio)
+    del no_core_audio.list[108]  # a Mac without built-in speakers...
+    no_core_audio.list[150] = ("LG HDR 4K", "HDMI-UID")  # ...but a display with speakers
+    no_core_audio.transports[150] = "hdmi"
+    no_core_audio.outputs.add(150)
+    d = tapped()
+    d.ensure_present()
+    assert no_core_audio.created[0][2] == "HDMI-UID"  # not BlackHole (virtual), not the Buds
+    assert d.tap_output["redirected"] and "no built-in speakers: playing into LG HDR 4K" in d.tap_output["why"]
+
+
+def test_bluetooth_default_with_nothing_else_keeps_it_and_says_so(no_core_audio, caplog):
+    bluetooth_default(no_core_audio)
+    del no_core_audio.list[108]  # only the Buds, BlackHole (virtual) and the built-in mic (no output)
+    d = tapped()
+    with caplog.at_level("WARNING", logger="wispr"):
+        assert d.ensure_present() == "created"
+    assert no_core_audio.created[0][2] == "Buds-UID"  # as before
+    assert not d.tap_output["redirected"] and "no other wired output" in d.tap_output["why"]
+    assert "default output is Bluetooth (OnePlus Buds 3) and there's no other wired output" in caplog.text
+
+
+def test_a_backend_without_transport_types_keeps_the_default(no_core_audio, monkeypatch):
+    bluetooth_default(no_core_audio)
+    monkeypatch.delattr(type(no_core_audio), "transport_type")
+    d = tapped()
+    d.ensure_present()
+    assert no_core_audio.created[0][2] == "Buds-UID"
+
+
+def test_the_check_runs_through_the_built_in_speakers_too(no_core_audio, caplog):
+    bluetooth_default(no_core_audio)
+    with caplog.at_level("INFO", logger="wispr"):
+        res = tapped().probe()
+    assert res["state"] == "ok" and res["output"] == "MacBook Pro Speakers"
+    assert no_core_audio.created[0][1] == UID + ".check" and no_core_audio.created[0][2] == "BuiltInSpeaker"
+    (_dev, _secs, amp), = no_core_audio.measured
+    assert amp <= 1e-4  # still the inaudible tone
+    assert "default output is Bluetooth (OnePlus Buds 3): playing into MacBook Pro Speakers" in caplog.text
+    assert "through MacBook Pro Speakers" in caplog.text
+
+
 def test_stale_taps_are_removed_by_name(no_core_audio):
     no_core_audio.tap_list = {60: ("A", UID + ".tap", 5), 61: ("B", UID + ".check.tap", 5),
                               62: ("C", "someone else's tap", 5)}
@@ -254,6 +342,35 @@ async def test_a_hold_in_tap_mode(tap_agent, no_core_audio, no_real_audio):
     assert await wait_for(lambda: not no_core_audio.ours())
     assert no_core_audio.tap_list == {} and not tap_agent.mic_dev.tap_live
     assert await wait_for(lambda: stream.closed) and tap_agent.wispr.stream is None
+
+
+async def test_a_hold_with_bluetooth_headphones_plays_into_the_built_in_speakers(tap_agent, no_core_audio,
+                                                                                 no_real_audio):
+    """The Buds as the default output: the tapped device is clocked by the built-in speakers and the
+    stick plays into them (muted by the tap), never into the Buds."""
+    bluetooth_default(no_core_audio)
+    no_real_audio.devices = [BUDS, {**SPEAKERS, "default": False}]  # PortAudio: the Buds are the default
+    tap_agent.update_config({"wireless_mic": True})
+    assert await wait_for(lambda: tap_agent.wispr.carrier == TAP)
+    assert no_core_audio.created[0][2] == "BuiltInSpeaker"  # the check took the same path
+    tap_agent._on_link("connected")
+    tap_agent._on_message({"src": "agent", "evt": "wispr", "state": "prepare", "id": 6, "rate": 16000})
+    stream = no_real_audio.streams[-1]
+    assert stream.kw["device"] == 1 and stream.kw["samplerate"] == 48000  # the speakers, not the Buds (0)
+    assert await wait_for(lambda: readies(tap_agent))
+    assert no_core_audio.aggregates[tap_agent.mic_dev.dev]["master"] == "BuiltInSpeaker"
+    assert tap_agent.status()["wireless_mic"]["device"] == "MacBook Pro Speakers"
+    tap_agent._on_message({"src": "agent", "evt": "wispr", "state": "stop"})
+    assert await wait_for(lambda: tap_agent.wispr.stream is None)
+    # the Buds go away: the next hold plays into the (now default) speakers, as always
+    no_core_audio.output_uid = "BuiltInSpeaker"
+    no_real_audio.devices = [{**SPEAKERS}]
+    tap_agent._on_message({"src": "agent", "evt": "wispr", "state": "prepare", "id": 7, "rate": 16000})
+    assert no_real_audio.streams[-1].kw["device"] == 0 and tap_agent.wispr.dev["name"] == "MacBook Pro Speakers"
+    assert await wait_for(lambda: len(readies(tap_agent)) == 2)
+    assert no_core_audio.created[-1][2] == "BuiltInSpeaker" and not tap_agent.mic_dev.tap_output["redirected"]
+    tap_agent._on_message({"src": "agent", "evt": "wispr", "state": "stop"})
+    assert await wait_for(lambda: tap_agent.wispr.stream is None)
 
 
 async def test_without_the_tap_nothing_reaches_the_speakers(tap_agent, no_core_audio, no_real_audio):

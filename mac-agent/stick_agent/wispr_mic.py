@@ -6,7 +6,9 @@ the same ADPCM frames as a B talk, between {"evt":"wispr","state":"prepare"} and
 the "<stick>-bt-mic" device that stick_mic_device.py shows around each hold,
 which Wispr ranks first — no cable. Two carriers (stick_mic_device.py):
 
-- "tap": we play into the default output device; the agent's own process tap
+- "tap": we play into the default output device (the built-in speakers when the
+  default is Bluetooth: the same output the device is clocked by, `output`,
+  stick_mic_device.choose_tap_output()); the agent's own process tap
   (inside that device) mutes it and hands it to the device's input. Audio only
   goes out while the tap exists (`gate`), so the stick never plays out of the
   speakers. The stream is opened at "prepare" and closed once the device is
@@ -45,17 +47,21 @@ def _sounddevice():
 
 
 def find_device(sd, name=DEVICE):
-    """The output device whose name contains `name` -> {index, name, rate, channels}, or None."""
+    """The output device named `name` (else the first whose name contains it) -> {index, name, rate,
+    channels}, or None."""
     try:
         devices = sd.query_devices()
     except Exception as e:  # noqa: BLE001 — PortAudio missing / broken
         log.warning("can't list audio devices: %s", e)
         return None
-    for i, d in enumerate(devices):
-        if name.lower() in str(d.get("name", "")).lower() and d.get("max_output_channels", 0) > 0:
-            return {"index": d.get("index", i), "name": d["name"], "rate": int(d.get("default_samplerate") or 48000),
-                    "channels": min(2, int(d["max_output_channels"]))}
-    return None
+    outs = [(i, d) for i, d in enumerate(devices) if d.get("max_output_channels", 0) > 0]
+    match = next(((i, d) for i, d in outs if str(d.get("name", "")).lower() == name.lower()), None) or next(
+        ((i, d) for i, d in outs if name.lower() in str(d.get("name", "")).lower()), None)
+    if match is None:
+        return None
+    i, d = match
+    return {"index": d.get("index", i), "name": d["name"], "rate": int(d.get("default_samplerate") or 48000),
+            "channels": min(2, int(d["max_output_channels"]))}
 
 
 def find_default_output(sd):
@@ -227,7 +233,8 @@ class WisprMic:
     """Plays Wispr streams from the stick into the carrier. `emit(kind, **data)` reports
     to the dashboard; `sd` is the sounddevice module (tests pass a fake). `carrier`: "blackhole",
     "tap" or None (none usable: `unavailable` says why); `gate()`: may audio go out now (tap mode:
-    only while our tap exists)."""
+    only while our tap exists); `output()`: tap mode, the output the tapped device is clocked by
+    (StickMicDevice.output_for_tap: a choose_tap_output() pick, or None = the default output)."""
 
     def __init__(self, emit=None, sd=None, device_name=DEVICE):
         self._emit = emit or (lambda kind, **data: None)
@@ -236,6 +243,8 @@ class WisprMic:
         self.carrier = "blackhole"
         self.unavailable = ""        # why there's no carrier (carrier None)
         self.gate = lambda: True
+        self.output = None           # tap mode: () -> the tap's output pick, or None
+        self._wanted = None          # tap mode: the output asked for instead of the default (dev was looked up for it)
         self.gated = 0               # blocks held back by the gate in the last stream
         self.enabled = False
         self.dev = None              # find_device() result
@@ -286,9 +295,10 @@ class WisprMic:
             return find_device(sd, DEVICE) is not None
         return False
 
-    def set_carrier(self, carrier, why="", gate=None):
+    def set_carrier(self, carrier, why="", gate=None, output=None):
         """The agent picked the carrier (stick_mic_device.pick_carrier): reopen on the new device."""
         gate = gate or (lambda: True)
+        self.output = output if carrier == "tap" else None
         if carrier == self.carrier and why == self.unavailable:
             self.gate = gate
             return
@@ -297,7 +307,7 @@ class WisprMic:
         if changed:
             log.info("wireless mic: carrier %s%s", carrier or "none", f" ({why})" if why else "")
             self.close()
-            self.dev, self._looked_at, self._missing_logged = None, 0.0, False
+            self.dev, self._looked_at, self._missing_logged, self._wanted = None, 0.0, False, None
             self.device_name = DEFAULT_OUTPUT if carrier == "tap" else DEVICE
         if carrier is None:
             self._set_error(why)
@@ -305,13 +315,29 @@ class WisprMic:
             self._set_error("")
         self._emit("wispr_mic", **self.status())
 
+    def _tap_pick(self):
+        """Tap mode: (the output pick, its name when it isn't the default output, else None)."""
+        try:
+            pick = self.output() if self.output else None
+        except Exception as e:  # noqa: BLE001 — never let this stop the stream
+            log.warning("wireless mic: can't tell which output the tap uses: %s", e)
+            pick = None
+        return pick, (pick["name"] if pick and pick.get("redirected") else None)
+
     def device(self, force=False):
-        """The device we play into (BlackHole, or the default output for the tap), looked for
+        """The device we play into (BlackHole, or for the tap the output its device is clocked by:
+        the default one, or the built-in speakers when that's Bluetooth), looked for
         again at most every RESCAN_S while it's missing.
         PortAudio only sees devices added after it started once it's restarted, which we
         only do while no stream is open."""
+        pick = None
         if self.dev and not force:
-            return self.dev
+            if self.carrier != "tap" or self.stream is not None or self.output is None:
+                return self.dev
+            pick, wanted = self._tap_pick()
+            if wanted == self._wanted:
+                return self.dev
+            self.dev, force = None, True  # the tap's output changed (e.g. Bluetooth headphones came or went)
         again = bool(self._looked_at)
         if again and not force and time.monotonic() - self._looked_at < RESCAN_S:
             return None
@@ -327,7 +353,10 @@ class WisprMic:
                 sd._initialize()
             except Exception:  # noqa: BLE001
                 pass
-        self.dev = find_default_output(sd) if self.carrier == "tap" else find_device(sd, self.device_name)
+        if self.carrier == "tap":
+            self.dev = self._find_tap_output(sd, pick)
+        else:
+            self.dev = find_device(sd, self.device_name)
         if self.dev:
             self._missing_logged = False
             log.info("wireless mic: playing into %s (%d Hz, %d ch)", self.dev["name"], self.dev["rate"],
@@ -338,6 +367,26 @@ class WisprMic:
             self._set_error("there's no output device to play into" if self.carrier == "tap" else
                             f"{self.device_name} isn't installed — run: brew install --cask blackhole-2ch")
         return self.dev
+
+    def _find_tap_output(self, sd, pick=None):
+        """Tap mode: the output the tapped device is clocked by. The default output, unless the
+        default is Bluetooth: then the one stick_mic_device picked (the built-in speakers), so the
+        audio reaches the tap at once and opening the Bluetooth output can't fail."""
+        if pick is None:
+            pick, wanted = self._tap_pick()
+        else:
+            wanted = pick["name"] if pick.get("redirected") else None
+        self._wanted = wanted
+        if wanted:
+            dev = find_device(sd, wanted)
+            if dev:
+                log.info("wireless mic: %s", pick["why"])
+                return dev
+            log.warning("wireless mic: %s, but PortAudio doesn't list %s: playing into the default output",
+                        pick["why"].split(":")[0], wanted)
+        elif pick and pick.get("why"):
+            log.warning("wireless mic: %s", pick["why"])
+        return find_default_output(sd)
 
     @property
     def ready(self):

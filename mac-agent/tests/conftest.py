@@ -103,7 +103,9 @@ class FakeCoreAudio:
         self.fail_tap = 0         # OSStatus for create_tap
         self.tap_error = None     # an exception create_tap raises (e.g. Unavailable: unknown selector)
         self.output_uid = "BuiltInSpeaker"
-        self.process = 77         # the agent's process object
+        self.transports = {120: "virt", 115: "bltn", 108: "bltn"}  # device id -> kAudioDeviceTransportType
+        self.outputs = {120, 108}  # devices with output streams
+        self.process = 77        # the agent's process object
         self.tap_hears = True     # measure_input: the tone comes through (the permission is granted)
         self.measured = []        # (dev, secs, amp)
 
@@ -127,6 +129,12 @@ class FakeCoreAudio:
 
     def default_output_uid(self):
         return self.output_uid
+
+    def transport_type(self, dev):
+        return self.transports.get(dev, "grup" if dev in self.aggregates else "")
+
+    def has_output(self, dev):
+        return dev in self.outputs or dev in self.aggregates
 
     def create_tap(self, name, process):
         self.tap_calls.append(("create", name, process))
