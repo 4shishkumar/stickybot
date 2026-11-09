@@ -64,6 +64,12 @@ void   saveClock24(bool on);
 
 String face();                    // the Home screen's face id (faces/faces.h), default "classic"
 void   saveFace(const String& id);
+// The Launcher (2.5.1, logic/launcher.h): its tiles as letters ("grapmfqs", "" = the default)
+// and the last tile opened (a letter).
+String launcherTiles();
+void   saveLauncherTiles(const String& letters);
+char   launcherLast();
+void   saveLauncherLast(char tile);
 
 // Mac password for "unlock" (double-press B). Write-only from outside.
 String macPassword();

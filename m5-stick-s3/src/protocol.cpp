@@ -17,6 +17,7 @@
 #include "games/games.h"
 #include "ir/ir.h"
 #include "logic/ir_names.h"
+#include "launcher_session.h"
 
 namespace protocol {
 
@@ -70,6 +71,7 @@ static String stateJson() {
   j += "," + faces::pkg::stateJson();  // 2.4.0: the face packages (their list: @faces)
   j += "," + air::stateJson();  // 2.5.0: the remote modes (air mouse / presenter / media) and their settings
   j += "," + ir::stateJson();           // 2.5.0: the IR remote (its devices: @ir list)
+  j += "," + launcher::stateJson();     // 2.5.1: the Launcher's tiles, as letters (@launcher)
   j += String(",\"wirelessMic\":") + (settings::wirelessMic() ? "true" : "false");
   j += String(",\"ota\":1,\"otaPending\":") + (ota::pendingVerify() ? "true" : "false");  // Bluetooth update (1.8.0+)
   j += String(",\"usbMounted\":") + (mic::usbMounted() ? "true" : "false");
@@ -266,6 +268,7 @@ Result run(const String& action, const Args& arg) {
     return ok(games::json());
   }
   if (action == "ir") return ir::run(arg);  // the IR remote (2.5.0, src/ir/ir.h)
+  if (action == "launcher") return launcher::command(arg);  // the Launcher's tiles (2.5.1, launcher_session.h)
 
   if (action == "wmic") {
     String v = arg("on");
@@ -365,7 +368,7 @@ static void runHuman(const String& line) {
   if (cmd == "help") {
     Log.println("Commands: show | set <combo> | enter off|<ms> | name <text> | slot <1-3> | disconnect | reconnect | "
                    "forget <1-3|all> | web on | web off | standby <min> | brightness <pct> | face <id> | face demo [<id>] | "
-                   "screens [landscape|faces] | mode mouse|presenter|media|home | ir list|diag|listen|send|learn ...");
+                   "screens [landscape|faces] | mode mouse|presenter|media|home | launcher [<tiles>|reset] | ir list|diag|listen|send|learn ...");
     return;
   } else if (cmd == "show") {
     Log.printf("%s | combo %s | %s | Wi-Fi %s %s\n", hid::name().c_str(),
@@ -487,6 +490,13 @@ static void runHuman(const String& line) {
   }
   else if (cmd == "standby")      r = run("standby", with("min"));
   else if (cmd == "mode")         r = run("mode", with("name"));  // mode mouse|presenter|media|home
+  else if (cmd == "launcher") {  // launcher | launcher games,air,quick | launcher reset
+    Result l = run("launcher", [=](const char* n) {
+      return String(n) == "reset" ? String(rest == "reset" ? "1" : "") : String(n) == "tiles" && rest != "reset" ? rest : String();
+    });
+    Log.println(l.json);
+    return;
+  }
   else if (cmd == "brightness")   r = run("brightness", with("pct"));
   else if (cmd == "web")          r = run(rest == "off" ? "web-off" : "web-on", with(""));
   else {

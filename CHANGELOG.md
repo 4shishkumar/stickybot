@@ -83,6 +83,19 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   "btn": "power"}`); new phrases for TV power, volume and mute are added to your commands.
   The brain gets `ir_list()` / `ir_send()` stick tools, so "set the AC to 24" picks the learned
   button by its name.
+- **A Launcher on the stick (firmware 2.5.1).** Triple-press B now opens a grid of big tiles
+  (six a page, 2 x 3 upright and 3 x 2 held sideways; A next, B open, hold B back to Home,
+  flick the wrist for the next page) instead of the long settings list: **Games**,
+  **Remote**, **Air mouse**, **Presenter**, **Media**, **Faces** (a full-screen face picker
+  with the one in use ticked), **Quick settings** and **Settings**. It opens on the tile you
+  used last. **Quick settings** has Android-style toggles that apply and save at once:
+  brightness and volume sliders, sounds (mute), the wireless Wispr mic, the 24-hour clock,
+  auto-rotate, the motion gestures, and a way into Settings. **Settings** is the old menu
+  without the apps and the face picker (34 items down to 28). The apps still go back to
+  Home when they end (the remote modes' hold A + B too). The dashboard's Stick page has a
+  **Launcher** card to put the tiles in order and hide the ones you don't use (`@launcher
+  tiles=…`; `@state` gets `"launcher":"grapmfqs"`, one letter a tile; PROTOCOL.md).
+  `make -C m5-stick-s3/tools/face_shots launcher` draws every Launcher screen.
 
 ### Fixed
 - **The wireless Wispr mic failed or lagged with Bluetooth headphones as the Mac's output**

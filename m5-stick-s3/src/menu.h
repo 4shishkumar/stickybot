@@ -1,8 +1,8 @@
 // On-device settings menu.
 //   BtnA (front) = next item
 //   BtnB (side)  = change / select; hold on "Key" to scroll fast
-// The last items (2.5.0) open a screen: Games, Remote (IR), Air mouse, Presenter, Media remote;
-// like Cancel they leave the menu and drop the unsaved changes.
+// 2.5.1: it's the Launcher's "Settings" tile (triple-press B opens the Launcher, launcher_session.h);
+// Games, Remote (IR), Air mouse, Presenter, Media remote and the face picker are tiles there now.
 // Changes to combo, Mac slot and standby are drafts until "Save & exit".
 #pragma once
 #include "combo.h"
@@ -10,7 +10,7 @@
 
 namespace menu {
 
-enum class Action { NONE, REDRAW, TEST, WEB, FLIP, BT_TOGGLE, FORGET, BRIGHTNESS, VOLUME, POWER_OFF, SAVE, CANCEL, AIR, GAMES, REMOTE };
+enum class Action { NONE, REDRAW, TEST, WEB, FLIP, BT_TOGGLE, FORGET, BRIGHTNESS, VOLUME, POWER_OFF, SAVE, CANCEL };
 
 struct Draft {
   Combo   combo;
@@ -26,7 +26,6 @@ struct Draft {
   bool    sound;
   uint8_t volume;  // 0-255
   bool    wmic;    // wireless Wispr mic
-  uint8_t face;    // the Home face (index in faces::at)
 };
 
 void         open(const Draft& current, bool btOff);
@@ -36,6 +35,5 @@ Action       repeat();    // BtnB held (auto-repeat)
 bool         timedOut();
 const Draft& draft();
 ui::MenuView view();
-uint8_t      remoteMode();  // after Action::AIR: 1 air mouse, 2 presenter, 3 media (air.h)
 
 }  // namespace menu
