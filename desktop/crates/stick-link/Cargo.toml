@@ -1,0 +1,27 @@
+[package]
+name = "stick-link"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The Bluetooth link to the StickyBot stick: its Nordic-UART-style service, framed JSON lines (PROTOCOL.md section 5)"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
+log = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+# CoreBluetooth directly (not btleplug: see README "Why not btleplug")
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+dispatch2 = "0.3"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSObject", "NSString", "NSArray", "NSData", "NSDictionary", "NSError", "NSUUID", "NSValue", "NSEnumerator"] }
+objc2-core-bluetooth = { version = "0.3", default-features = false, features = ["std", "dispatch2", "bitflags", "CBAdvertisementData", "CBAttribute", "CBCentralManager", "CBCharacteristic", "CBManager", "CBPeer", "CBPeripheral", "CBService", "CBUUID", "CBError"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["sync", "time", "rt", "macros", "test-util", "rt-multi-thread"] }
+
+[[example]]
+name = "scan"
