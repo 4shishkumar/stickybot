@@ -17,6 +17,21 @@ pub const XP_MERGE: i64 = 10;
 pub const XP_GREEN: i64 = 3;
 pub const XP_CLAUDE: i64 = 2;
 pub const XP_RELEASE: i64 = 25;
+/// Games on the stick (firmware 2.5.0): a game with points +1, a new best +3, at most
+/// [`GAME_XP_DAY_CAP`] a day (one merged PR's worth); they don't count for the streak.
+pub const XP_GAME: i64 = 1;
+pub const XP_GAME_BEST: i64 = 3;
+pub const GAME_XP_DAY_CAP: i64 = 10;
+pub const GAMES: &[(&str, &str)] = &[
+    ("stack", "Stack"),
+    ("flappy", "Flappy"),
+    ("dino", "Dino"),
+    ("reaction", "Reaction"),
+    ("maze", "Maze"),
+    ("balance", "Balance"),
+    ("catch", "Catch"),
+];
+pub const MAX_SCORE: i64 = 10_000_000;
 pub const HAT: i64 = 1;
 pub const SHADES: i64 = 2;
 pub const CROWN: i64 = 4;
@@ -145,6 +160,51 @@ impl Pet {
         self.save();
     }
 
+    /// A game finished on the stick (`{"evt":"game"}`, pet.py `game`). Returns the XP it earned
+    /// (0..3): +1 with points, +3 for a new best, at most [`GAME_XP_DAY_CAP`] a day. Junk is
+    /// ignored (0). `score` / `best` are the message's raw values (only integers count).
+    pub fn game_on(&mut self, gid: &str, score: &Value, best: &Value, new_best: bool, day: i64) -> i64 {
+        let int = |v: &Value| if v.is_i64() || v.is_u64() { v.as_i64() } else { None };
+        let Some(score) = int(score).filter(|s| (0..=MAX_SCORE).contains(s)) else { return 0 };
+        if !is_game(gid) {
+            return 0;
+        }
+        if !self.s.get("games").is_some_and(Value::is_object) {
+            self.s["games"] = json!({});
+        }
+        let g = &mut self.s["games"];
+        if g.get("day").and_then(Value::as_i64) != Some(day) {
+            g["day"] = json!(day);
+            g["xp"] = json!(0);
+        }
+        for k in ["plays", "best"] {
+            if !g.get(k).is_some_and(Value::is_object) {
+                g[k] = json!({});
+            }
+        }
+        g["plays"][gid] = json!(n(&g["plays"], gid) + 1);
+        if let Some(b) = int(best).filter(|b| (1..=MAX_SCORE).contains(b)) {
+            g["best"][gid] = json!(b); // the stick keeps the bests (NVS); this is the last it told us
+        }
+        let had = n(g, "xp");
+        let xp = if score > 0 { (if new_best { XP_GAME_BEST } else { XP_GAME }).min((GAME_XP_DAY_CAP - had).max(0)) } else { 0 };
+        g["xp"] = json!(had + xp);
+        self.add("xp", xp);
+        self.save();
+        xp
+    }
+    pub fn game(&mut self, gid: &str, score: &Value, best: &Value, new_best: bool) -> i64 {
+        self.game_on(gid, score, best, new_best, today())
+    }
+
+    /// For the dashboard: `{"xpToday", "cap", "best": {id: n}, "plays": {id: n}}`.
+    pub fn games_on(&self, day: i64) -> Value {
+        let g = self.s.get("games").cloned().unwrap_or(json!({}));
+        let xp = if g.get("day").and_then(Value::as_i64) == Some(day) { n(&g, "xp") } else { 0 };
+        let obj = |k: &str| g.get(k).filter(|v| v.is_object()).cloned().unwrap_or(json!({}));
+        json!({"xpToday": xp, "cap": GAME_XP_DAY_CAP, "best": obj("best"), "plays": obj("plays")})
+    }
+
     pub fn streak_on(&self, day: i64) -> i64 {
         let st = &self.s["streak"];
         let last = st.get("last").and_then(Value::as_i64).unwrap_or(-1);
@@ -166,7 +226,7 @@ impl Pet {
         json!({"level": level, "xp": xp, "into": into, "need": need, "streak": self.streak_on(today()),
                "best": n(&self.s["streak"], "best"), "merged": n(&self.s, "merged"), "mergedToday": self.merged_today(),
                "greens": n(&self.s, "greens"), "claude": n(&self.s, "claude"), "releases": n(&self.s, "releases"),
-               "acc": self.acc()})
+               "acc": self.acc(), "games": self.games_on(today())})
     }
 
     /// The `pet` part of the world.
@@ -176,6 +236,10 @@ impl Pet {
         json!({"xp": n(&self.s, "xp"), "streak": self.streak_on(today()), "acc": self.acc(),
                "seed": n(&self.s, "seed"), "greens": n(&self.s, "greens"), "towers": &towers[skip..]})
     }
+}
+
+pub fn is_game(id: &str) -> bool {
+    GAMES.iter().any(|(g, _)| *g == id)
 }
 
 /// zlib's CRC-32 (Python `zlib.crc32`), for the sessions' small ids.
@@ -280,6 +344,48 @@ mod tests {
         assert_eq!(pj["seed"], seed);
         assert_eq!(pj["towers"].as_array().unwrap().len(), 8);
         assert_eq!(pj["acc"], 0);
+    }
+
+    // --- test_pet.py: games ---------------------------------------------------------------------
+
+    #[test]
+    fn games_earn_a_little_xp_capped_a_day() {
+        let d = tmp("games");
+        let f = d.join("pet.json");
+        let mut p = Pet::load(&f, 0);
+        let day = 2000;
+        let xp0 = n(&p.s, "xp");
+        let g = |p: &mut Pet, id: &str, s: i64, b: i64, nb: bool, day: i64| p.game_on(id, &json!(s), &json!(b), nb, day);
+        assert_eq!(g(&mut p, "stack", 12, 12, true, day), XP_GAME_BEST);
+        assert_eq!(g(&mut p, "stack", 5, 12, false, day), XP_GAME);
+        assert_eq!(g(&mut p, "reaction", 0, 231, false, day), 0); // a false start: nothing
+        for _ in 0..20 {
+            g(&mut p, "flappy", 3, 9, false, day); // farming: stops at the cap
+        }
+        assert_eq!(p.games_on(day)["xpToday"], GAME_XP_DAY_CAP);
+        assert_eq!(n(&p.s, "xp"), xp0 + GAME_XP_DAY_CAP);
+        assert_eq!(g(&mut p, "dino", 900, 900, true, day), 0);
+        assert_eq!(g(&mut p, "dino", 900, 900, true, day + 1), XP_GAME_BEST); // a new day
+        let gs = p.games_on(day + 1);
+        assert_eq!((gs["best"]["stack"].as_i64(), gs["best"]["reaction"].as_i64()), (Some(12), Some(231)));
+        assert_eq!(gs["plays"]["flappy"], 20);
+        assert_eq!((gs["xpToday"].as_i64(), gs["cap"].as_i64()), (Some(XP_GAME_BEST), Some(GAME_XP_DAY_CAP)));
+        assert_eq!(Pet::load(&f, 0).s["games"]["best"]["dino"], 900); // saved
+        assert_eq!(p.streak_on(day + 1), 0); // games don't make a streak
+    }
+
+    #[test]
+    fn game_events_are_checked() {
+        let d = tmp("games-bad");
+        let mut p = Pet::load(&d.join("pet.json"), 0);
+        let xp0 = n(&p.s, "xp");
+        for (id, s) in [("tetris", json!(5)), ("stack", json!(-1)), ("stack", json!("9")), ("stack", json!(true)),
+                        ("stack", json!(1_000_000_000i64)), ("", json!(3)), ("stack", json!(2.5))] {
+            assert_eq!(p.game(id, &s, &Value::Null, false), 0, "{id} {s}");
+        }
+        assert_eq!(n(&p.s, "xp"), xp0);
+        assert_eq!(p.game("maze", &json!(3), &json!("x"), false), XP_GAME); // odd extras: a plain game
+        assert!(p.summary()["games"]["best"].get("maze").is_none());
     }
 
     #[test]

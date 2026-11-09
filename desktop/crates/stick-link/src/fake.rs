@@ -53,6 +53,8 @@ struct State {
     radio: Option<crate::pacing::RadioQueue>,
     radio_ready: Arc<tokio::sync::Notify>,
     pub ota: Ota,
+    /// the IR remote (firmware 2.5.0; `fake_ir.rs`)
+    ir: crate::fake_ir::FakeIr,
     tx: Option<mpsc::UnboundedSender<Incoming>>,
     decoder: LineDecoder,
 }
@@ -177,6 +179,21 @@ impl FakeStick {
     /// Firmware before 1.8: no AUDIO_IN or OTA_DATA, and `{"ota":…}` is ignored.
     pub fn set_old_firmware(&self, old: bool) {
         self.with(|s| s.old_firmware = old);
+    }
+    /// The IR remote: its remotes, what it sent, a learn running, old firmware.
+    pub fn ir<R>(&self, f: impl FnOnce(&mut crate::fake_ir::FakeIr) -> R) -> R {
+        self.with(|s| f(&mut s.ir))
+    }
+    /// The remote pressed twice while the stick learns: it saves `code` (false: no learn running).
+    pub fn ir_press(&self, code: &str) -> bool {
+        self.with(|s| {
+            let mut evs = Vec::new();
+            let ok = crate::fake_ir::press(&mut s.ir, code, &mut |e| evs.push(e));
+            for e in &evs {
+                emit(s, e);
+            }
+            ok
+        })
     }
     /// The firmware update side: knobs and what happened.
     pub fn ota<R>(&self, f: impl FnOnce(&mut Ota) -> R) -> R {
@@ -423,8 +440,17 @@ fn handle(s: &mut State, msg: &Value) {
     if let Some(line) = msg.get("proto").and_then(Value::as_str) {
         let id: String =
             msg.get("id").and_then(Value::as_str).unwrap_or("").chars().filter(|c| *c != '"' && *c != '\\').collect();
-        let reply = run_line(&mut s.stick, line.trim());
+        let reply = run_line_25(s, line.trim());
         emit(s, &json!({"src": "agent", "evt": "proto", "id": id, "reply": reply}));
+        return;
+    }
+    if let Some((op, a)) = msg.get("ir").and_then(Value::as_object).and_then(crate::fake_ir::message_args) {
+        let mut evs = Vec::new();
+        let reply = crate::fake_ir::run(&mut s.ir, &a, &mut |e| evs.push(e));
+        for e in &evs {
+            emit(s, e);
+        }
+        emit(s, &json!({"src": "agent", "evt": "ir", "op": op, "reply": reply}));
         return;
     }
     if let Some(o) = msg.get("ota").and_then(Value::as_object) {
@@ -476,6 +502,26 @@ fn percent_decode(v: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The 2.5.0 lines (`@ir`, `@games`, `@air`, `@mode`, the `ir` / `air` parts of `@state`), else
+/// [`run_line`].
+fn run_line_25(s: &mut State, line: &str) -> Value {
+    let (action, q) = line.strip_prefix('@').map(|r| r.split_once(' ').unwrap_or((r, ""))).unwrap_or(("", ""));
+    let a = args(q);
+    if action == "ir" {
+        let mut evs = Vec::new();
+        let reply = crate::fake_ir::run(&mut s.ir, &a, &mut |e| evs.push(e));
+        for e in &evs {
+            emit(s, e);
+        }
+        return reply;
+    }
+    crate::fake_ir::state_extra(&mut s.stick, &s.ir);
+    if let Some(r) = crate::fake_ir::run_25(&mut s.stick, action, &a) {
+        return r;
+    }
+    run_line(&mut s.stick, line)
 }
 
 /// `@action k=v&...` -> the reply JSON (protocol.cpp, roughly).

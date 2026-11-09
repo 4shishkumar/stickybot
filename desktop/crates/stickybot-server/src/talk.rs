@@ -367,6 +367,16 @@ pub async fn handle_text(st: Arc<AppState>, text: String, source: &str) {
         text = rest;
     }
     if let Some((cmd, slots)) = st.commands.find(&text) {
+        if let Some(spec) = cmd.get("ir") {
+            // an IR remote button (ir.rs): sent by the stick
+            let (ok, result) = crate::ir::voice(&st, spec).await;
+            st.count("quick");
+            st.hub.emit("reply", json!({"text": result, "via": "quick", "ms": ms_since(started)}));
+            tell_stick(&st, if ok { "done" } else { "error" }, &text, &result).await;
+            st.history(&with(json!({"via": "quick", "command": cmd.get("name"), "reply": result})));
+            st.set_idle();
+            return;
+        }
         let (apps, runner) = (st.apps.clone(), st.runner());
         let c = cmd.clone();
         let result =

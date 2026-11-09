@@ -16,6 +16,7 @@ pub mod feed;
 pub mod firmware;
 pub mod github;
 pub mod home;
+pub mod ir;
 pub mod keys;
 pub mod hub;
 pub mod mcp;
@@ -113,6 +114,8 @@ pub struct AppState {
     pub wmic: wmic::WirelessMic,
     /// the home card, weather, feed, events, GitHub watcher, pet (home.rs)
     pub home: home::Home,
+    /// the IR remote (firmware 2.5.0; `ir.rs`)
+    pub ir: ir::Ir,
     /// release checks + firmware downloads (`updates.rs`)
     pub updates: updates::Updates,
     /// the stick on USB: `@…` lines, the list with versions, flashing (`usb.rs`, `flasher.rs`).
@@ -196,6 +199,7 @@ impl AppState {
             ota_timings: Mutex::new(firmware::UpdateTimings::default()),
             wmic: wmic::WirelessMic::new(),
             home,
+            ir: ir::Ir::default(),
             updates: updates::Updates::new(&paths_home),
             usb: if fake {
                 usb::UsbSticks::new(Arc::new(usb::FakeUsb::default()))
@@ -469,6 +473,7 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     if !state.fake && migrate::first_run(&state.paths) {
         let _ = state.import_python(migrate::Mode::FirstRun);
     }
+    ir::ensure_voice_commands(&state); // the TV phrases, once (2.5.0); before the fake stick's pick
     if state.fake && state.stick().is_none() {
         // the fake stick is "picked" so the pages show a connected stick right away (not saved)
         state.cfg.lock().unwrap().insert("stick".into(), json!({"address": "FAKE", "name": "StickyBot (fake)"}));
@@ -492,6 +497,7 @@ pub async fn start(opts: Options) -> Result<Running, String> {
         }
     })));
     spawn_link_watcher(state.clone());
+    ir::spawn(state.clone());
     talk::spawn(state.clone());
     updates::spawn(state.clone());
     wmic::spawn(state.clone());
