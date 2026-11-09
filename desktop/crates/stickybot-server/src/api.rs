@@ -863,6 +863,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn status_with_the_claude_brain_doesnt_deadlock() {
+        let (app, st, _) = app("status-brain", false).await;
+        let weak = Arc::downgrade(&st);
+        let cfg: crate::brain::Config = Arc::new(move || weak.upgrade().unwrap().cfg.lock().unwrap().clone());
+        st.set_brain(Arc::new(crate::brain::ClaudeBrain::new(cfg, st.paths.home.join("workspace"))));
+        let r = tokio::time::timeout(Duration::from_secs(5), call(&app, req("GET", "/api/status", None, None))).await;
+        let (_, v, _) = r.expect("status answers");
+        assert_eq!(v["brain"]["mode"], "session");
+        assert_eq!(v["busy"], false);
+    }
+
+    #[tokio::test]
     async fn quick_commands_history_and_typed_requests() {
         let (app, st, fake) = app("cmds", true).await;
         crate::talk::spawn(st.clone());

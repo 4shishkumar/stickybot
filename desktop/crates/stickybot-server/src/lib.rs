@@ -244,6 +244,9 @@ impl AppState {
 
     /// `GET /api/status`: the Python shape, with what isn't ported left empty (the pages cope).
     pub fn status(&self) -> Value {
+        // the brain reads the settings itself: ask it before taking the settings lock
+        let brain = self.brain();
+        let (brain_status, busy) = (brain.status(), brain.busy());
         let cfg = self.cfg.lock().unwrap();
         json!({
             "state": self.agent_state(),
@@ -253,7 +256,7 @@ impl AppState {
             "stick": cfg.get("stick").cloned().unwrap_or(Value::Null),
             "stt_ready": self.speech.ready(),
             "speech": self.speech.phase().to_json(),
-            "busy": self.brain().busy(),
+            "busy": busy,
             "mtu": self.link.mtu(),
             "stats": Value::Object(self.stats.lock().unwrap().clone()),
             "prompts": self.approvals.list(),
@@ -265,7 +268,7 @@ impl AppState {
             "stick_approvals": cfg.get("stick_approvals").cloned().unwrap_or(json!(true)),
             "wireless_mic": null,
             "update": {},
-            "brain": self.brain().status(),
+            "brain": brain_status,
             "app": {"name": "StickyBot (Rust)", "window": true, "rust": true, "fake_stick": self.fake},
         })
     }
