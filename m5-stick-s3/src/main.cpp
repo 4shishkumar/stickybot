@@ -397,6 +397,7 @@ static const char* otaBusy() {
   if (web::busy()) return "wifi-update";
   if (faces::pkg::install::receiving()) return "faces";  // a face package is arriving (one transfer at a time)
   if (air::active()) return "remote";  // the air mouse / presenter / media remote (air.h)
+  if (ir::screenActive() || ir::learning() || ir::sending()) return "ir";  // the IR remote screen, a learn or a send
   return nullptr;
 }
 
@@ -846,6 +847,12 @@ void loop() {
   {
     static bool airWas = false;
     if (air::active() && !hid::pairingCode()) {
+      if (!airWas) {  // starting (from the menu or @mode): it takes over from whatever else is open
+        if (mode == Mode::GAME) games::close();  // the CPU back to 80 MHz, the speaker released
+        if (mode == Mode::MENU) ui::setBrightness(settings::brightnessPct());  // the menu's drafts are dropped
+        if (mode == Mode::GAME || mode == Mode::MENU) mode = Mode::STATUS;
+        ir::screenClose();  // a learn from the Mac carries on and shows once the mode ends
+      }
       if (comboDown) comboRelease();
       if (keyUpAt) comboUp();
       airWas = true;
@@ -856,6 +863,7 @@ void loop() {
     }
     if (airWas && !air::active()) {  // ended: back to Home; the buttons still down don't count
       airWas = false;
+      ui::setOrientation(shownScreen.flipped, shownScreen.side);  // as the stick is held (like games / IR)
       ignoreAUntilRelease = A.isPressed();
       swallowB = B.isPressed();
       aDown = aUp = bDown = bSingle = bDouble = bTriple = bHold = false;

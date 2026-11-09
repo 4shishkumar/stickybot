@@ -210,6 +210,14 @@ a stick, `make -C tools/face_shots` draws every demo step with the firmware's ow
 code into `tools/face_shots/out/` (PNGs and contact sheets; `SCALE=3` for big pixels);
 `make -C tools/face_shots previews` remakes the dashboard's pictures.
 
+- While you hold button A, the screen turns purple: **Listening...**
+- The screen turns off after 20 s idle. Button A still works with the screen
+  off (it sends the combo and wakes the screen). Triple-press B to wake it
+  without sending anything.
+- The battery level is also reported to the Mac over Bluetooth, so it should
+  appear in the Bluetooth menu like other keyboards.
+
+
 ### Games (firmware 2.5.0)
 
 Menu (triple-press B) → **Games**: a picker with each game's best score (A next, B play,
@@ -237,20 +245,12 @@ Mac (and prints each game's frame cost); the rules are in `src/logic/games*` (te
 `test_games`), the drawing in `src/games/draw.cpp`, the session in `src/games/games.cpp`, and
 `src/games/duo.h` is the (not yet built) hook for two sticks over ESP-NOW.
 
-- While you hold button A, the screen turns purple: **Listening...**
-- The screen turns off after 20 s idle. Button A still works with the screen
-  off (it sends the combo and wakes the screen). Triple-press B to wake it
-  without sending anything.
-- The battery level is also reported to the Mac over Bluetooth, so it should
-  appear in the Bluetooth menu like other keyboards.
-
----
-
 ### Air mouse, presenter, media remote (firmware 2.5.0)
 
 Menu (triple-press B) → the last three items (*Air mouse*, *Presenter*, *Media remote*), the
-dashboard's Stick page (*Mouse & presenter*) or serial `mode mouse|presenter|media|home`. Hold **A + B** together for a second
-to go back to Home.
+dashboard's Stick page (*Mouse & presenter*) or serial `mode mouse|presenter|media|home`. Hold
+**A + B** together for a second to go back to Home. Started from the Mac while the menu, the
+games or the Remote screen are open, it closes them (the menu's unsaved changes are dropped).
 
 | Mode | Buttons | Motion |
 |---|---|---|
@@ -274,6 +274,23 @@ and acceleration (`gainFor`, `accelFactor`), dead zone and smoothing are in
 `src/logic/air_motion.cpp`; the stillness thresholds in `air_motion.h`; serial `imulog`
 prints the raw gyro to check the axes and signs.
 
+### IR remote (firmware 2.5.0)
+
+Menu (triple-press B) → **Remote (IR)**: the remotes the stick has learned, then their
+buttons (favourites first). Remotes: A opens, B next, B-B previous, hold B back to Home.
+Buttons: A sends (hold to repeat), B next, B-B previous, B-B-B favourite, hold B back to the
+remotes. Tilting sideways scrolls. **+ Learn**: point the remote at the stick's top and press
+the button twice (air conditioners once). Up to 16 remotes of 48 buttons, kept in the
+stick's flash; NEC, Samsung, LG, Sony, RC5 / RC6 and Panasonic are recognised, anything
+else is kept as raw timings. The dashboard's **Remote** page does the same from the Mac
+(and has built-in TV codes); quick commands and the brain can press a button ("turn off the
+TV"). Serial / Bluetooth: `ir list|send|learn|diag ...` (`@ir`, PROTOCOL.md, *IR remote*);
+`ir diag` checks the IR pins (TX G46, RX G42; build with `-D IR_PINS_SWAPPED` if they come
+out the other way round). The codes are in `src/logic/ir_*` (tested by `test_ir`), the RMT
+driver and the screen in `src/ir/`.
+
+---
+
 ## 6. Changing the combo — three ways, no reflashing
 
 The combo is saved in the stick's flash (NVS) and used immediately.
@@ -291,6 +308,7 @@ The combo is saved in the stick's flash (NVS) and used immediately.
 | Flip screen | rotate the screen 180° (saved) |
 | Forget pairing | press twice to confirm; stick restarts |
 | Save & exit / Cancel | |
+| Games / Remote (IR) / Air mouse / Presenter / Media remote | open that screen (2.5.0; the last items, after Cancel) |
 
 Button A moves to the next item. The top bar shows the combo you're building.
 The menu cancels itself after 60 s without input.
@@ -410,6 +428,7 @@ make build     # the stick firmware still builds with the same logic
 | `test_sky` | the sky by time of day and weather, sun and moon arcs |
 | `test_school` | Aquarium: fish per session (swim in, grow, leap out), the full tank, tilt drift, the damped spring |
 | `test_air` | the air mouse: the gyro to pointer mapping in any orientation, dead zone / smoothing / acceleration / sensitivity / invert, stillness and the gyro bias, tilt-scroll, the media knob (twist, flick), the remote buttons (click, hold, double, A+B), the talk timer |
+| `test_ir` | the IR remote's codes: every protocol's encoder against its decoder and published codes, a receiver's distortion, repeats and toggles, raw captures, code strings, names and the `@ir` command line |
 | `test_games` | the games: the list and bests, the tilt (calibration, dead zone, smoothing, rotations), Stack's cuts and perfects, Flappy / Dino / Balance / Catch played by autopilots, Reaction's timing and false starts, the mazes (perfect, reachable, the same from a seed) and the ball never passing a wall |
 | `test_clockface` | the Words face's time in words (fives, "just after" / "nearly", midnight / noon, the hour rolling over), the Analog face's hands, words stacked to fit |
 
@@ -435,6 +454,9 @@ m5-stick-s3/
     ├── faces/         Home faces: registry + world (faces.*), classic, stickyworld, aquarium
     │                  (each with its Dark variant), bigtime, words, analog, dashboard, space, lava, demo
     ├── games/         the games (2.5.0): games.* the session, draw.* the screens, duo.h two-stick hook
+    ├── air.*, air_ui.* the air mouse / presenter / media remote (2.5.0)
+    ├── ir/            the IR remote (2.5.0): RMT driver, store, the Remote screen
+    ├── logic/         the hardware-free logic, covered by the native tests (test/)
     ├── menu.*         on-device settings menu
     ├── web.*          Wi-Fi + settings page server
     └── web_page.h     the settings page (HTML/JS)

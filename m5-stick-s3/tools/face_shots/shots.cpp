@@ -22,6 +22,7 @@
 #include "faces/faces.h"
 #include "faces/pkg/engine.h"
 #include "air_ui.h"
+#include "menu.h"
 #include "games/draw.h"
 #include <chrono>
 
@@ -398,6 +399,30 @@ static int fuzz(const std::string& file, int n) {
   return 0;
 }
 
+// The stick's menu (menu.cpp + ui::drawMenu), stepped through every item -> <dir>/menu-NN.png + a sheet
+static void menuShots(const std::string& dir) {
+  mkdir(dir.c_str(), 0755);
+  size_t first = shots.size();
+  ui::setOrientation(false, 0);
+  menu::Draft d{};
+  d.combo = {1, 0x2C};
+  d.slot = 1; d.standbyMin = 10; d.brightnessPct = 75; d.enterDelayMs = 1000;
+  d.lift = d.shake = d.autoRotate = d.sound = true;
+  d.volume = 192;
+  menu::open(d, false);
+  int n = menu::view().count;
+  for (int i = 0; i < n; i++) {
+    ui::MenuView v = menu::view();
+    printf("  %2d %s\n", i, v.lines[i].c_str());
+    ui::drawMenu(v);
+    char name[32];
+    snprintf(name, sizeof name, "/menu-%02d.png", i);
+    savePng(dir + name);
+    menu::next();
+  }
+  sheet(dir + "/menu-sheet.png", first, shots.size(), 7);
+}
+
 // The remote modes' screens (air_ui.cpp), portrait and landscape -> <dir>/air-*.png + a sheet
 static void airShots(const std::string& dir) {
   mkdir(dir.c_str(), 0755);
@@ -675,6 +700,7 @@ int main(int argc, char** argv) {
     return ok ? 0 : 3;
   }
   if (mode == "air") { airShots(dir); return 0; }
+  if (mode == "menu") { menuShots(dir); return 0; }
   if (mode == "games") return gamesMode(dir);
   if (mode == "previews") previews(dir);
   else demo(dir, argc > 3 ? argv[3] : "all");

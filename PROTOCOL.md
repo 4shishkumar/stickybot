@@ -381,7 +381,7 @@ Older firmware has neither, and no `…0006…` characteristic: update it over U
 | Mac → board | `{"ota":{"status":1}}` → `{"evt":"ota","state":"status","receiving":…,"offset":…,"size":…,"pending":…}` |
 | board → Mac | `{"evt":"ota","state":"confirmed","fw":"1.8.1"}` — after a reboot into a new image, once it has confirmed itself (see Rollback) |
 
-Refusal / error codes: `busy` (+ `why`: `dictation`, `talk`, `approval`, `pairing`, `menu`, `wifi-update`, `game` (2.5.0)),
+Refusal / error codes: `busy` (+ `why`: `dictation`, `talk`, `approval`, `pairing`, `menu`, `wifi-update`, `faces` (2.4.0), `game`, `remote` (an air mouse / presenter / media mode), `ir` (the Remote screen, an IR learn or send) (2.5.0)),
 `battery` (below 30 % and not on USB power; unknown counts as low), `pending` (the running image isn't
 confirmed yet), `unsupported` (`compressed:true` — not implemented, send the raw image), `size` (0, bigger
 than the slot, or data past the end), `sha` (not 64 hex digits, or the image read back from flash doesn't
