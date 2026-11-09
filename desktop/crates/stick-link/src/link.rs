@@ -12,6 +12,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
+/// Messages and audio frames in the order they arrived (a talk's frames sit between its `start`
+/// and `stop` messages).
+#[derive(Debug, Clone, PartialEq)]
+pub enum FromStick {
+    Message(Value),
+    Audio(Vec<u8>),
+}
+
 /// What the link is doing (the dashboard's `link`): link.py's states plus `starting`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkState {
@@ -69,6 +77,7 @@ struct Inner<C: Connector> {
     state: watch::Sender<LinkState>,
     messages: broadcast::Sender<Value>,
     audio: broadcast::Sender<Vec<u8>>,
+    both: broadcast::Sender<FromStick>,
     pending: Mutex<HashMap<String, oneshot::Sender<Option<Value>>>>,
     next_id: AtomicU64,
     mtu: AtomicUsize,
@@ -111,7 +120,8 @@ impl<C: Connector> Link<C> {
                 ctl,
                 state,
                 messages: broadcast::channel(256).0,
-                audio: broadcast::channel(512).0,
+                audio: broadcast::channel(4096).0, // a long talk with its fast pre-roll
+                both: broadcast::channel(4096).0,
                 pending: Mutex::new(HashMap::new()),
                 next_id: AtomicU64::new(1),
                 mtu: AtomicUsize::new(0),
@@ -209,6 +219,11 @@ impl<C: Connector> Link<C> {
     /// Every audio frame from the stick (talk / Wispr; used in Phase 2).
     pub fn audio(&self) -> broadcast::Receiver<Vec<u8>> {
         self.inner.audio.subscribe()
+    }
+
+    /// Messages and audio together, in order (what the talk flow needs).
+    pub fn incoming(&self) -> broadcast::Receiver<FromStick> {
+        self.inner.both.subscribe()
     }
 
     /// Nearby sticks (never connects).
@@ -385,7 +400,10 @@ impl<C: Connector> Link<C> {
                             }
                         }
                     }
-                    Some(Incoming::Audio(frame)) => { let _ = self.inner.audio.send(frame); }
+                    Some(Incoming::Audio(frame)) => {
+                        let _ = self.inner.both.send(FromStick::Audio(frame.clone()));
+                        let _ = self.inner.audio.send(frame);
+                    }
                 },
                 r = ctl.changed() => {
                     let c = ctl.borrow_and_update().clone();
@@ -410,6 +428,7 @@ impl<C: Connector> Link<C> {
         {
             let _ = tx.send(reply.cloned());
         }
+        let _ = self.inner.both.send(FromStick::Message(msg.clone()));
         let _ = self.inner.messages.send(msg);
     }
 }
@@ -566,6 +585,22 @@ mod tests {
         let mut au = link.audio();
         fake.notify_audio(&[0, 0, 1, 2, 3]);
         assert_eq!(au.recv().await.unwrap(), vec![0, 0, 1, 2, 3]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn messages_and_audio_keep_their_order() {
+        let fake = FakeStick::new();
+        let link = connected(&fake, quiet()).await;
+        let mut rx = link.incoming();
+        fake.talk(&[vec![0, 0, 0, 0, 0, 1], vec![1, 0, 0, 0, 0, 2]]);
+        let mut got = Vec::new();
+        for _ in 0..4 {
+            got.push(match rx.recv().await.unwrap() {
+                FromStick::Message(m) => m["state"].as_str().unwrap().to_string(),
+                FromStick::Audio(a) => format!("audio{}", a[0]),
+            });
+        }
+        assert_eq!(got, ["start", "audio0", "audio1", "stop"]);
     }
 
     #[tokio::test(start_paused = true)]

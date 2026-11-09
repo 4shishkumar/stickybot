@@ -29,6 +29,8 @@ struct State {
     hellos: usize,
     last_hello: Option<Value>,
     last_target: Option<Target>,
+    /// what the agent showed on the screen: `(state, heard, text)` per `{"src":"agent","state":…}`
+    screens: Vec<(String, String, String)>,
     tx: Option<mpsc::UnboundedSender<Incoming>>,
     decoder: LineDecoder,
 }
@@ -135,6 +137,22 @@ impl FakeStick {
     pub fn notify(&self, msg: &Value) {
         self.with(|s| emit(s, msg));
     }
+    /// What the agent put on the screen so far: `(state, heard, text)`.
+    pub fn screens(&self) -> Vec<(String, String, String)> {
+        self.with(|s| s.screens.clone())
+    }
+    pub fn clear_screens(&self) {
+        self.with(|s| s.screens.clear());
+    }
+    /// B held while saying `frames` (ADPCM, see [`crate::adpcm::encode`]): `talk start`, the
+    /// frames, `talk stop`, in the order the firmware sends them.
+    pub fn talk(&self, frames: &[Vec<u8>]) {
+        self.notify(&json!({"src": "agent", "evt": "talk", "state": "start", "rate": 16000, "codec": "ima-adpcm"}));
+        for f in frames {
+            self.notify_audio(f);
+        }
+        self.notify(&json!({"src": "agent", "evt": "talk", "state": "stop"}));
+    }
     pub fn notify_audio(&self, frame: &[u8]) {
         self.with(|s| {
             if let Some(tx) = &s.tx {
@@ -181,6 +199,13 @@ fn handle(s: &mut State, msg: &Value) {
         return;
     }
     if s.silent {
+        return;
+    }
+    if msg.get("src").and_then(Value::as_str) == Some("agent")
+        && let Some(state) = msg.get("state").and_then(Value::as_str)
+    {
+        let field = |k: &str| msg.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        s.screens.push((state.to_string(), field("heard"), field("text")));
         return;
     }
     if let Some(line) = msg.get("proto").and_then(Value::as_str) {

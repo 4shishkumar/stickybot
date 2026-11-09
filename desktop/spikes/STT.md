@@ -107,7 +107,12 @@ only in how they write numbers:
 
 - **"Tauri" → "Tory"** happens in every engine. It is a vocabulary problem, not an engine
   problem. Two possible fixes: sherpa-onnx supports hotwords/contextual biasing for transducers
-  (`create_stream_with_hotwords`), and FluidAudio has `CustomVocabulary`. Neither was tried.
+  (`create_stream_with_hotwords`), and FluidAudio has `CustomVocabulary`.
+  **Phase 2: sherpa hotwords work.** With `["Tauri", "StickyBot", "Claude"]` as hints (modified
+  beam search, 4 paths, score 1.5; `modeling_unit = "bpe"` with a `bpe.vocab` written from
+  `tokens.txt`, because the release has no BPE model and sherpa can't encode hints without one),
+  #05 comes out as "Tauri" and the other 12 are unchanged, at the same speed (~130 ms).
+  `cargo run -p stt --release --example hotwords -- <model dir> beam 1.5 <wavs…>`.
 - **sherpa's "430" and "2.10"** come from how it joins digit tokens. MLX gives "4 30" and
   "2, 1, 0" from the same model, so the words it heard are the same. This only matters if the brain reads versions or times literally.
 
@@ -213,5 +218,5 @@ spikes/stt-testset/run_all.sh            # or e.g.: run_all.sh sherpa-cpu8 fluid
   FluidBridge Swift runtime, the whisper Metal shaders.
 - **FluidBridge thread safety.** Its `lastError` is a plain global, which is fine for one
   worker thread but not more.
-- **Sherpa and whisper features that could help but weren't tried:** sherpa hotwords for
-  "Tauri", and whisper `audio_ctx` trimming, which would make turbo much faster on short clips.
+- **Whisper `audio_ctx` trimming**, which would make turbo much faster on short clips (sherpa
+  hotwords: done in Phase 2, see above).

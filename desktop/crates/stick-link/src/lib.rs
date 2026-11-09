@@ -1,12 +1,14 @@
 //! The Bluetooth link to the StickyBot stick (PROTOCOL.md section 5, a port of
 //! `mac-agent/stick_agent/link.py`).
 //!
+//! - [`adpcm`]: the stick's audio frames (IMA-ADPCM), decode + encode.
 //! - [`proto`]: the wire format, no I/O (framing, chunking, line decoding, message shapes).
 //! - [`Link`]: the reconnect loop, hellos, `proto` requests with ids, the message stream.
 //! - [`transport`]: what the link needs from Bluetooth ([`Connector`] / [`Connection`]).
 //! - [`corebt`]: CoreBluetooth through objc2 (macOS).
 //! - [`fake`]: a stick in memory, for tests and `--fake-stick`.
 
+pub mod adpcm;
 pub mod fake;
 mod link;
 pub mod proto;
@@ -15,7 +17,7 @@ pub mod transport;
 #[cfg(target_os = "macos")]
 pub mod corebt;
 
-pub use link::{Gate, Link, LinkState, NOT_FOUND_REASON, Options};
+pub use link::{FromStick, Gate, Link, LinkState, NOT_FOUND_REASON, Options};
 pub use transport::{BleError, Connection, Connector, Found, Incoming, Target};
 
 use std::time::Duration;

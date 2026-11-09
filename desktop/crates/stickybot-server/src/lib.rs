@@ -5,9 +5,12 @@
 //! Everything else answers 404, which the page already shows as "not available in this version".
 
 pub mod api;
+pub mod commands;
 pub mod config;
 pub mod hub;
 pub mod python_agent;
+pub mod speech;
+pub mod talk;
 
 use serde_json::{Map, Value, json};
 use std::net::SocketAddr;
@@ -55,6 +58,19 @@ pub struct AppState {
     pub port: u16,
     pub started: f64,
     pub fake: bool,
+    /// speech to text (the model download + its worker thread)
+    pub speech: Arc<speech::Speech>,
+    pub commands: commands::Store,
+    pub apps: commands::Apps,
+    /// runs quick commands' `open` / shell (tests swap it)
+    runner: Mutex<commands::Runner>,
+    brain: Mutex<Arc<dyn talk::Brain>>,
+    /// what the agent is doing beyond the link: `(state, detail)` while it listens, transcribes,
+    /// thinks or works; `None` = idle
+    activity: Mutex<Option<(String, String)>>,
+    stats: Mutex<Map<String, Value>>,
+    /// the last good brain reply `{"t", "text"}` (the home card, later)
+    pub last_reply: Mutex<Option<Value>>,
 }
 
 impl AppState {
@@ -64,16 +80,113 @@ impl AppState {
         let token = paths.token_value().map_err(|e| format!("token: {e}"))?;
         let cfg = config::load(&paths);
         let fake = backend.is_fake();
-        Ok(Arc::new(Self {
+        let commands = commands::Store::new(paths.commands());
+        if let Err(e) = commands.ensure() {
+            log::warn!("{}: {e}", commands.path.display());
+        }
+        let started = hub::now();
+        let st = Arc::new(Self {
             link: Link::new(backend),
             cfg: Mutex::new(cfg),
             paths,
             token,
             hub: hub::Hub::default(),
             port: opts.port,
-            started: hub::now(),
+            started,
             fake,
-        }))
+            speech: Arc::new(speech::Speech::default()),
+            commands,
+            apps: commands::Apps::system(),
+            runner: Mutex::new(commands::system_runner()),
+            brain: Mutex::new(Arc::new(talk::NoBrain)),
+            activity: Mutex::new(None),
+            stats: Mutex::new(
+                json!({"requests": 0, "quick": 0, "claude": 0, "started": started})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+            last_reply: Mutex::new(None),
+        });
+        let weak = Arc::downgrade(&st);
+        st.speech.on_change(move |p| {
+            if let Some(st) = weak.upgrade() {
+                st.hub.emit("speech", p.to_json());
+            }
+        });
+        Ok(st)
+    }
+
+    pub fn runner(&self) -> commands::Runner {
+        self.runner.lock().unwrap().clone()
+    }
+
+    pub fn set_runner(&self, r: commands::Runner) {
+        *self.runner.lock().unwrap() = r;
+    }
+
+    pub fn brain(&self) -> Arc<dyn talk::Brain> {
+        self.brain.lock().unwrap().clone()
+    }
+
+    pub fn set_brain(&self, b: Arc<dyn talk::Brain>) {
+        *self.brain.lock().unwrap() = b;
+    }
+
+    /// The agent is busy with a talk / request (core.py `set_state`).
+    pub fn set_activity(&self, state: &str, detail: &str) {
+        *self.activity.lock().unwrap() = Some((state.to_string(), detail.to_string()));
+        self.hub.emit("state", json!({"state": state, "detail": detail}));
+    }
+
+    /// Back to idle: the pill follows the link again.
+    pub fn set_idle(&self) {
+        *self.activity.lock().unwrap() = None;
+        self.hub.emit("state", json!({"state": self.agent_state(), "detail": self.detail()}));
+    }
+
+    pub fn count(&self, what: &str) {
+        let mut s = self.stats.lock().unwrap();
+        let n = s.get(what).and_then(Value::as_u64).unwrap_or(0);
+        s.insert(what.into(), json!(n + 1));
+    }
+
+    /// One line in `history.jsonl` (the Activity page).
+    pub fn history(&self, entry: &Value) {
+        use std::io::Write;
+        let r = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.paths.history())
+            .and_then(|mut f| writeln!(f, "{entry}"));
+        if let Err(e) = r {
+            log::warn!("history: {e}");
+        }
+    }
+
+    /// The word hints for the speech model (config `stt_hints`).
+    pub fn stt_hints(&self) -> Vec<String> {
+        let cfg = self.cfg.lock().unwrap();
+        match cfg.get("stt_hints").and_then(Value::as_array) {
+            Some(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+            None => speech::DEFAULT_HINTS.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// Gets the speech model if needed (progress as `speech` events), then loads it.
+    pub fn spawn_speech(self: &Arc<Self>) {
+        let st = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let models = st.paths.models();
+            let s2 = st.clone();
+            match speech::ensure_model(&models, &speech::ModelSource::default(), &|p| s2.speech.set_phase(p)) {
+                Ok(dir) => st.speech.start(speech::parakeet(&dir, &st.stt_hints())),
+                Err(e) => {
+                    log::error!("speech model: {e:#}");
+                    st.speech.set_phase(speech::Phase::Failed(format!("{e:#}")));
+                }
+            }
+        });
     }
 
     pub fn url(&self) -> String {
@@ -87,20 +200,26 @@ impl AppState {
 
     /// What the agent is doing, for the status pill: `ready` when the stick is connected
     /// (there's no speech model to wait for yet), else the link's state.
-    pub fn agent_state(&self) -> &'static str {
+    pub fn agent_state(&self) -> String {
+        if let Some((s, _)) = self.activity.lock().unwrap().as_ref() {
+            return s.clone();
+        }
         match self.link.state() {
-            LinkState::Connected => "ready",
-            s => s.as_str(),
+            LinkState::Connected => "ready".into(),
+            s => s.as_str().into(),
         }
     }
 
     /// The status line under the pill: why the link waits / searches, else what this app is.
     pub fn detail(&self) -> String {
+        if let Some((_, d)) = self.activity.lock().unwrap().as_ref() {
+            return d.clone();
+        }
         match (self.fake, self.link.held_back(), self.link.reason()) {
             (true, _, _) => "Rust preview with a fake stick".to_string(),
             (false, Some(why), _) => format!("Waiting: {why}"),
             (false, None, Some(why)) => format!("Searching: {why}"),
-            (false, None, None) => "Rust preview: Bluetooth link + Stick page".to_string(),
+            (false, None, None) => "Rust preview".to_string(),
         }
     }
 
@@ -113,10 +232,11 @@ impl AppState {
             "held_back": self.link.held_back(),
             "link": self.link.state().as_str(),
             "stick": cfg.get("stick").cloned().unwrap_or(Value::Null),
-            "stt_ready": false,
-            "busy": false,
+            "stt_ready": self.speech.ready(),
+            "speech": self.speech.phase().to_json(),
+            "busy": self.brain().busy(),
             "mtu": self.link.mtu(),
-            "stats": {"requests": 0, "quick": 0, "claude": 0, "started": self.started},
+            "stats": Value::Object(self.stats.lock().unwrap().clone()),
             "prompts": [],
             "asks": [],
             "mcp": false,
@@ -126,7 +246,7 @@ impl AppState {
             "stick_approvals": cfg.get("stick_approvals").cloned().unwrap_or(json!(true)),
             "wireless_mic": null,
             "update": {},
-            "brain": null,
+            "brain": self.brain().status(),
             "app": {"name": "StickyBot (Rust)", "window": true, "rust": true, "fake_stick": self.fake},
         })
     }
@@ -134,15 +254,22 @@ impl AppState {
     /// Settings changed (PUT /api/config): save, tell the pages, follow a new stick.
     pub fn update_config(&self, changes: Map<String, Value>) -> Result<Map<String, Value>, String> {
         let stick_changed;
+        let hints_changed;
         let snapshot = {
             let mut cfg = self.cfg.lock().unwrap();
             stick_changed = changes.get("stick").is_some_and(|s| cfg.get("stick") != Some(s));
+            hints_changed = changes.get("stt_hints").is_some_and(|s| cfg.get("stt_hints") != Some(s));
             cfg.extend(changes);
             config::save(&self.paths, &cfg).map_err(|e| format!("couldn't save the settings: {e}"))?;
             cfg.clone()
         };
         if stick_changed {
             self.link.set_target(self.stick());
+        }
+        let dir = self.paths.models().join(speech::MODEL_NAME);
+        if hints_changed && self.speech.ready() && speech::model_ready(&dir) {
+            log::info!("word hints changed: reloading the speech model");
+            self.speech.start(speech::parakeet(&dir, &self.stt_hints()));
         }
         self.hub.emit("config", json!({"config": snapshot}));
         Ok(snapshot)
@@ -169,6 +296,10 @@ pub async fn start(opts: Options) -> Result<Running, String> {
         .map_err(|e| format!("can't listen on 127.0.0.1:{}: {e}", opts.port))?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
     spawn_link_watcher(state.clone());
+    talk::spawn(state.clone());
+    if std::env::var("STICKYBOT_RS_NO_STT").as_deref() != Ok("1") {
+        state.spawn_speech();
+    }
     if !state.fake && std::env::var("STICKYBOT_RS_ALLOW_SHARED").as_deref() != Ok("1") {
         let port =
             std::env::var("STICKYBOT_RS_PYTHON_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(python_agent::PORT);

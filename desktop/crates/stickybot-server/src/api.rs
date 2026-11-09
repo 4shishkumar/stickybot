@@ -5,7 +5,7 @@
 use crate::AppState;
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{Path, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -42,6 +42,13 @@ pub const PORTED: &[&str] = &[
     "PUT /api/sounds",
     "POST /api/sounds/play",
     "GET /api/rust",
+    "GET /api/history",
+    "POST /api/ask",
+    "GET /api/commands",
+    "PUT /api/commands",
+    "POST /api/commands/test",
+    "GET /api/speech",
+    "POST /api/speech/retry",
 ];
 
 /// The Python agent's endpoints that aren't here yet, by the phase that brings them.
@@ -56,12 +63,7 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
     ("POST /api/onboarding", "setup wizard progress"),
     ("GET /api/install", "setup page (#install)"),
     ("/api/install/*", "setup page steps and jobs"),
-    ("GET /api/history", "voice requests (Activity)"),
     ("GET /api/logs", "log viewer (Logs)"),
-    ("POST /api/ask", "typed request to the brain"),
-    ("GET /api/commands", "quick commands"),
-    ("PUT /api/commands", "quick commands"),
-    ("POST /api/commands/test", "quick commands"),
     ("POST /api/permission", "Claude Code approvals (hook long-poll)"),
     ("POST /api/permission/decide", "Claude Code approvals"),
     ("GET /api/clips", "sound clips library"),
@@ -102,6 +104,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/sounds", get(get_sounds).put(put_sounds))
         .route("/api/sounds/play", post(play_sound))
         .route("/api/rust", get(rust_info))
+        .route("/api/history", get(history))
+        .route("/api/ask", post(ask))
+        .route("/api/commands", get(get_commands).put(put_commands))
+        .route("/api/commands/test", post(test_command))
+        .route("/api/speech", get(speech_status))
+        .route("/api/speech/retry", post(speech_retry))
         .fallback(not_ported)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -285,6 +293,70 @@ async fn play_sound(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<
     let name = body_obj(&body).get("name").map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string()));
     let ok = sound(&st, json!({"play": name.unwrap_or_else(|| "test".into())})).await.is_some();
     axum::Json(json!({"ok": ok}))
+}
+
+#[derive(serde::Deserialize)]
+struct HistoryQuery {
+    n: Option<usize>,
+}
+
+/// The last `n` (50) requests, newest first (server.py `history`).
+async fn history(State(st): State<Arc<AppState>>, Query(q): Query<HistoryQuery>) -> axum::Json<Value> {
+    let text = std::fs::read_to_string(st.paths.history()).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let n = q.n.unwrap_or(50);
+    let out: Vec<Value> =
+        lines[lines.len().saturating_sub(n)..].iter().rev().filter_map(|l| serde_json::from_str(l).ok()).collect();
+    axum::Json(Value::Array(out))
+}
+
+/// A typed request (`{"text"}`), handled like a spoken one.
+async fn ask(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    let text = body_obj(&body).get("text").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    if text.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "empty");
+    }
+    tokio::spawn(crate::talk::handle_text(st.clone(), text, "typed"));
+    axum::Json(json!({"ok": true})).into_response()
+}
+
+async fn get_commands(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    axum::Json(st.commands.read())
+}
+
+async fn put_commands(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    match st.commands.save(&body_obj(&body)) {
+        Ok(()) => axum::Json(json!({"ok": true})).into_response(),
+        Err(e) => err(StatusCode::BAD_REQUEST, &e),
+    }
+}
+
+async fn test_command(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<Value> {
+    let text = body_obj(&body).get("text").and_then(Value::as_str).unwrap_or("").to_string();
+    let hit = st.commands.find(&text).map(|(c, slots)| json!({"name": c.get("name"), "slots": slots}));
+    axum::Json(json!({"normalized": crate::commands::normalize(&text), "match": hit.unwrap_or(Value::Null)}))
+}
+
+/// The speech model: `{"phase": "downloading", "pct", …}` / `ready` / `failed`, the hints, where.
+async fn speech_status(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    let mut v = st.speech.phase().to_json();
+    if let Value::Object(m) = &mut v {
+        m.insert("model".into(), json!(crate::speech::MODEL_NAME));
+        m.insert("dir".into(), json!(st.paths.models().join(crate::speech::MODEL_NAME)));
+        m.insert("hints".into(), json!(st.stt_hints()));
+    }
+    axum::Json(v)
+}
+
+/// Tries the download / load again after a failure.
+async fn speech_retry(State(st): State<Arc<AppState>>) -> Response {
+    match st.speech.phase() {
+        crate::speech::Phase::Failed(_) | crate::speech::Phase::Idle => {
+            st.spawn_speech();
+            axum::Json(json!({"ok": true})).into_response()
+        }
+        _ => err(StatusCode::CONFLICT, "the speech model is already loading or ready"),
+    }
 }
 
 /// What this app is and what it can do (for the README and for checking a build).
@@ -473,5 +545,41 @@ mod tests {
         assert_eq!(s, StatusCode::NOT_FOUND);
         let (_, v, _) = call(&app, req("GET", "/api/rust", None, None)).await;
         assert!(v["ported"].as_array().unwrap().iter().any(|e| e == "POST /api/stick/proto"));
+    }
+
+    #[tokio::test]
+    async fn quick_commands_history_and_typed_requests() {
+        let (app, st, fake) = app("cmds", true).await;
+        crate::talk::spawn(st.clone());
+        st.set_runner(Arc::new(|_| String::new()));
+        let tok = Some(st.token.as_str());
+        let (_, v, _) = call(&app, req("GET", "/api/commands", None, None)).await;
+        assert_eq!(v["commands"][0]["name"], "GitHub PR");
+        let (s, _, _) = call(&app, req("PUT", "/api/commands", Some(json!({"nope": 1})), tok)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let cmds =
+            json!({"commands": [{"name": "Docs", "phrases": ["docs {q}"], "open_url": "https://x.test/?q={q}"}]});
+        let (s, _, _) = call(&app, req("PUT", "/api/commands", Some(cmds), tok)).await;
+        assert_eq!(s, StatusCode::OK);
+        let (_, v, _) =
+            call(&app, req("POST", "/api/commands/test", Some(json!({"text": "Docs: the pairing!"})), tok)).await;
+        assert_eq!(v["normalized"], "docs pairing");
+        assert_eq!(v["match"], json!({"name": "Docs", "slots": {"q": "pairing"}}));
+        let (s, _, _) = call(&app, req("POST", "/api/ask", Some(json!({"text": " "})), tok)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        call(&app, req("POST", "/api/ask", Some(json!({"text": "docs bluetooth"})), tok)).await;
+        for _ in 0..200 {
+            if fake.screens().iter().any(|(s, _, _)| s == "done") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(fake.screens(), vec![("done".into(), "docs bluetooth".into(), "Opened Docs".into())]);
+        let (_, v, _) = call(&app, req("GET", "/api/history?n=5", None, None)).await;
+        assert_eq!(v[0]["via"], "quick");
+        assert_eq!(v[0]["source"], "typed");
+        let (_, v, _) = call(&app, req("GET", "/api/speech", None, None)).await;
+        assert_eq!(v["phase"], "idle");
+        assert_eq!(v["hints"], json!(["Tauri", "StickyBot", "Claude"]));
     }
 }

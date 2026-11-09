@@ -50,6 +50,19 @@ impl Paths {
     pub fn log(&self) -> PathBuf {
         self.home.join("app.log")
     }
+    pub fn history(&self) -> PathBuf {
+        self.home.join("history.jsonl")
+    }
+    pub fn commands(&self) -> PathBuf {
+        self.home.join("commands.json")
+    }
+    /// The speech model (and later others): `$STICKYBOT_RS_MODELS`, else `<home>/models`.
+    pub fn models(&self) -> PathBuf {
+        match std::env::var_os("STICKYBOT_RS_MODELS") {
+            Some(m) => PathBuf::from(m),
+            None => self.home.join("models"),
+        }
+    }
 
     pub fn ensure(&self) -> std::io::Result<()> {
         fs::create_dir_all(&self.home)?;
@@ -98,6 +111,7 @@ pub fn defaults() -> Map<String, Value> {
         "stick": null,
         "model": "sonnet",
         "stt_model": "mlx-community/parakeet-tdt-0.6b-v2",
+        "stt_hints": ["Tauri", "StickyBot", "Claude"],
         "claude_path": "",
         "speak_replies": false,
         "speak_output": "stick",
@@ -177,6 +191,15 @@ pub fn invalid(body: &Map<String, Value>) -> String {
         && !n.as_i64().is_some_and(|n| (50..=4000).contains(&n))
     {
         return "openrouter_max_tokens must be 50-4000".into();
+    }
+    if let Some(h) = body.get("stt_hints") {
+        let ok = h.as_array().is_some_and(|a| {
+            a.len() <= 50
+                && a.iter().all(|w| w.as_str().is_some_and(|w| !w.trim().is_empty() && w.chars().count() <= 40))
+        });
+        if !ok {
+            return "stt_hints must be a list of words (at most 50, each up to 40 characters)".into();
+        }
     }
     if let Some(s) = body.get("stick")
         && !s.is_null()
