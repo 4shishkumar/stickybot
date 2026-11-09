@@ -8,7 +8,11 @@ What it does today: the Bluetooth link to the stick, the dashboard (the Python a
 served from Rust, a menu bar app, and (Phase 2) **hold B to talk** (on-device speech to text, quick
 commands, Claude Code streamed to the stick), Claude Code **approvals** on the stick, **sound clips**,
 the **firmware update over Bluetooth** and the **wireless Wispr mic** (hold A: the stick's mic reaches
-Wispr Flow over Bluetooth, through a Core Audio tap).
+Wispr Flow over Bluetooth, through a Core Audio tap), **face packages** (the faces catalog, installed over
+Bluetooth), the stick 2.5.0 features (**IR remote**, **games**, **air mouse / presenter**), and the
+**setup page** (first-run steps, components, Claude Code hooks), `/api/restart` and `/api/window`.
+Every endpoint the Python app serves (incl. feature/faces-2.4 and the 2.5.0 branches) is here; see
+*Endpoint diff* below.
 
 ## Run it
 
@@ -54,9 +58,9 @@ loads it in ~0.7 s; `GET /api/speech` and `speech` events show the progress.
 
 | Crate | What |
 |---|---|
-| `crates/stick-link` | The Bluetooth link (port of `link.py`). `proto.rs`: the wire format, **no I/O** (compact ASCII JSON lines, 180-byte writes, line decoder, hello / `proto` / sound messages, the "Insufficient Resource" retry rule). `link.rs`: reconnect loop, hello every 8 s, `@…` requests answered by id (5 s), message + audio streams (and both in order: `incoming()`), clips (`send_audio`), OTA packets, pause, re-target, a connect gate. `adpcm.rs`: the stick's IMA-ADPCM frames. `ota.rs`: the windowed firmware transfer (`ota.py`). `corebt.rs`: CoreBluetooth through `objc2-core-bluetooth`, with write-without-response pacing. `fake.rs`: a stick in memory (answers `@state`, `@keys`, settings, sounds; holds B with any audio; plays clips; takes firmware updates; test knobs for busy / silent / absent / drops / lost packets / rollback). `examples/scan.rs`. |
-| `crates/stickybot-server` | axum: the dashboard page + `static/` from `mac-agent/stick_agent/` (rust-embed: read from disk in debug builds, embedded in release), the API slice, config + token in `~/.stickybot-rs/`, the SSE event feed, the Python-agent check. `talk.rs` (hold B: core.py's flow), `speech.rs` (model download + STT worker), `commands.rs` (quick commands), `brain.rs` (Claude Code session), `approvals.rs`, `clips.rs`, `firmware.rs`, `wmic.rs` (the wireless Wispr mic: core.py's wispr parts + `Holds`). Bin `stickybot-headless`. Tests `tests/talk_e2e.rs`, `tests/wmic_e2e.rs`. |
-| `crates/stickybot-app` | Tauri 2 shell: tray icon (status line, Open dashboard, Open in browser, Quit), webview window on `http://localhost:8670/`, no Dock icon (`ActivationPolicy::Accessory` + `LSUIElement`). |
+| `crates/stick-link` | The Bluetooth link (port of `link.py`). `proto.rs`: the wire format, **no I/O** (compact ASCII JSON lines, 180-byte writes, line decoder, hello / `proto` / sound messages, the "Insufficient Resource" retry rule). `link.rs`: reconnect loop, hello every 8 s, `@…` requests answered by id (5 s), message + audio streams (and both in order: `incoming()`), clips (`send_audio`), OTA packets, pause, re-target, a connect gate. `adpcm.rs`: the stick's IMA-ADPCM frames. `ota.rs`: the windowed transfer (`ota.py`'s `Transfer`): firmware, and face packages with the `faces` `Family`. `corebt.rs`: CoreBluetooth through `objc2-core-bluetooth`, with write-without-response pacing. `fake.rs`: a stick in memory (answers `@state`, `@keys`, settings, sounds; holds B with any audio; plays clips; takes firmware updates and face packages (`@faces`, `put` / `rm`, one transfer at a time); `fake_ir.rs`: `@ir`, `@games`, `@air`, `@mode`; test knobs for busy / silent / absent / drops / lost packets / rollback). `examples/scan.rs`. |
+| `crates/stickybot-server` | axum: the dashboard page + `static/` from `mac-agent/stick_agent/` (rust-embed: read from disk in debug builds, embedded in release), the API slice, config + token in `~/.stickybot-rs/`, the SSE event feed, the Python-agent check. `talk.rs` (hold B: core.py's flow), `speech.rs` (model download + STT worker), `commands.rs` (quick commands), `brain.rs` (Claude Code session), `approvals.rs`, `clips.rs`, `firmware.rs`, `wmic.rs` (the wireless Wispr mic: core.py's wispr parts + `Holds`), `faces.rs` (face packages), `ir.rs` (the IR remote), `setup.rs` (setup page, components, onboarding, restart / window; tests in `setup_tests.rs`), `hooks.rs` (Claude Code's hooks: `--hook permission|prompt|stop`), `sysrun.rs` (programs the setup page runs, behind `System`), `appctl.rs` (restart / window, set by the menu bar app). Bin `stickybot-headless`. Tests `tests/talk_e2e.rs`, `tests/wmic_e2e.rs`. |
+| `crates/stickybot-app` | Tauri 2 shell: tray icon (status line, Open dashboard, Open in browser, Quit), webview window on `http://localhost:8670/`, no Dock icon (`ActivationPolicy::Accessory` + `LSUIElement`). `appctl.rs`: `/api/restart` (Tauri restart) and `/api/window` (show / focus / create the window at `#page`). `--hook …` runs Claude Code's hook and exits. |
 | `crates/macos-audio` | The wireless mic's audio side (`spikes/TAP.md`). Plain Rust, tested anywhere: `carrier.rs` (`pick_carrier`: tap / BlackHole), `device.rs` (`StickMicDevice`: the aggregate + tap, `recording()`, the -80 dBFS check, cleanup by *our* UID only), `jitter.rs` (sequencer, jitter buffer, resampler), `player.rs` (`WisprPlayer`: the stick's audio into the carrier, gated on the tap), `fake.rs` (Core Audio and outputs in memory), `naming.rs`. macOS: `system.rs` (the HAL + cpal backends), `hal.rs`, `tap.rs`, `mic.rs` (the live-object registry). `examples/tapmic.rs` (the spike's self-check). |
 | `crates/stt` | Speech to text: sherpa-onnx Parakeet TDT 0.6b v3 with word hints (hotwords) by default (`spikes/STT.md`; whisper behind `--features whisper`, FluidAudio behind `fluid`). `examples/hotwords.rs`. |
 
@@ -92,16 +96,17 @@ Bluetooth until it's needed.
 Guard as in `server.py`: only `Host: localhost:8670` / `127.0.0.1:8670`, and every non-GET needs
 `X-Stick-Token` (from `~/.stickybot-rs/token`, 0600; the page has it built in).
 
-**Not ported yet** (they answer a JSON 404, which the page already shows as "not available in this
-version"; `GET /api/rust` lists them): `/api/onboarding`
-(the wizard keeps its progress in the browser meanwhile), `/api/install*`,
-`/api/components*`, `/api/restart`, `/api/window`, `POST /api/update/agent`
-(answers 409: no self-update).
+Everything else is ported too (tables below). Unknown paths answer a JSON 404 (`"missing": true`),
+which the page shows as "not available in this version". `POST /api/update/agent` answers 409: the
+app doesn't update itself (build it from the repo).
 
-How the pages degrade: every page works (Stick incl. USB flashing, Overview, Activity, Events, Logs,
-Quick commands, Sounds, Settings incl. Brain (Claude Code / OpenRouter), the stick tools and voices); the setup page's wireless-mic
-step (`/api/install`) isn't ported (use Settings). With no stick picked, the setup wizard opens as in the Python app;
-its *Pick your stick* step scans and saves the stick to **this** app's config.
+Every page works (Stick incl. USB flashing, More faces, Mouse & presenter, Games, Remote, Overview,
+Activity, Events, Logs, Quick commands, Sounds, Settings incl. Brain (Claude Code / OpenRouter),
+Components, the stick tools and voices, the setup page). With no stick picked, the setup wizard opens
+as in the Python app; its *Pick your stick* step scans and saves the stick to **this** app's config.
+
+**Ollama**: not ported, because the Python app has no Ollama brain (only a comment in
+`openai_brain.py` saying it could reuse the OpenAI-style code). Brains are Claude Code and OpenRouter.
 
 ## What's ported (Phase 2)
 
@@ -113,9 +118,14 @@ its *Pick your stick* step scans and saves the stick to **this** app's config.
 | **Questions from a session** | `approvals::ask_user` (core.py): the prompt message with `kind: "ask"` and the labels, re-sent every 3 s, an approval goes first, cleared on the stick however it ends; `status.asks`, `ask` / `ask_done` events, the home card shows "<from> asks". |
 | **Reading replies aloud** | `speak.rs` (speech.py): `speak_replies` (+ `speak_stream`: sentence by sentence while Claude writes, `speak_max_words` cap), `say` → a clip on the stick's speaker (several sentences joined, waits for it to play) or `afplay` on the Mac (`speak_output`, the Mac when the stick is away); quick-command confirmations with `speak_quick`; holding B or cancel stops it. `GET /api/voices`, `POST /api/voice/test`. |
 | **OpenRouter brain** | `openrouter.rs` (openai_brain.py): any OpenRouter model with your own key, streamed chat completions (SSE) over HTTPS (ureq on a blocking thread, 10 s connect, 60 s without a byte), the conversation in memory (24 messages, whole turns dropped first; idle `brain_idle_min` = a new one), the stick tools as functions (`mcp::openai_tools`, run through `mcp::call_approved`: open_url / open_app / quick_command ask on the stick first), at most 5 tool rounds, progress lines, cancel closes the stream, cost / first token / rounds in `status.brain.last`, a model that can't use tools is asked again without them (and remembered). `brains.rs` (brains.py) picks Claude Code or OpenRouter per request from config `brain`; switching forgets the old one (Claude's session stops), Claude is pre-warmed only while picked. The key (`keys.rs`, keychain.py): the Keychain item the Python app uses (service `com.stickkey.agent`, account `openrouter`; macOS asks once whether this app may read it), through the Security framework (never the `security` command: a key on a command line shows in the process list); `STICK_AGENT_OPENROUTER_KEY` overrides it; write-only from the outside. With the fake stick the keys live in memory (tests never reach the Keychain). `GET /api/brain`, `PUT` / `DELETE /api/brain/openrouter/key`, `GET /api/brain/openrouter/models` (`?refresh=1`; cached 10 min, a stale list when offline), `POST /api/brain/test`. HTTP sits behind `openrouter::Transport` (tests: a scripted fake). |
-| **Approvals** | `POST /api/permission` (the hook's long-poll), `POST /api/permission/decide`; the prompt on the stick every 3 s, A / B answers, `prompt` / `prompt_done` events, `status.prompts`. The hook still points at the Python agent (:8660); see *Testing*. |
+| **Approvals** | `POST /api/permission` (the hook's long-poll), `POST /api/permission/decide`; the prompt on the stick every 3 s, A / B answers, `prompt` / `prompt_done` events, `status.prompts`. The Python app's hooks post to :8660 (this app after the switch-over); this app's own hooks (`--hook permission`, setup page → Claude Code hooks, only after the switch-over) do the same. |
+| **Face packages** (firmware 2.4.0+) | `faces.rs` (faces.py + faces_api.py): the catalog (config `faces_catalog_url`, default GitHub Pages; https or http://localhost only) cached in `~/.stickybot-rs/faces/` (ETag / If-Modified-Since, at most every 6 h, the last copy offline), its ed25519 signature (`catalog.json.sig`) checked against faces.py's `CATALOG_KEYS` (required for the default URL), every `.sfb` checked (container, budgets, palette indices, id / version / size / sha256 against the catalog), minFirmware 2.4.0 and the face format against `@state`'s `pkgFaces`. Install = `{"faces":{"put":…}}` + the bytes over OTA_DATA with the firmware update's windowed transfer (`ota::Sender` with the `faces` `Family`: acks, gaps, resume after a drop, cancel), `end` → `done`; list `@faces` (all pages), remove `{"faces":{"rm":id}}`, use `@face id=`. One transfer at a time (a firmware update answers 409 while a face installs, and the other way round). `GET /api/faces/catalog` (`?refresh=1`), `GET /api/faces/preview/{id}/{side}`, `POST /api/faces/install` (`{id}` or `{file: base64, name}` → `{job}`), `GET /api/faces/jobs/{id}` (SSE), `POST /api/faces/jobs/{id}/cancel`, `POST /api/faces/remove`, `POST /api/faces/use`. Network behind `faces::Fetch` (the fake stick: offline). |
+| **IR remote** (firmware 2.5.0+) | `ir.rs` (ir.py + ir_api.py), the Remote page: `GET /api/ir` (remotes and buttons from `@ir op=list`, the built-in code sets (Samsung, LG, Sony, Philips TVs), the mapped brands, the last learn), `POST /api/ir/send` (`{dev,btn,repeat}`, `{brand,btn}` or `{code}`; a missing learned button falls back to the remote's mapped set), `learn` / `learn/cancel` (the stick's `{"evt":"ir"}` steps → `ir` events), `rename`, `remove`, `fav`, `brand` (config `ir_brands`; `install: true` puts the set on the stick), `GET export` (`stickybot-remotes.json`), `POST import`, `GET diag`. Older firmware: "needs 2.5.0". The TV voice phrases are in the default commands.json and added once to an existing one (`ir_voice_added`); a quick command with `"ir": {dev, btn, repeat}` is sent by the stick (done / error on its screen, `via: quick`). Stick tools `ir_list` / `ir_send` (no approval; also OpenRouter functions). |
+| **Games** (firmware 2.5.0+) | `{"evt":"game"}`: the pet gets +1 XP (a game with points) or +3 (a new best), at most 10 XP a day from games (`pet.rs` `game()`); `/api/pet`'s `pet.games` (`xpToday`, `cap`, `best`, `plays`); a `game` event; the world is pushed when XP was earned. The Games card reads `@games` through `/api/stick/proto`. |
+| **Air mouse / presenter** (firmware 2.5.0+) | No server code: the Stick page's Mouse & presenter card uses `/api/stick/proto` with `@mode` / `@air`. |
+| **Setup page, components, onboarding** | `setup.rs`: `/api/install*` walks the first-run steps (Mac check; the speech model = the sherpa download; Claude Code + its installer; Claude Code hooks; stick tools (MCP); GitHub login with `gh auth login --web` and its one-time code shown on the page; the wireless mic via the Apple audio tap (BlackHole only if already installed: `brew install --cask blackhole-2ch`); your stick), skip / unskip / run, jobs as SSE, `POST /api/install/github/repo` (rewrites the PR links in `commands.json`, sets `github`). `/api/components*` = Settings → Components (model, hooks, GitHub, wireless mic, MCP; the app and firmware can't be changed there). `/api/onboarding` keeps the stick wizard's marks in config `onboarding`. No Python venv, `stickybot` command, LaunchAgent or BlackHole download (start at login is Settings → *Start at login*). Claude Code's hooks run this app's binary with `--hook permission|prompt|stop` (`hooks.rs`: hook.py / claude_hooks.py), posting to its port and token; before the switch-over the Python app's hooks are left alone, after it adding the hooks replaces them (a dated backup first; an invalid settings file is never overwritten). Programs (`gh`, `claude`, `curl`, `sw_vers`, `df`) run behind `sysrun::System`: with the fake stick and in tests a pretend Mac. `POST /api/restart` restarts the menu bar app (the mic device is removed on the way out; headless: 409), `POST /api/window` `{page}` shows / focuses the dashboard window at `#page` (headless: `ok: false`). |
 | **Sound clips** | `GET /api/clips`, `POST /api/clips/play`: packs in `~/.stickybot-rs/sounds/<pack>/` (ogg, wav, flac, mp3, aiff), made loud, AUDIO_IN packets (first / last acknowledged, the rest paced writes without response). |
-| **Wireless Wispr mic** | Hold A away from USB: the stick streams its mic (`prepare` → ADPCM → `stop`); this app makes the **`<stick>-bt-mic`** device (the Python app's name, `stick_mic_device.py`'s slug rules, so Wispr's ranking finds it; UID **`com.stickkey.rust-wireless-mic`**, never the Python agent's `com.stickkey.wireless-mic`), waits `wispr_switch_ms` (250) after creating it, answers `ready`, plays the frames (in order by seq, a lost one = 20 ms of silence, resampled, ~80 ms jitter buffer) into the carrier, keeps the device `wispr_tail_ms` (800) after `stop` (≤ 4 s more while Wispr still reads it), then removes it. `wmic` / `wready` in the hello. Carrier as `wireless_mic_carrier` (`auto`: the tap once its inaudible -80 dBFS check passed, else BlackHole 2ch; `tap`; `blackhole`). The stick on USB (`evt: usb`): no device, `ready` with `"device": false` (Wispr uses the stick's USB mic). `POST /api/wireless-mic/show` `{secs}`, `POST /api/wireless-mic/check`, `status.wireless_mic`, `wispr_mic` / `stick_mic` events. Cleanup of *our UID only* at start, on quit (Tauri `Exit`, headless Ctrl-C) and on disconnect / USB / off / rename. |
+| **Wireless Wispr mic** | Hold A away from USB: the stick streams its mic (`prepare` → ADPCM → `stop`); this app makes the **`<stick>-bt-mic`** device (the Python app's name, `stick_mic_device.py`'s slug rules, so Wispr's ranking finds it; UID **`com.stickkey.rust-wireless-mic`**, never the Python agent's `com.stickkey.wireless-mic`), waits `wispr_switch_ms` (250) after creating it, answers `ready`, plays the frames (in order by seq, a lost one = 20 ms of silence, resampled, ~80 ms jitter buffer) into the carrier, keeps the device `wispr_tail_ms` (800) after `stop` (≤ 4 s more while Wispr still reads it), then removes it. `wmic` / `wready` in the hello. Carrier as `wireless_mic_carrier` (`auto`: the tap once its inaudible -80 dBFS check passed, else BlackHole 2ch; `tap`; `blackhole`). The stick on USB (`evt: usb`): no device, `ready` with `"device": false` (Wispr uses the stick's USB mic). `POST /api/wireless-mic/show` `{secs}`, `POST /api/wireless-mic/check`, `status.wireless_mic`, `wispr_mic` / `stick_mic` events. Cleanup of *our UID only* at start (left-overs of a crash / `kill -9`), on quit (Tauri `Exit`, headless Ctrl-C, SIGTERM / SIGHUP), after a panic on the main thread (a panic hook; panics in tasks don't end the app and are left alone) and on disconnect / USB / off / rename. **Renamed on the stick**: on connect the app asks `@state`; any `@state` reply with another name updates the picked stick (saved, the link isn't re-targeted) and the mic is made again as `<new-name>-bt-mic` (core.py `_note_name`). |
 | **Home screen, faces, events** | `home.rs` (home.py + core.py's home / world parts), `weather.rs`, `feed.rs`, `events.rs`, `github.rs`, `pet.rs`, `net.rs`. The hello carries `home` (the card: approvals waiting pinned, a session's `put` line, else every 16 s your last answer / Claude Code sessions open (`ps`, not counting this app's own child) / the feed / a greeting), `world` (PR counts, CI, Claude sessions from `claude_sessions.json`, approvals, review requests, the pet) and `wx` (Open-Meteo weather; `auto` = ipinfo.io / geojs.io, or a city), byte-compatible with core.py; `push_home` / `push_world` send them at once. Weather + feed refresh every minute when due (30 min), the GitHub watcher (`gh api graphql`, your login, every `github.interval_s`, first look records only, backoff to 30 min) turns PR changes into events and pet progress. Events: `{"src":"agent","event":{…}}` with levels from `event_rules`, quiet hours, `events.jsonl`, `event` feed entries, `event_shown` acks. `GET /api/pet`, `POST /api/events/test`, `GET /api/events/history`, `GET /api/events/kinds`, `POST /api/claude-event` (the Stop hook: the pet + "Claude finished in …" past `claude_done_min_s`); `status.weather`, `status.github`. State in `<home>/pet.json`, `github_state.json`, `events.jsonl` (the Python formats). Network and `gh` sit behind `net::Http` / `github::Gh`: tests (and the fake stick) use `FakeHttp` / `FakeGh`. API for the stick tools: `home::put` / `clear` / `push_home`, `events::notify`, `events::quiet_now`. Note: the Claude Code hooks still write `~/.stick-agent/claude_sessions.json` and post to :8660; this app reads `<home>/claude_sessions.json` (until the switch-over points the hooks here). |
 | **Logs** | `GET /api/logs?n=` (300): the last lines of `~/.stickybot-rs/app.log` (`logs.rs`: every log line goes to stderr as before (`RUST_LOG`, default `info`), to `app.log` (rotated at 2 MB, `app.log.1`/`.2` kept, like the Python `RotatingFileHandler`) and to the live feed as `log` events, the Logs page's *Follow live*). |
 | **Updates (firmware)** | `releases.rs` (releases.py): SemVer precedence, the latest release per channel (`update_channel` stable / beta), listed with `gh` when installed, else api.github.com over HTTPS; the release's firmware downloaded into `~/.stickybot-rs/firmware/<version>/` through a temporary folder, every part checked against the manifest's sha256 and GitHub's asset digest, 3 versions kept. `updates.rs` (updates.py): a check 20 s after start-up and every 24 h (`update_check`), state in `updates.json`, the stick's version from `@state` → `firmware_update` / the banner (`status.update`, `update` events). `GET /api/update`, `POST /api/update/check`, `GET /api/update/jobs/{id}`. The "Update … ready" toast on the stick once per release (`notified` in `updates.json`). Not ported: the app updating itself (`POST /api/update/agent` answers 409 with why; build it from the repo). |
@@ -160,11 +170,6 @@ CoreBluetooth's queue and the radio for the fake stick (`FakeStick::set_radio`);
 `a_clip_goes_out_faster_than_real_time` sends 0.29 s / 1 s / 3 s clips through it. The log line
 `clip …: X s of audio sent in Y s (N packets; lock …, start ack …, frames …, end ack …)` shows
 where the time goes on the real stick.
-
-### Not done in the link yet
-
-- The stick renamed on the stick itself (the `@state` name check on connect) doesn't rename the mic
-  yet; picking the stick again in the dashboard does.
 
 ## Safety: one stick, one connection
 
@@ -213,7 +218,13 @@ before/after.
 5. **Hand it back**: Rust dashboard → Overview → **Pause** (or Quit the app), then the Python
    dashboard → **Resume**. The Python agent reconnects on its own.
 
-### Phase 2 checks with the real stick (steps 1-3 above first; the speech model downloads on the first start)
+## Real-stick checklist
+
+**Nothing below has been verified on the hardware yet.** One list for everything since the last
+real-stick round: do steps 1-3 of *Testing against the real stick* first (the speech model downloads
+on the first start), tick each item off, and hand the stick back (step 5) at the end.
+
+### Talk, clips, firmware over Bluetooth, approvals
 
 - **Talk**: hold B, say "open pull request twelve thirty four" (after setting a repo on the Quick
   commands page) → the stick shows *Opened GitHub PR #1234* and the browser opens it. Hold B, ask
@@ -233,7 +244,7 @@ before/after.
   -H "X-Stick-Token: $(cat ~/.stickybot-rs/token)" -d '{"tool":"Bash","hint":"ls","wait":30}'`
   simulates it) → A on the stick answers `{"decision":"allow"}`, B `deny`.
 
-### Parity round 2 checks with the real stick (steps 1-3 above first)
+### Clip speed, stick tools, speech, home, USB, login item, switch-over
 
 - **Clip speed**: Sounds → play glass_001, bong_001, click_001: the log's `clip …: X s of audio sent
   in Y s` must have Y < X (Python: 0.28 s in 0.19 s). If not, the same line says where it went
@@ -255,7 +266,7 @@ before/after.
   and in.
 - **Switch-over**: follow [SWITCHOVER.md](SWITCHOVER.md) once you're ready to retire the Python app.
 
-### Wireless Wispr mic checks with the real stick (steps 1-3 above first)
+### Wireless Wispr mic
 
 The Python agent, paused, has no device; its own device (UID `com.stickkey.wireless-mic`) and this
 app's (`com.stickkey.rust-wireless-mic`) never clean up each other's. Both are named `<stick>-bt-mic`,
@@ -288,10 +299,60 @@ so Wispr's ranking needs no change.
    `cargo run -p macos-audio --example tapmic -- --list` shows no `com.stickkey.rust-wireless-mic`
    device or tap. Kill the app hard mid-hold (`kill -9`), start it again → the log says it removed
    the left-over device.
-8. Turn *Wireless mic* off before handing the stick back (the Python agent's Wispr mic keeps working
-   as before).
+8. **Renamed on the stick**: rename the stick on the stick itself (or `@name` from the Stick page),
+   let it reconnect → the log says `the stick is now called …`, Settings shows the new name, and the
+   next hold makes `<new-name>-bt-mic` (the old one is gone from Audio MIDI Setup).
+9. **Crash / SIGTERM**: during a hold, `kill <pid>` (SIGTERM, not -9) → the log says `SIGTERM:
+   removing the stick mic` and no `<stick>-bt-mic` is left.
+10. **Setup page's wireless-mic step** (Setup → Wireless mic → Run) in tap mode: the System Audio
+    Recording prompt appears (first time), then the check passes and the step is done.
+11. Turn *Wireless mic* off before handing the stick back (the Python agent's Wispr mic keeps working
+    as before).
 
-#### Wireless mic and Bluetooth output
+### Face packages (firmware 2.4.0+)
+
+1. Stick page → More faces: the catalog loads and says signed, previews appear, the installed faces
+   are listed with free space and max 12.
+2. Install catnap from the catalog: the stick's toast shows the percentage, then "Installed Cat Nap";
+   *Use* makes it the Home face; *Remove* removes it. The log has `faces: N KB in X s = Y KB/s`.
+3. Upload a `.sfb` made with `tools/faces/validate.py --compile DIR` and install it.
+4. Walk out of range mid-install → it resumes. B on the stick during the toast → cancelled, nothing
+   changes on the stick.
+5. While a face installs, a firmware update over Bluetooth is refused (409), and the other way round.
+6. A stick on 2.3.0 (no `pkgFaces`): every face says "update the stick to 2.4.0".
+7. Offline (Wi-Fi off): the catalog still browses from the cache and says it shows the last copy.
+
+### Stick 2.5.0: IR remote, games, air mouse
+
+1. **Remote page** loads the stick's remotes; learn a TV button from the dashboard → the stick shows
+   learning, press the remote twice → steps 1 / 2 then "saved" live; send it → the TV reacts.
+2. Rename, star, remove a button; map a brand (e.g. Samsung) and send *power* without learning;
+   install a brand set onto the stick; export, then import. Diag says `pins: ok`. A remote with 13+
+   buttons lists fully (12 a page).
+3. **Voice**: hold B, "turn off the TV" → the stick shows done; "mute the tv" with no such button →
+   an error (not Claude). Claude / OpenRouter: "turn on the TV" uses `ir_list` / `ir_send` without
+   an approval prompt.
+4. **Games**: finish a game with points → Activity shows a `game` event, `/api/pet`'s
+   `games.xpToday` grows and stops at 10 a day; the Games card shows the bests from `@games`.
+5. **Mouse & presenter** card: start Air mouse, Presenter, Media, then Stop; pointer speed, invert,
+   scroll, talk length and slide keys keep their values.
+
+### Setup page, components, restart, window
+
+1. Setup page in the bundled app: each step's state is right (Claude installed and logged in; `gh`
+   installed or not; the speech model done).
+2. GitHub login from the setup page (you do it): the one-time code appears and the
+   github.com/login/device flow finishes; *Repo* saves the PR links.
+3. After the switch-over: Setup → Claude Code hooks → Run replaces the Python hooks (a backup of
+   `settings.json` is kept); a terminal Claude Code request needing approval is answered with A / B on
+   the stick; a task longer than `claude_done_min_s` ends with "Claude finished".
+4. Settings → Components: install and remove each one (model, hooks, GitHub, wireless mic, MCP).
+5. Settings → Restart (`POST /api/restart`): the app comes back, no mic device left behind.
+6. `POST /api/window {"page":"install"}` opens / focuses the window at `#install`, also after the
+   window was closed.
+7. The *Your stick* step's onboarding marks (firmware, named) with the real stick.
+
+## Wireless mic and Bluetooth output
 
 `stick_mic_device.py` clocks the tap's aggregate by the default output and plays the stick into it.
 With Bluetooth headphones as the default output that fails on macOS 27: the aggregate's input never
@@ -306,15 +367,22 @@ identity, and macOS asks for Bluetooth again**. See *Open decisions*.
 
 ## Next
 
-1. Ollama (local) on the OpenRouter code (a base URL, no key).
-2. Real-stick checks of everything since the last round (see *Testing against the real stick*: clip
-   timing, MCP tools, speech, home card / world / weather / events, USB serial + flashing, updates,
-   login item, the switch-over; OpenRouter with a real key: macOS asks once to let this app read
-   the Keychain item the Python app saved).
-3. Wireless mic leftovers: the setup page's step (`/api/install`), the `@state` rename check, a
-   panic hook that removes the device (today: the next start does).
-4. Onboarding / install (`/api/onboarding`, `/api/install*`, `/api/components*`), `/api/restart`,
-   `/api/window`.
+1. The real-stick checklist above (plus OpenRouter with a real key: macOS asks once to let this app
+   read the Keychain item the Python app saved).
+2. The shared `install.js` still says the speech model is "about 2.5 GB, from Hugging Face"; the Rust
+   app's is 490 MB from GitHub (the static files are the Python app's: change them there or give the
+   Rust app its own copy).
+3. A "Finish setup…" item in the menu bar (`setup::quick_pending()` exists, the tray doesn't use it).
+4. The fake stick reports firmware 2.3.0, so with `--fake-stick` More faces says "update to 2.4.0"
+   (tests flip `pkgFaces` themselves).
+
+## Endpoint diff
+
+Python routes (`web.get/post/put/delete` in `mac-agent/stick_agent/*.py` on feature/faces-2.4,
+feature/air-mouse, feature/games, feature/ir-remote and feature/stick-2.5) against the Rust router:
+84 Python routes, **none missing**. (`/api/install/{step}/run` and `/api/install/github/repo` are
+served by `POST /api/install/{step}/{action}`.) Rust-only: `/api/import`, `/api/login-item`,
+`/api/rust`, `/api/speech`, `/api/speech/retry`, `/api/switch-over`, `/static-rs/*`.
 
 ## Open decisions
 

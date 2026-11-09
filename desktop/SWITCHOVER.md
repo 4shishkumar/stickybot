@@ -67,8 +67,11 @@ old Rust token is in `token.before-switch`).
 
 ## Not covered yet
 
-- The Python installer's other pieces (BlackHole install, the hook registration itself, the
-  components page) aren't ported: the hooks it already registered keep working through port 8660.
+- The Python installer's venv, `stickybot` command, LaunchAgent and BlackHole download aren't ported
+  (the Rust app has none of them; BlackHole only if you installed it with Homebrew). The Claude Code
+  hooks the Python installer registered keep working through port 8660; to use the Rust app's own
+  (`<app> --hook …`, no Python), run Setup → Claude Code hooks after step 5 (it keeps a backup of
+  `~/.claude/settings.json`).
 - Self-update: the Rust app is built from the repo (`POST /api/update/agent` says so); firmware
   updates (Bluetooth, USB) are ported.
 - OpenRouter: the key is the same Keychain item the Python app saved (macOS asks once to let this app read it).
