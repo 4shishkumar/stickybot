@@ -10,7 +10,7 @@ use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use futures_util::{Stream, StreamExt, stream};
 use rust_embed::RustEmbed;
 use serde_json::{Map, Value, json};
@@ -70,6 +70,11 @@ pub const PORTED: &[&str] = &[
     "POST /api/mcp/answer",
     "GET /api/voices",
     "POST /api/voice/test",
+    "GET /api/brain",
+    "PUT /api/brain/openrouter/key",
+    "DELETE /api/brain/openrouter/key",
+    "GET /api/brain/openrouter/models",
+    "POST /api/brain/test",
     "GET /api/pet",
     "POST /api/events/test",
     "GET /api/events/history",
@@ -89,8 +94,6 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
     ("POST /api/onboarding", "setup wizard progress"),
     ("GET /api/install", "setup page (#install)"),
     ("/api/install/*", "setup page steps and jobs"),
-    ("GET /api/brain", "brains (Claude Code / OpenRouter)"),
-    ("/api/brain/*", "brains (OpenRouter key, models, test)"),
     ("GET /api/components", "installer components"),
     ("/api/components/*", "installer components"),
     ("POST /api/restart", "restart the agent"),
@@ -135,6 +138,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/mcp/answer", post(mcp_answer))
         .route("/api/voices", get(voices))
         .route("/api/voice/test", post(voice_test))
+        .route("/api/brain", get(brain_status))
+        .route("/api/brain/openrouter/key", put(brain_key_put).delete(brain_key_delete))
+        .route("/api/brain/openrouter/models", get(brain_models))
+        .route("/api/brain/test", post(brain_test))
         .route("/static-rs/{*path}", get(rust_static))
         .route("/api/pet", get(pet_status))
         .route("/api/events/test", post(event_test))
@@ -269,6 +276,76 @@ async fn mcp_answer(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
     };
     let ok = st.approvals.answer(id, decision, "dashboard");
     (if ok { StatusCode::OK } else { StatusCode::NOT_FOUND }, axum::Json(json!({"ok": ok}))).into_response()
+}
+
+// --- Settings → Brain (brain_api.py): the key is write-only, no answer carries it -------------------
+
+fn key_ok(k: &str) -> bool {
+    (20..=300).contains(&k.len()) && k.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+}
+
+fn model_ok(m: &str) -> bool {
+    (1..=200).contains(&m.len()) && m.chars().all(|c| c.is_ascii_alphanumeric() || "._-/:~".contains(c))
+}
+
+async fn key_status(st: &Arc<AppState>) -> Value {
+    let st = st.clone();
+    tokio::task::spawn_blocking(move || st.keys.status("openrouter")).await.unwrap_or(Value::Null)
+}
+
+async fn brain_status(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    let cfg = st.cfg.lock().unwrap().clone();
+    let status = st.brain().status();
+    axum::Json(json!({"brain": crate::brains::selected(&cfg), "choices": crate::brains::NAMES, "status": status,
+        "openrouter": {"key": key_status(&st).await,
+                       "model": cfg.get("openrouter_model").and_then(Value::as_str).unwrap_or(""),
+                       "max_tokens": cfg.get("openrouter_max_tokens").cloned().unwrap_or(Value::Null)}}))
+}
+
+async fn brain_key_put(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    let key = body_obj(&body).get("key").and_then(Value::as_str).map(|k| k.trim().to_string()).unwrap_or_default();
+    if !key_ok(&key) {
+        return err(StatusCode::BAD_REQUEST, "That doesn't look like an API key (letters, digits, - and _ only).");
+    }
+    let st2 = st.clone();
+    match tokio::task::spawn_blocking(move || st2.keys.save("openrouter", &key)).await {
+        Ok(Ok(())) => axum::Json(json!({"ok": true, "key": key_status(&st).await})).into_response(),
+        Ok(Err(e)) => {
+            log::warn!("openrouter key: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Couldn't save it in the Keychain: {e}"))
+        }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+async fn brain_key_delete(State(st): State<Arc<AppState>>) -> Response {
+    let st2 = st.clone();
+    match tokio::task::spawn_blocking(move || st2.keys.remove("openrouter")).await {
+        Ok(Ok(had)) => axum::Json(json!({"ok": true, "removed": had, "key": key_status(&st).await})).into_response(),
+        Ok(Err(e)) => err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Couldn't remove it from the Keychain: {e}")),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ModelsQuery {
+    refresh: Option<String>,
+}
+
+async fn brain_models(State(st): State<Arc<AppState>>, Query(q): Query<ModelsQuery>) -> Response {
+    let (models, suggested, error) = st.openrouter().list_models(q.refresh.as_deref() == Some("1")).await;
+    let status = if !models.is_empty() || error.is_none() { StatusCode::OK } else { StatusCode::BAD_GATEWAY };
+    (status, axum::Json(json!({"models": models, "suggested": suggested, "error": error}))).into_response()
+}
+
+async fn brain_test(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    let model = match body_obj(&body).get("model") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(m)) if model_ok(m) => Some(m.clone()),
+        Some(Value::String(m)) if m.is_empty() => None,
+        _ => return err(StatusCode::BAD_REQUEST, "not a model id"),
+    };
+    axum::Json(st.openrouter().test(model).await).into_response()
 }
 
 /// Installed macOS voices `[{name, lang}]` (`say -v ?`).
