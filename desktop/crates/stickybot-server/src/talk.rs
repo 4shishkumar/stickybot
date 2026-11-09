@@ -100,6 +100,8 @@ pub trait Brain: Send + Sync {
     fn status(&self) -> Value {
         Value::Null
     }
+    /// The settings changed (a different brain may be picked now).
+    fn switched(&self) {}
 }
 
 /// No brain yet: requests that aren't quick commands get an honest error on the stick.

@@ -94,13 +94,12 @@ Guard as in `server.py`: only `Host: localhost:8670` / `127.0.0.1:8670`, and eve
 
 **Not ported yet** (they answer a JSON 404, which the page already shows as "not available in this
 version"; `GET /api/rust` lists them): `/api/onboarding`
-(the wizard keeps its progress in the browser meanwhile), `/api/install*`, `/api/brain*` (until
-the OpenRouter brain lands), `/api/components*`, `/api/restart`, `/api/window`, `POST /api/update/agent`
+(the wizard keeps its progress in the browser meanwhile), `/api/install*`,
+`/api/components*`, `/api/restart`, `/api/window`, `POST /api/update/agent`
 (answers 409: no self-update).
 
 How the pages degrade: every page works (Stick incl. USB flashing, Overview, Activity, Events, Logs,
-Quick commands, Sounds, Settings incl. the stick tools and voices) except Settings → Brain's
-OpenRouter part, which shows its "not available" state; the setup page's wireless-mic
+Quick commands, Sounds, Settings incl. Brain (Claude Code / OpenRouter), the stick tools and voices); the setup page's wireless-mic
 step (`/api/install`) isn't ported (use Settings). With no stick picked, the setup wizard opens as in the Python app;
 its *Pick your stick* step scans and saves the stick to **this** app's config.
 
@@ -113,6 +112,7 @@ its *Pick your stick* step scans and saves the stick to **this** app's config.
 | **Stick tools (MCP)** | `mcp.rs` (mcp_server.py): `POST /mcp` (Streamable HTTP, JSON-RPC; legacy `initialize` clients and modern 2026-07-28 `_meta` + header clients, `server/discover`; bearer token or `X-Stick-Token` on every method, `Origin` check, 405 for GET / DELETE, 503 when off; `ask` as SSE with keep-alives when accepted, the client closing it clears the question; `notifications/cancelled`). The ten tools with mcp_server.py's schemas and checks: `notify` / `celebrate` (events.rs, rate limit 1/s + 20/min), `ask` (A / B / shake, `busy: …`), `progress` / `pin_home` (the home card, pushed ≤ every 0.5 s), `stick_status` (`{"cmd":"status"}`, the last press, at the desk), `speak`, `open_url` / `open_app` / `quick_command` (left to Claude Code's prompt; `call_approved` asks on the stick for brains without it). `GET /api/mcp`, `POST /api/mcp/terminal/install|uninstall` (`{"confirm":true}`: `claude mcp add --scope user stick http://127.0.0.1:<port>/mcp …`, behind a runner in tests), `POST /api/mcp/answer`. |
 | **Questions from a session** | `approvals::ask_user` (core.py): the prompt message with `kind: "ask"` and the labels, re-sent every 3 s, an approval goes first, cleared on the stick however it ends; `status.asks`, `ask` / `ask_done` events, the home card shows "<from> asks". |
 | **Reading replies aloud** | `speak.rs` (speech.py): `speak_replies` (+ `speak_stream`: sentence by sentence while Claude writes, `speak_max_words` cap), `say` → a clip on the stick's speaker (several sentences joined, waits for it to play) or `afplay` on the Mac (`speak_output`, the Mac when the stick is away); quick-command confirmations with `speak_quick`; holding B or cancel stops it. `GET /api/voices`, `POST /api/voice/test`. |
+| **OpenRouter brain** | `openrouter.rs` (openai_brain.py): any OpenRouter model with your own key, streamed chat completions (SSE) over HTTPS (ureq on a blocking thread, 10 s connect, 60 s without a byte), the conversation in memory (24 messages, whole turns dropped first; idle `brain_idle_min` = a new one), the stick tools as functions (`mcp::openai_tools`, run through `mcp::call_approved`: open_url / open_app / quick_command ask on the stick first), at most 5 tool rounds, progress lines, cancel closes the stream, cost / first token / rounds in `status.brain.last`, a model that can't use tools is asked again without them (and remembered). `brains.rs` (brains.py) picks Claude Code or OpenRouter per request from config `brain`; switching forgets the old one (Claude's session stops), Claude is pre-warmed only while picked. The key (`keys.rs`, keychain.py): the Keychain item the Python app uses (service `com.stickkey.agent`, account `openrouter`; macOS asks once whether this app may read it), through the Security framework (never the `security` command: a key on a command line shows in the process list); `STICK_AGENT_OPENROUTER_KEY` overrides it; write-only from the outside. With the fake stick the keys live in memory (tests never reach the Keychain). `GET /api/brain`, `PUT` / `DELETE /api/brain/openrouter/key`, `GET /api/brain/openrouter/models` (`?refresh=1`; cached 10 min, a stale list when offline), `POST /api/brain/test`. HTTP sits behind `openrouter::Transport` (tests: a scripted fake). |
 | **Approvals** | `POST /api/permission` (the hook's long-poll), `POST /api/permission/decide`; the prompt on the stick every 3 s, A / B answers, `prompt` / `prompt_done` events, `status.prompts`. The hook still points at the Python agent (:8660); see *Testing*. |
 | **Sound clips** | `GET /api/clips`, `POST /api/clips/play`: packs in `~/.stickybot-rs/sounds/<pack>/` (ogg, wav, flac, mp3, aiff), made loud, AUDIO_IN packets (first / last acknowledged, the rest paced writes without response). |
 | **Wireless Wispr mic** | Hold A away from USB: the stick streams its mic (`prepare` → ADPCM → `stop`); this app makes the **`<stick>-bt-mic`** device (the Python app's name, `stick_mic_device.py`'s slug rules, so Wispr's ranking finds it; UID **`com.stickkey.rust-wireless-mic`**, never the Python agent's `com.stickkey.wireless-mic`), waits `wispr_switch_ms` (250) after creating it, answers `ready`, plays the frames (in order by seq, a lost one = 20 ms of silence, resampled, ~80 ms jitter buffer) into the carrier, keeps the device `wispr_tail_ms` (800) after `stop` (≤ 4 s more while Wispr still reads it), then removes it. `wmic` / `wready` in the hello. Carrier as `wireless_mic_carrier` (`auto`: the tap once its inaudible -80 dBFS check passed, else BlackHole 2ch; `tap`; `blackhole`). The stick on USB (`evt: usb`): no device, `ready` with `"device": false` (Wispr uses the stick's USB mic). `POST /api/wireless-mic/show` `{secs}`, `POST /api/wireless-mic/check`, `status.wireless_mic`, `wispr_mic` / `stick_mic` events. Cleanup of *our UID only* at start, on quit (Tauri `Exit`, headless Ctrl-C) and on disconnect / USB / off / rename. |
@@ -306,10 +306,11 @@ identity, and macOS asks for Bluetooth again**. See *Open decisions*.
 
 ## Next
 
-1. OpenRouter brain (`openai_brain.py`, `/api/brain*`, the key in the Keychain).
+1. Ollama (local) on the OpenRouter code (a base URL, no key).
 2. Real-stick checks of everything since the last round (see *Testing against the real stick*: clip
    timing, MCP tools, speech, home card / world / weather / events, USB serial + flashing, updates,
-   login item, the switch-over).
+   login item, the switch-over; OpenRouter with a real key: macOS asks once to let this app read
+   the Keychain item the Python app saved).
 3. Wireless mic leftovers: the setup page's step (`/api/install`), the `@state` rename check, a
    panic hook that removes the device (today: the next start does).
 4. Onboarding / install (`/api/onboarding`, `/api/install*`, `/api/components*`), `/api/restart`,

@@ -584,9 +584,6 @@ impl ClaudeBrain {
 
     async fn ask_inner(&self, text: String, out: mpsc::UnboundedSender<BrainEvent>) -> (bool, String) {
         let cfg = (self.inner.cfg)();
-        if cfg.get("brain").and_then(Value::as_str) == Some("openrouter") {
-            return (false, "OpenRouter isn't in the Rust app yet: pick Claude Code in Settings.".into());
-        }
         let Some(claude) = claude_path(&cfg) else {
             return (false, "Claude Code not found. Install it, or set its path in the dashboard.".into());
         };

@@ -71,4 +71,4 @@ old Rust token is in `token.before-switch`).
   components page) aren't ported: the hooks it already registered keep working through port 8660.
 - Self-update: the Rust app is built from the repo (`POST /api/update/agent` says so); firmware
   updates (Bluetooth, USB) are ported.
-- OpenRouter: until it lands, keep `brain: "claude"`.
+- OpenRouter: the key is the same Keychain item the Python app saved (macOS asks once to let this app read it).

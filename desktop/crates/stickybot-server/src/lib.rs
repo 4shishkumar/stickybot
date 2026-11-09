@@ -7,6 +7,7 @@
 pub mod api;
 pub mod approvals;
 pub mod brain;
+pub mod brains;
 pub mod clips;
 pub mod commands;
 pub mod config;
@@ -15,6 +16,7 @@ pub mod feed;
 pub mod firmware;
 pub mod github;
 pub mod home;
+pub mod keys;
 pub mod hub;
 pub mod mcp;
 pub mod flasher;
@@ -22,6 +24,7 @@ pub mod login;
 pub mod logs;
 pub mod migrate;
 pub mod net;
+pub mod openrouter;
 pub mod pet;
 pub mod python_agent;
 pub mod switch;
@@ -131,6 +134,9 @@ pub struct AppState {
     last_input: Mutex<Option<f64>>,
     /// start at login (the menu bar app sets the real one)
     pub login_item: Mutex<Arc<dyn login::LoginItem>>,
+    /// API keys (the Keychain; in memory with the fake stick: tests never reach the Keychain)
+    pub keys: keys::Keys,
+    openrouter: OnceLock<openrouter::OpenRouterBrain>,
     me: OnceLock<Weak<AppState>>,
 }
 
@@ -204,6 +210,8 @@ impl AppState {
             claude_runner: Mutex::new(mcp::system_claude_runner()),
             last_input: Mutex::new(None),
             login_item: Mutex::new(Arc::new(login::NoLoginItem)),
+            keys: if fake { keys::Keys::new(Arc::new(keys::MemoryStore::default())) } else { keys::Keys::system() },
+            openrouter: OnceLock::new(),
             me: OnceLock::new(),
         });
         let _ = st.me.set(Arc::downgrade(&st));
@@ -229,6 +237,12 @@ impl AppState {
     pub fn firmware(&self) -> Vec<Value> {
         let extra = std::env::var_os("STICKYBOT_RS_FIRMWARE").map(std::path::PathBuf::from);
         firmware::bundles(&firmware::firmware_root(&self.paths.home), extra.as_deref())
+    }
+
+    /// The OpenRouter brain (made on first use).
+    pub fn openrouter(&self) -> openrouter::OpenRouterBrain {
+        let me = self.me.get().cloned().unwrap_or_default();
+        self.openrouter.get_or_init(|| openrouter::OpenRouterBrain::new(me)).clone()
     }
 
     pub fn runner(&self) -> commands::Runner {
@@ -421,6 +435,9 @@ impl AppState {
             config::save(&self.paths, &cfg).map_err(|e| format!("couldn't save the settings: {e}"))?;
             cfg.clone()
         };
+        if changed_keys.contains_key("brain") {
+            self.brain().switched(); // the old brain forgets (Claude's session stops)
+        }
         if stick_changed {
             self.link.set_target(self.stick());
         }
@@ -466,7 +483,8 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     let claude = brain::ClaudeBrain::new(cfg, state.paths.home.join("workspace"));
     let (home, port, token) = (state.paths.home.clone(), addr.port(), state.token.clone());
     claude.set_mcp(move || mcp::brain_config(&home, port, &token));
-    state.set_brain(Arc::new(claude));
+    let or = Arc::new(state.openrouter());
+    state.set_brain(Arc::new(brains::Brains::new(Arc::new(claude), or, Arc::downgrade(&state))));
     let weak = Arc::downgrade(&state);
     logs::set_live(Some(Box::new(move |text| {
         if let Some(st) = weak.upgrade() {
