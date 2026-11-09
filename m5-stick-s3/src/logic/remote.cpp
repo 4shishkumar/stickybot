@@ -27,6 +27,7 @@ void Buttons::reset(bool aDown, bool bDown) {
   if (bDown) b_.state = State::IGNORED;
   lastA = aDown;
   lastB = bDown;
+  bothAt = 0;
   chord = chordHeld = false;
   clickWaiting = false;
   Btn x;
@@ -84,6 +85,24 @@ void Buttons::feed(uint32_t now, bool a, bool b) {
     clickWaiting = false;  // a waiting B click is dropped: the chord takes over
     a_.state = b_.state = State::IGNORED;
     return;
+  }
+
+  // Both down but not pressed together (B already scrolling, A already dragging): held that way
+  // CHORD_HOLD_MS still leaves; what the first one was doing ends first
+  if (a && b) {
+    if (!bothAt) bothAt = now ? now : 1;
+    if (now - bothAt >= CHORD_HOLD_MS) {
+      if (a_.state == State::DOWN) emit(Btn::A_RELEASE);
+      if (b_.state == State::DOWN) emit(Btn::B_RELEASE);
+      chord = chordHeld = true;
+      clickWaiting = false;
+      a_.state = b_.state = State::IGNORED;
+      bothAt = 0;
+      emit(Btn::CHORD_HOLD);
+      return;
+    }
+  } else {
+    bothAt = 0;
   }
 
   if (aDown) press(a_, true, now);

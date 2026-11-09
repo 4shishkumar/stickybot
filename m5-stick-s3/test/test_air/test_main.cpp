@@ -492,6 +492,25 @@ void test_buttons_chord_tap_and_hold() {
   TEST_ASSERT_EQUAL(1, (int)q.out.size());  // no CHORD after the hold, no A / B events
 }
 
+void test_buttons_late_chord_hold_still_exits() {
+  // B held first (scrolling), A joins later: both held long enough still leaves, B's hold ends first
+  Press p;
+  p.hold(false, true, 500);
+  TEST_ASSERT_EQUAL(1, p.count(Btn::B_HOLD));
+  p.hold(true, true, 1300);
+  TEST_ASSERT_EQUAL(1, p.count(Btn::B_RELEASE));
+  TEST_ASSERT_EQUAL(1, p.count(Btn::CHORD_HOLD));
+  p.hold(false, false, 100);
+  TEST_ASSERT_EQUAL(0, p.count(Btn::CHORD));
+  TEST_ASSERT_EQUAL(0, p.count(Btn::A_CLICK));
+  // and a short overlap doesn't
+  Press q;
+  q.hold(false, true, 500);
+  q.hold(true, true, 300);
+  q.hold(false, false, 100);
+  TEST_ASSERT_EQUAL(0, q.count(Btn::CHORD_HOLD));
+}
+
 void test_buttons_late_b_is_its_own_press() {
   Press p;
   p.hold(true, false, 200);   // A is down (dragging)
@@ -586,6 +605,7 @@ int main(int, char**) {
   RUN_TEST(test_buttons_b_double);
   RUN_TEST(test_buttons_b_hold_isnt_a_click);
   RUN_TEST(test_buttons_chord_tap_and_hold);
+  RUN_TEST(test_buttons_late_chord_hold_still_exits);
   RUN_TEST(test_buttons_late_b_is_its_own_press);
   RUN_TEST(test_buttons_press_that_opened_the_mode_is_ignored);
   RUN_TEST(test_timer_runs_pauses_and_warns);

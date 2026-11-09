@@ -9,7 +9,8 @@
 //    doubleMs for a second press, and the second press reports B_DOUBLE instead)
 //   CHORD                A and B pressed together (within CHORD_MS), both let go before
 //                        CHORD_HOLD_MS: pause / resume
-//   CHORD_HOLD           A and B held together for CHORD_HOLD_MS: leave the mode
+//   CHORD_HOLD           A and B held together for CHORD_HOLD_MS: leave the mode (also when one
+//                        was pressed first and is already holding: its RELEASE comes first)
 // A chord swallows everything else from both buttons until both are up.
 #pragma once
 #include <stdint.h>
@@ -63,6 +64,7 @@ class Buttons {
   bool  lastA = false, lastB = false;
   bool  chord = false, chordHeld = false;
   uint32_t chordAt = 0;
+  uint32_t bothAt = 0;  // both down, not pressed together (e.g. B already scrolling): since when
   bool  clickWaiting = false;  // B: a click waiting to see if a second press follows
   uint32_t clickAt = 0;
   FixedQueue<Btn, 12> q;
