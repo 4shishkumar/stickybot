@@ -64,6 +64,11 @@ pub const PORTED: &[&str] = &[
     "POST /api/import",
     "GET /static-rs/*",
     "GET /api/logs",
+    "GET /api/update",
+    "POST /api/update/check",
+    "POST /api/update/agent",
+    "POST /api/update/firmware/{updater}",
+    "GET /api/update/jobs/{id}",
 ];
 
 /// The Python agent's endpoints that aren't here yet, by the phase that brings them.
@@ -86,8 +91,6 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
     ("POST /api/mcp/answer", "stick tools (MCP)"),
     ("GET /api/brain", "brains (Claude Code / OpenRouter)"),
     ("/api/brain/*", "brains (OpenRouter key, models, test)"),
-    ("GET /api/update", "update check (releases)"),
-    ("/api/update/*", "updates (agent / firmware)"),
     ("GET /api/components", "installer components"),
     ("/api/components/*", "installer components"),
     ("POST /api/restart", "restart the agent"),
@@ -127,6 +130,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/import", get(import_info).post(import_run))
         .route("/static-rs/{*path}", get(rust_static))
         .route("/api/logs", get(logs_tail))
+        .route("/api/update", get(update_info))
+        .route("/api/update/check", post(update_check))
+        .route("/api/update/agent", post(update_agent))
+        .route("/api/update/firmware/{updater}", post(update_firmware))
+        .route("/api/update/jobs/{id}", get(job_events))
         .fallback(not_ported)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -350,6 +358,34 @@ async fn play_sound(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<
 #[derive(serde::Deserialize)]
 struct HistoryQuery {
     n: Option<usize>,
+}
+
+/// The update status with the release notes, how this app is installed, the firmware updaters.
+async fn update_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    let cfg = st.cfg.lock().unwrap().clone();
+    axum::Json(st.updates.full(&cfg))
+}
+
+/// Checks now (lists releases, downloads the latest firmware) -> the same.
+async fn update_check(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    crate::updates::refresh_stick(&st).await;
+    let cfg = st.cfg.lock().unwrap().clone();
+    let r = st.updates.check(&cfg).await;
+    crate::updates::emit(&st);
+    axum::Json(r)
+}
+
+/// The app updating itself isn't ported (selfupdate.py).
+async fn update_agent(State(st): State<Arc<AppState>>) -> Response {
+    let cfg = st.cfg.lock().unwrap().clone();
+    let install = st.updates.full(&cfg)["install"].clone();
+    (StatusCode::CONFLICT, axum::Json(json!({"error": crate::updates::NO_SELF_UPDATE, "install": install})))
+        .into_response()
+}
+
+/// No extra firmware updaters here (Bluetooth and USB have their own endpoints).
+async fn update_firmware() -> Response {
+    err(StatusCode::NOT_FOUND, "no such firmware updater")
 }
 
 /// The log file's last `n` (300) lines, oldest first (server.py `logs`).
@@ -1066,6 +1102,31 @@ mod tests {
         let (_, v, _) = call(&app, req("POST", "/api/wireless-mic/check", Some(json!({})), tok)).await;
         assert_eq!((v["ok"].as_bool(), v["state"].as_str()), (Some(false), Some("failed")));
         assert!(v["detail"].as_str().unwrap().contains("System Audio Recording"));
+    }
+
+    #[tokio::test]
+    async fn update_check_downloads_firmware_for_the_bluetooth_and_usb_buttons() {
+        let (app, st, _) = app("update", true).await;
+        st.updates.set_sources(Arc::new(|| {
+            let mut g = crate::releases::tests::FakeGitHub::default();
+            g.add_release("v2.2.0", "9.9.0", false);
+            vec![Box::new(g) as Box<dyn crate::releases::Source>]
+        }));
+        let tok = Some(st.token.as_str());
+        let (_, v, _) = call(&app, req("GET", "/api/update", None, None)).await;
+        assert_eq!((v["latest"].clone(), v["firmware_updaters"].clone()), (Value::Null, json!([])));
+        let (s, v, _) = call(&app, req("POST", "/api/update/check", Some(json!({})), tok)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["latest"]["firmware"], "9.9.0");
+        // the fake stick runs older firmware
+        assert_eq!((v["firmware_update"].as_bool(), v["title"].as_str()), (Some(true), Some("Stick firmware 9.9.0 available")));
+        let (_, v, _) = call(&app, req("GET", "/api/firmware", None, None)).await;
+        assert_eq!((v["bundled"]["version"].as_str(), v["bundled"]["source"].as_str()), (Some("9.9.0"), Some("release")));
+        let (_, v, _) = call(&app, req("GET", "/api/status", None, None)).await;
+        assert_eq!(v["update"]["available"], true);
+        let (s, v, _) = call(&app, req("POST", "/api/update/agent", Some(json!({})), tok)).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        assert!(v["error"].as_str().unwrap().contains("doesn't update itself"));
     }
 
     #[tokio::test]

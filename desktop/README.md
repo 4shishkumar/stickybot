@@ -39,7 +39,7 @@ Environment: `STICKYBOT_RS_PORT` (8670), `STICKYBOT_RS_HOME` (`~/.stickybot-rs`)
 `STICKYBOT_RS_FAKE_STICK=1`, `STICKYBOT_RS_PYTHON_PORT` (8660), `STICKYBOT_RS_ALLOW_SHARED=1`
 (see *Safety*), `RUST_LOG=debug` (every message from the stick is logged at debug),
 `STICKYBOT_RS_MODELS` (`<home>/models`, the speech model), `STICKYBOT_RS_NO_STT=1` (don't download /
-load it), `STICKYBOT_RS_FIRMWARE` (a firmware bundle folder), `STICKYBOT_RS_SOUNDS`
+load it), `STICKYBOT_RS_FIRMWARE` (a firmware bundle folder), `STICKYBOT_RS_REPO` (`ashish-kumar-noon/stickybot`, where releases come from), `STICKYBOT_RS_SOUNDS`
 (`<home>/sounds`, sound packs), `STICKYBOT_RS_IMPORT_FROM` (`~/.stick-agent`, read-only: what
 *Import from StickyBot* copies), `STICKYBOT_RS_AUDIO_E2E=1` (runs the wireless-mic test against real
 Core Audio).
@@ -94,7 +94,7 @@ Guard as in `server.py`: only `Host: localhost:8670` / `127.0.0.1:8670`, and eve
 version"; `GET /api/rust` lists them): `/api/pet`, `/api/firmware/flash` (USB), `/api/onboarding`
 (the wizard keeps its progress in the browser meanwhile), `/api/install*`,
 `/api/voices`, `/api/voice/test`, `/api/events/test|history|kinds`, `/api/claude-event`,
-`/api/mcp*` and `/mcp`, `/api/brain*`, `/api/update*`, `/api/components*`,
+`/api/mcp*` and `/mcp`, `/api/brain*`, `/api/components*`,
 `/api/restart`, `/api/window`.
 
 How the pages degrade: the **Stick** page works except the Face card's pet line and USB flashing.
@@ -113,6 +113,7 @@ its *Pick your stick* step scans and saves the stick to **this** app's config.
 | **Sound clips** | `GET /api/clips`, `POST /api/clips/play`: packs in `~/.stickybot-rs/sounds/<pack>/` (ogg, wav, flac, mp3, aiff), made loud, AUDIO_IN packets (first / last acknowledged, the rest paced writes without response). |
 | **Wireless Wispr mic** | Hold A away from USB: the stick streams its mic (`prepare` → ADPCM → `stop`); this app makes the **`<stick>-bt-mic`** device (the Python app's name, `stick_mic_device.py`'s slug rules, so Wispr's ranking finds it; UID **`com.stickkey.rust-wireless-mic`**, never the Python agent's `com.stickkey.wireless-mic`), waits `wispr_switch_ms` (250) after creating it, answers `ready`, plays the frames (in order by seq, a lost one = 20 ms of silence, resampled, ~80 ms jitter buffer) into the carrier, keeps the device `wispr_tail_ms` (800) after `stop` (≤ 4 s more while Wispr still reads it), then removes it. `wmic` / `wready` in the hello. Carrier as `wireless_mic_carrier` (`auto`: the tap once its inaudible -80 dBFS check passed, else BlackHole 2ch; `tap`; `blackhole`). The stick on USB (`evt: usb`): no device, `ready` with `"device": false` (Wispr uses the stick's USB mic). `POST /api/wireless-mic/show` `{secs}`, `POST /api/wireless-mic/check`, `status.wireless_mic`, `wispr_mic` / `stick_mic` events. Cleanup of *our UID only* at start, on quit (Tauri `Exit`, headless Ctrl-C) and on disconnect / USB / off / rename. |
 | **Logs** | `GET /api/logs?n=` (300): the last lines of `~/.stickybot-rs/app.log` (`logs.rs`: every log line goes to stderr as before (`RUST_LOG`, default `info`), to `app.log` (rotated at 2 MB, `app.log.1`/`.2` kept, like the Python `RotatingFileHandler`) and to the live feed as `log` events, the Logs page's *Follow live*). |
+| **Updates (firmware)** | `releases.rs` (releases.py): SemVer precedence, the latest release per channel (`update_channel` stable / beta), listed with `gh` when installed, else api.github.com over HTTPS; the release's firmware downloaded into `~/.stickybot-rs/firmware/<version>/` through a temporary folder, every part checked against the manifest's sha256 and GitHub's asset digest, 3 versions kept. `updates.rs` (updates.py): a check 20 s after start-up and every 24 h (`update_check`), state in `updates.json`, the stick's version from `@state` → `firmware_update` / the banner (`status.update`, `update` events). `GET /api/update`, `POST /api/update/check`, `GET /api/update/jobs/{id}`. Not ported: the app updating itself (`POST /api/update/agent` answers 409 with why; build it from the repo) and the "Update ready" toast on the stick (needs the events notifier). |
 | **Firmware over Bluetooth** | `GET /api/firmware` (bundle + connected stick; `usb` always empty), `POST /api/firmware/ota` `{force}`, `GET /api/firmware/jobs/{id}` (SSE), `POST /api/firmware/jobs/{id}/cancel`. Bundles in `~/.stickybot-rs/firmware/<version>|local/` or `$STICKYBOT_RS_FIRMWARE`. `ota.py`'s checks (support, pending, versions / force, manifest SHA-256), windowed transfer, resume, then waits for the stick to come back with the new version (confirmed / rolled back). |
 
 ### Importing the Python app's settings (`migrate.rs`)
@@ -281,7 +282,7 @@ identity, and macOS asks for Bluetooth again**. See *Open decisions*.
 2. Brain: one-shot mode, the stick tools (MCP server), OpenRouter; questions from a session
    (`ask_user`); speech output.
 3. Events / GitHub / pet / world / home card / weather in the hello; onboarding /
-   install / updates (release downloads for firmware bundles); USB serial + esptool flashing.
+   install; USB serial + esptool flashing.
 4. Packaging: a stable signing identity, login item, and the switch-over from the Python app.
 
 ## Open decisions

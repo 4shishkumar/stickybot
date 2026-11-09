@@ -15,8 +15,10 @@ pub mod hub;
 pub mod logs;
 pub mod migrate;
 pub mod python_agent;
+pub mod releases;
 pub mod speech;
 pub mod talk;
+pub mod updates;
 pub mod wmic;
 
 use serde_json::{Map, Value, json};
@@ -90,6 +92,8 @@ pub struct AppState {
     pub ota_timings: Mutex<firmware::UpdateTimings>,
     /// the wireless Wispr mic (the "<stick>-bt-mic" device and the stick's audio played into it)
     pub wmic: wmic::WirelessMic,
+    /// release checks + firmware downloads (`updates.rs`)
+    pub updates: updates::Updates,
     /// the Python app's folder (read-only; see `migrate.rs`)
     pub import_from: Option<PathBuf>,
     me: OnceLock<Weak<AppState>>,
@@ -100,6 +104,7 @@ impl AppState {
         let paths = config::Paths::new(&opts.home)?;
         paths.ensure().map_err(|e| format!("{}: {e}", paths.home.display()))?;
         let token = paths.token_value().map_err(|e| format!("token: {e}"))?;
+        let paths_home = paths.home.clone();
         let cfg = config::load(&paths);
         let fake = backend.is_fake();
         let commands = commands::Store::new(paths.commands());
@@ -133,6 +138,7 @@ impl AppState {
             approvals: approvals::Approvals::default(),
             ota_timings: Mutex::new(firmware::UpdateTimings::default()),
             wmic: wmic::WirelessMic::new(),
+            updates: updates::Updates::new(&paths_home),
             import_from: opts.import_from.clone(),
             me: OnceLock::new(),
         });
@@ -291,7 +297,7 @@ impl AppState {
             "github": null,
             "stick_approvals": cfg.get("stick_approvals").cloned().unwrap_or(json!(true)),
             "wireless_mic": wireless_mic,
-            "update": {},
+            "update": self.updates.status(&cfg, false),
             "brain": brain_status,
             "app": {"name": "StickyBot (Rust)", "window": true, "rust": true, "fake_stick": self.fake},
         })
@@ -383,6 +389,7 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     })));
     spawn_link_watcher(state.clone());
     talk::spawn(state.clone());
+    updates::spawn(state.clone());
     wmic::spawn(state.clone());
     tokio::spawn(wmic::startup(state.clone())); // left-overs of a crashed run, then the tap check
     if std::env::var("STICKYBOT_RS_NO_STT").as_deref() != Ok("1") {
