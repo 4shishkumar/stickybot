@@ -25,6 +25,7 @@ async function load() {
   const [r, k, s, pt, gm] = await Promise.all([proto("state"), keys ? Promise.resolve(null) : proto("keys"), get("/api/sounds"),
     get("/api/pet").catch(() => null), proto("games").catch(() => null)]);
   petInfo = pt && pt.pet ? pt.pet : null;
+  launcherDraft = null;  // the stick's order again
   gamesInfo = gm && gm.ok && gm.reply && Array.isArray(gm.reply.games) ? gm.reply.games : null;  // firmware 2.5.0+
   if (k && k.ok && k.reply) keys = k.reply;
   st = r.ok && r.reply ? r.reply : null;
@@ -56,7 +57,8 @@ function paint(res) {
         ? "This version of the agent can't change the stick's settings yet. The stick's own menu (triple-press B) still works."
         : (res && res.error) || "Check it's switched on and connected (Overview shows the link)."))));
   } else {
-    root.append(identityCard(), ...(st.faces ? [faceCard(), marketCard()] : []), ...(gamesInfo ? [gamesCard()] : []),
+    root.append(identityCard(), ...(st.launcher !== undefined ? [launcherCard()] : []),  // firmware 2.5.1+
+      ...(st.faces ? [faceCard(), marketCard()] : []), ...(gamesInfo ? [gamesCard()] : []),
       comboCard(), unlockCard(), slotsCard(), screenCard(), motionCard(),
       ...(st.air ? [airCard(st, send)] : []), soundCard());  // games, air: firmware 2.5.0+
   }
@@ -125,6 +127,66 @@ function faceCard() {
 
 // Games (firmware 2.5.0+): the stick's best scores (`@games`, kept on the stick) and the XP
 // games earned StickyBot today (capped, pet.py).
+// The Launcher (firmware 2.5.1): triple-press B opens a grid of tiles. @state "launcher" holds
+// the tiles shown, in order, one letter each ("grapmfqs"); Quick settings and Settings always stay.
+const TILES = [
+  ["g", "games", "Games", "The seven games"],
+  ["r", "remote", "Remote", "The IR remote (TV, AC…)"],
+  ["a", "air", "Air mouse", "Point the stick to move the pointer"],
+  ["p", "presenter", "Presenter", "Slide clicker + talk timer"],
+  ["m", "media", "Media", "Media remote: play, volume, tracks"],
+  ["f", "faces", "Faces", "Pick the Home face"],
+  ["q", "quick", "Quick settings", "Brightness, volume, toggles", true],
+  ["s", "settings", "Settings", "The full settings menu", true],
+];
+let launcherDraft = null;  // [{tile, shown}] while editing
+
+function launcherCard() {
+  const saved = String(st.launcher || "");
+  if (!launcherDraft) {
+    const shown = saved.split("").map(c => TILES.find(t => t[0] === c)).filter(Boolean);
+    launcherDraft = [...shown.map(t => ({tile: t, shown: true})),
+      ...TILES.filter(t => !shown.includes(t)).map(t => ({tile: t, shown: false}))];
+  }
+  const box = h("div", {class: "list"});
+  const letters = () => launcherDraft.filter(x => x.shown).map(x => x.tile[0]).join("");
+  const save = h("button", {class: "btn primary", type: "button", onclick: async () => {
+    const ok = await send("launcher", {tiles: launcherDraft.filter(x => x.shown).map(x => x.tile[1]).join(",")}, "Launcher saved");
+    if (ok) launcherDraft = null;
+  }}, "Save");
+  const reset = h("button", {class: "btn ghost", type: "button", onclick: async () => {
+    if (await send("launcher", {reset: 1}, "Launcher reset")) launcherDraft = null;
+  }}, "Reset");
+  const move = (i, d) => {
+    const j = i + d;
+    if (j < 0 || j >= launcherDraft.length) return;
+    [launcherDraft[i], launcherDraft[j]] = [launcherDraft[j], launcherDraft[i]];
+    paintList();
+  };
+  function paintList() {
+    clear(box);
+    launcherDraft.forEach((x, i) => {
+      const [, , name, about, fixed] = x.tile;
+      box.appendChild(h("div", {class: "item" + (x.shown ? "" : " faint")},
+        h("label", {class: "switch", title: fixed ? "Always on the stick" : "Show this tile"},
+          h("input", {type: "checkbox", checked: x.shown, disabled: !!fixed, "aria-label": `Show ${name}`,
+            onchange: e => { x.shown = e.target.checked; paintList(); }}), h("span", null, "")),
+        h("div", {class: "what"}, h("b", null, name), h("span", {class: "sub"}, fixed ? `${about} · always shown` : about)),
+        h("div", {class: "row"},
+          h("button", {class: "btn sm ghost", type: "button", disabled: i === 0, "aria-label": `Move ${name} up`, onclick: () => move(i, -1)}, "↑"),
+          h("button", {class: "btn sm ghost", type: "button", disabled: i === launcherDraft.length - 1, "aria-label": `Move ${name} down`,
+            onclick: () => move(i, 1)}, "↓"))));
+    });
+    save.disabled = letters() === saved;
+  }
+  paintList();
+  return card("Launcher",
+    h("p", {class: "lead"}, "Triple-press B on the stick opens the Launcher: a tile for each app, six a page. ",
+      "Put them in the order you like and hide the ones you don't use."),
+    box,
+    h("div", {class: "row", style: "margin-top:10px"}, save, reset));
+}
+
 function gamesCard() {
   const g = (petInfo && petInfo.games) || {};
   const plays = g.plays || {};
@@ -134,7 +196,7 @@ function gamesCard() {
     h("span", {class: "game-best"}, x.best > 0 ? `${x.best}${x.low ? " ms" : ""}` : "—"),
     h("span", {class: "small faint"}, plays[x.id] ? `${plays[x.id]} played` : "")));
   return card("Games",
-    h("p", {class: "lead"}, "Seven little games on the stick: menu (triple-press B) → Games. ",
+    h("p", {class: "lead"}, "Seven little games on the stick: Launcher (triple-press B) → Games. ",
       "Each game StickyBot plays earns a little XP: ", h("b", null, `${g.xpToday || 0} of ${g.cap || 10} XP today`), "."),
     h("div", {class: "games"}, rows));
 }

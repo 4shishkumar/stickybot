@@ -58,7 +58,7 @@ Switching applies from the next request, no restart needed.
 - **A (hold):** Wispr Flow dictation (the key combo; over USB the stick is also the mic, and with the
   [wireless Wispr mic](#wireless-wispr-mic) it is the mic without a cable too).
 - **B (double press):** types your Mac password to unlock it.
-- **B (triple press):** the stick's menu.
+- **B (triple press):** the stick's Launcher: tiles for the games, the remotes, faces, Quick settings and Settings (order and tiles: the dashboard's Stick page).
 
 ### It tells you things (stick screen + sound)
 | | When |
