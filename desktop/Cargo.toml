@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/macos-audio", "crates/stt", "crates/stick-link", "crates/stickybot-server"]
+members = ["crates/macos-audio", "crates/stt", "crates/stick-link", "crates/stickybot-server", "crates/stickybot-app"]
 
 [workspace.package]
 edition = "2024"

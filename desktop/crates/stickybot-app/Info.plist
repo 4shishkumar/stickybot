@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the bundle's Info.plist by `cargo tauri build`. -->
+<plist version="1.0">
+<dict>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>StickyBot talks to your stick over Bluetooth: its settings, approvals, alerts and voice requests.</string>
+</dict>
+</plist>
