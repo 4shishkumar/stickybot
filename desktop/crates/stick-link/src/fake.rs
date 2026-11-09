@@ -143,6 +143,10 @@ impl FakeStick {
     pub fn stick_state(&self) -> Value {
         self.with(|s| s.stick.clone())
     }
+    /// Renames the stick (as its own menu / `@name` would), without restarting it.
+    pub fn set_name(&self, name: &str) {
+        self.with(|s| s.stick["name"] = json!(name));
+    }
     /// The connection drops (out of range, restart).
     pub fn drop_connection(&self) {
         self.with(|s| s.tx = None);

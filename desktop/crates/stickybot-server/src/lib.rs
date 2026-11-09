@@ -497,6 +497,9 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     wmic::spawn(state.clone());
     home::spawn(state.clone());
     tokio::spawn(wmic::startup(state.clone())); // left-overs of a crashed run, then the tap check
+    if !state.fake {
+        wmic::install_crash_cleanup(&state); // a crash / SIGTERM removes the device on the way out
+    }
     if std::env::var("STICKYBOT_RS_NO_STT").as_deref() != Ok("1") {
         state.spawn_speech();
     }

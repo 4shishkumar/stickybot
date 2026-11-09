@@ -713,6 +713,63 @@ pub fn shutdown(st: &AppState) {
     }
 }
 
+/// After a crash: only the device / tap removal (our UID), tolerating poisoned locks; waits at
+/// most `timeout` for the device's thread.
+pub fn crash_cleanup(st: &AppState, timeout: Duration) -> Option<usize> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let job: Job = Box::new(move |d| {
+        let _ = tx.send(d.cleanup_stale());
+    });
+    let sent = match st.wmic.dev.tx.lock() {
+        Ok(q) => q.send(job).is_ok(),
+        Err(poisoned) => poisoned.into_inner().send(job).is_ok(),
+    };
+    if !sent {
+        return None;
+    }
+    rx.recv_timeout(timeout).ok()
+}
+
+/// A panic that ends the app (one on the main thread: the Tauri event loop, the headless
+/// `main`) removes the device first; panics in tasks and the device's own thread don't end it
+/// and are left alone. SIGTERM / SIGHUP (logout, `kill`) clean up and exit. `kill -9` can't be
+/// caught: the next start removes the left-overs ([`startup`]).
+pub fn install_crash_cleanup(st: &Arc<AppState>) {
+    let weak = Arc::downgrade(st);
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        prev(info);
+        if std::thread::current().name() != Some("main") {
+            return;
+        }
+        if let Some(st) = weak.upgrade() {
+            match crash_cleanup(&st, Duration::from_secs(2)) {
+                Some(n) => log::error!("crashed: removed the stick mic ({n} device(s))"),
+                None => log::error!("crashed: couldn't remove the stick mic (the next start will)"),
+            }
+        }
+    }));
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let weak = Arc::downgrade(st);
+        tokio::spawn(async move {
+            let (Ok(mut term), Ok(mut hup)) = (signal(SignalKind::terminate()), signal(SignalKind::hangup())) else {
+                return;
+            };
+            let what = tokio::select! {
+                _ = term.recv() => "SIGTERM",
+                _ = hup.recv() => "SIGHUP",
+            };
+            log::info!("{what}: removing the stick mic, then quitting");
+            if let Some(st) = weak.upgrade() {
+                let _ = tokio::task::spawn_blocking(move || st.shutdown()).await;
+            }
+            std::process::exit(0);
+        });
+    }
+}
+
 // --- the stick's messages ------------------------------------------------------------------------
 
 /// `wmic` / `wready` for the hello: may the stick stream (on, with a carrier and somewhere to
@@ -798,9 +855,41 @@ pub fn config_changed(st: &Arc<AppState>, changes: &Map<String, Value>) {
     }
 }
 
+/// A `@state` reply (core.py `_note_name`): the stick may have been renamed on the stick itself;
+/// remember its name (the mic is named after it) without re-targeting the link.
+pub fn note_name(st: &Arc<AppState>, reply: &Value) {
+    let Some(name) = reply.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()) else { return };
+    if reply.get("board").is_none_or(Value::is_null) {
+        return;
+    }
+    let snapshot = {
+        let mut cfg = st.cfg.lock().unwrap();
+        let Some(mut stick) = cfg.get("stick").and_then(Value::as_object).cloned() else { return };
+        if stick.get("name").and_then(Value::as_str) == Some(name) {
+            return;
+        }
+        let was = stick.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+        log::info!("the stick is now called {name:?} (was {was:?})");
+        stick.insert("name".into(), json!(name));
+        cfg.insert("stick".into(), Value::Object(stick));
+        if let Err(e) = crate::config::save(&st.paths, &cfg) {
+            log::warn!("couldn't save the stick's new name: {e}");
+        }
+        cfg.clone()
+    };
+    st.hub.emit("config", json!({"config": snapshot}));
+    rename_mic(st, "the stick was renamed");
+}
+
 /// A message from the stick (core.py `_on_message`, the wispr / usb parts).
 pub fn on_message(st: &Arc<AppState>, msg: &Value) {
     if msg.get("src").and_then(Value::as_str) != Some("agent") {
+        return;
+    }
+    if msg.get("evt").and_then(Value::as_str) == Some("proto")
+        && let Some(reply) = msg.get("reply").filter(|r| r.is_object())
+    {
+        note_name(st, reply); // any @state reply (ours on connect, the dashboard's)
         return;
     }
     let rate = msg.get("rate").and_then(Value::as_u64).filter(|r| *r > 0).unwrap_or(RATE as u64) as u32;
@@ -849,6 +938,11 @@ pub fn on_audio(st: &AppState, frame: &[u8]) {
 pub fn on_link(st: &Arc<AppState>, state: LinkState) {
     if state == LinkState::Connected {
         st.wmic.player.lock().unwrap().warm(); // ready before the first key-down
+        // its name now (renamed on the stick?): the reply comes back through on_message -> note_name
+        let st2 = st.clone();
+        tokio::spawn(async move {
+            st2.link.request("@state").await;
+        });
     } else {
         {
             let mut p = st.wmic.player.lock().unwrap();
@@ -944,6 +1038,7 @@ mod tests {
         let home = std::env::temp_dir().join(format!("stickybot-rs-wmic-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         let fake = FakeStick::new();
+        fake.set_name("StickyBot"); // as picked below (else the @state on connect renames it)
         let st = AppState::new(&Options { port: 8670, home, fake_stick: true, import_from: None }, Backend::Fake(fake.clone())).unwrap();
         let ca = FakeCoreAudio::new();
         let out = FakeOutputs::new(outs);
@@ -1293,6 +1388,37 @@ mod tests {
         t.set(json!({"stick": {"address": "FAKE", "name": "StickyBot"}, "wispr_mic_name": ""}));
         assert_eq!(mic_name(&t.st), "stickybot-bt-mic");
         assert_eq!(t.st.wmic.device().name, "stickybot-bt-mic");
+    }
+
+    #[tokio::test]
+    async fn a_stick_renamed_on_the_stick_renames_its_mic() {
+        let t = wired("renamed").await;
+        assert!(wait_for(|| t.fake.writes().iter().any(|w| String::from_utf8_lossy(w).contains("@state"))).await);
+        show(&t.st, Duration::from_secs(60)).await;
+        assert_eq!(t.ca.names_of(RUST_UID), vec!["stickybot-bt-mic".to_string()]);
+        t.fake.set_name("Desk Stick");
+        t.st.link.request("@state").await.unwrap(); // the dashboard's, or ours on the next connect
+        assert!(wait_for(|| t.st.stick().is_some_and(|s| s.name == "Desk Stick")).await);
+        assert_eq!(t.st.stick().unwrap().address, "FAKE");
+        assert_eq!(crate::config::load(&t.st.paths)["stick"]["name"], "Desk Stick");
+        assert!(wait_for(|| t.ours().is_empty()).await); // the old one goes
+        show(&t.st, Duration::from_secs(60)).await;
+        assert_eq!(t.ca.names_of(RUST_UID), vec!["desk-stick-bt-mic".to_string()]);
+        drop_device(t.st.clone(), "test".into()).await;
+        // a proto reply without a board (not a @state) changes nothing
+        on_message(&t.st, &json!({"src": "agent", "evt": "proto", "id": "x", "reply": {"name": "ignored"}}));
+        assert_eq!(t.st.stick().unwrap().name, "Desk Stick");
+    }
+
+    #[tokio::test]
+    async fn crash_cleanup_removes_the_device() {
+        let t = wired("crash").await;
+        show(&t.st, Duration::from_secs(60)).await;
+        assert_eq!(t.ours().len(), 1);
+        let st = t.st.clone();
+        let n = tokio::task::spawn_blocking(move || crash_cleanup(&st, Duration::from_secs(2))).await.unwrap();
+        assert_eq!(n, Some(1));
+        assert!(t.ours().is_empty());
     }
 
     #[tokio::test]
