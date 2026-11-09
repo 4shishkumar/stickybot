@@ -150,7 +150,13 @@ pub fn defaults() -> Map<String, Value> {
         "update_channel": "stable"
     });
     match v {
-        Value::Object(m) => m,
+        Value::Object(mut m) => {
+            // the IR remote (stick 2.5.0; ir.rs): remotes mapped to built-in code sets
+            // ({"tv": "samsung"}), and whether the TV phrases were added to commands.json
+            m.insert("ir_brands".into(), json!({}));
+            m.insert("ir_voice_added".into(), json!(false));
+            m
+        }
         _ => unreachable!(),
     }
 }
@@ -210,6 +216,16 @@ pub fn invalid(body: &Map<String, Value>) -> String {
         && !b.is_boolean()
     {
         return "wireless_mic must be true or false".into();
+    }
+    if let Some(b) = body.get("ir_brands")
+        && !b.as_object().is_some_and(|m| m.values().all(|v| v.as_str().is_some_and(|v| crate::ir::brand(v).is_some())))
+    {
+        return "ir_brands must map remotes to built-in code sets ({\"tv\": \"samsung\"})".into();
+    }
+    if let Some(b) = body.get("ir_voice_added")
+        && !b.is_boolean()
+    {
+        return "ir_voice_added must be true or false".into();
     }
     if let Some(s) = body.get("stick")
         && !s.is_null()

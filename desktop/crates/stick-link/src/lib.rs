@@ -11,6 +11,7 @@
 
 pub mod adpcm;
 pub mod fake;
+pub mod fake_ir;
 mod link;
 pub mod ota;
 pub mod pacing;

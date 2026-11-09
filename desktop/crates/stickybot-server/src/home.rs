@@ -70,7 +70,7 @@ pub struct Home {
     gh_status: Mutex<(f64, String)>,
     pub notifier: events::Notifier,
     rot: Mutex<Rotation>,
-    world_sent: Mutex<Option<Value>>,
+    pub(crate) world_sent: Mutex<Option<Value>>,
     http: Mutex<Arc<dyn Http>>,
     gh: Mutex<Arc<dyn github::Gh>>,
     sessions: Mutex<SessionCounter>,
@@ -377,6 +377,24 @@ pub fn config_changed(st: &Arc<AppState>, changes: &Map<String, Value>) {
     }
 }
 
+/// `{"evt":"game","id","score","best","new_best"}`: a game finished on the stick (firmware 2.5.0,
+/// core.py `_on_game`): a little XP (capped a day, pet.rs) and a `game` event for the dashboard's
+/// Games card; new XP goes to the stick's faces at once. Unknown games are ignored.
+pub async fn on_game(st: &AppState, m: &Value) {
+    let gid = m["id"].as_str().unwrap_or("");
+    let new_best = m["new_best"] == json!(true);
+    let xp = st.home.pet.lock().unwrap().game(gid, &m["score"], &m["best"], new_best);
+    if !crate::pet::is_game(gid) {
+        log::info!("game event for an unknown game {:?}: ignored", m["id"]);
+        return;
+    }
+    log::info!("game {gid}: {}{}, +{xp} XP", m["score"], if new_best { " (new best)" } else { "" });
+    st.hub.emit("game", json!({"id": gid, "score": m["score"], "best": m["best"], "new_best": new_best, "xp": xp}));
+    if xp > 0 {
+        push_world(st, true).await;
+    }
+}
+
 /// The loops (core.py `run`): weather + feed every minute, the GitHub watcher, and the stick's
 /// `event_shown` answers.
 pub fn spawn(st: Arc<AppState>) {
@@ -414,6 +432,7 @@ pub fn spawn(st: Arc<AppState>) {
                 Ok(m) if m["src"] == "agent" && m["evt"] == "event_shown" => {
                     st.home.notifier.acked(m["id"].as_str().unwrap_or(""));
                 }
+                Ok(m) if m["src"] == "agent" && m["evt"] == "game" => on_game(&st, &m).await,
                 Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                 Err(_) => return,
             }

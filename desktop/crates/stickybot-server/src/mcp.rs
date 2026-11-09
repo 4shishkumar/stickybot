@@ -57,7 +57,9 @@ pub const NOT_CONNECTED: &str = "stick not connected";
 
 /// The tools that only give feedback (pre-allowed); `open_url`, `open_app`, `quick_command` change
 /// the Mac, so Claude Code asks first.
-pub const FEEDBACK_TOOLS: &[&str] = &["notify", "ask", "celebrate", "progress", "pin_home", "stick_status", "speak"];
+/// (`ir_list` / `ir_send` too: the user asked for it by voice)
+pub const FEEDBACK_TOOLS: &[&str] =
+    &["notify", "ask", "celebrate", "progress", "pin_home", "stick_status", "speak", "ir_list", "ir_send"];
 pub const MAC_TOOLS: &[&str] = &["open_url", "open_app", "quick_command"];
 
 pub const INSTRUCTIONS: &str = "Tools for the user's M5StickS3, a small device on their desk with a 135x240 screen, two buttons (A, B) and a speaker. Use it like a pager: notify() when a long task finishes or needs them, ask() for a quick A/B decision instead of waiting in the terminal, progress() for long jobs, celebrate() for real wins. Keep texts short (a few words). Don't notify for every small step. stick_status() tells whether they're at their desk.";
@@ -133,6 +135,18 @@ pub fn tools() -> &'static [Value] {
                 "inputSchema": {"type": "object", "additionalProperties": false, "required": ["text"], "properties": {
                     "text": text(300, "What to say, one or two short sentences.")}},
                 "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}}),
+            json!({"name": "ir_list", "title": "List the IR remotes",
+                "description": "The infrared remotes the stick can play (TV, AC, soundbar...) and their buttons, as {device: [button, ...]}: buttons learned on the stick plus built-in TV code sets. Read-only. Call it before ir_send to pick the button whose name fits the request (e.g. 'set the AC to 24' -> device 'ac', button 'cool 24').",
+                "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}},
+                "annotations": {"readOnlyHint": true, "openWorldHint": false}}),
+            json!({"name": "ir_send", "title": "Press a remote button",
+                "description": "Send an infrared remote button from the stick (it must point roughly at the device), e.g. device='tv', button='power'. Names as ir_list() gives them. repeat: extra presses (volume steps). Returns 'tv: power sent' or why not.",
+                "inputSchema": {"type": "object", "additionalProperties": false, "required": ["device", "button"],
+                    "properties": {
+                        "device": {"type": "string", "maxLength": 32, "description": "The remote, e.g. 'tv'."},
+                        "button": {"type": "string", "maxLength": 32, "description": "The button, e.g. 'volume up'."},
+                        "repeat": {"type": "integer", "minimum": 0, "maximum": 10, "default": 0}}},
+                "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true}}),
         ]
     })
 }
@@ -543,6 +557,26 @@ async fn run_tool(st: &Arc<AppState>, name: &str, a: &Map<String, Value>, who: &
             Ok((format!("speaking on the {out}"), None))
         }
         "stick_status" => Ok(stick_status(st).await),
+        "ir_list" => {
+            let devices = crate::ir::listing(st).await?;
+            if devices.is_empty() {
+                return Ok((
+                    "no remotes yet: learn one on the stick (menu: Remote) or in the dashboard".into(),
+                    Some(json!({"devices": {}})),
+                ));
+            }
+            let text = devices
+                .iter()
+                .map(|(d, b)| format!("{d}: {}", if b.is_empty() { "(no buttons)".to_string() } else { b.join(", ") }))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let map: Map<String, Value> = devices.into_iter().map(|(d, b)| (d, json!(b))).collect();
+            Ok((text, Some(json!({"devices": map}))))
+        }
+        "ir_send" => {
+            let repeat = a.get("repeat").and_then(Value::as_i64).unwrap_or(0);
+            crate::ir::send(st, &s("device"), &s("button"), repeat).await.map(|t| (t, None))
+        }
         "open_url" => {
             let url = s("url").trim().to_string();
             let host = url
@@ -1194,7 +1228,9 @@ mod tests {
                 "open_app",
                 "quick_command",
                 "stick_status",
-                "speak"
+                "speak",
+                "ir_list",
+                "ir_send"
             ]
         );
         assert_eq!(allowed_tool_names()[0], "mcp__stick__notify");
@@ -1339,7 +1375,7 @@ mod tests {
             .await;
         assert_eq!(s, StatusCode::ACCEPTED);
         let (_, v) = c.rpc("tools/list", json!({}), &[("mcp-protocol-version", "2025-11-25")], false).await;
-        assert_eq!(v["result"]["tools"].as_array().unwrap().len(), 10);
+        assert_eq!(v["result"]["tools"].as_array().unwrap().len(), 12);
         let (s, v) = c.rpc("tools/list", json!({}), &[("mcp-protocol-version", "1999-01-01")], false).await;
         assert_eq!((s, v["error"]["code"].as_i64()), (StatusCode::BAD_REQUEST, Some(UNSUPPORTED_VERSION)));
         let (s, v) = c.rpc("nope/nope", json!({}), &[], false).await;

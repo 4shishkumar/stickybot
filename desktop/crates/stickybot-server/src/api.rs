@@ -90,6 +90,18 @@ pub const PORTED: &[&str] = &[
     "POST /api/update/agent",
     "POST /api/update/firmware/{updater}",
     "GET /api/update/jobs/{id}",
+    // the IR remote (stick 2.5.0; ir.rs)
+    "GET /api/ir",
+    "POST /api/ir/send",
+    "POST /api/ir/learn",
+    "POST /api/ir/learn/cancel",
+    "POST /api/ir/rename",
+    "POST /api/ir/remove",
+    "POST /api/ir/fav",
+    "POST /api/ir/brand",
+    "GET /api/ir/export",
+    "POST /api/ir/import",
+    "GET /api/ir/diag",
 ];
 
 /// The Python agent's endpoints that aren't here yet, by the phase that brings them.
@@ -160,6 +172,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/update/agent", post(update_agent))
         .route("/api/update/firmware/{updater}", post(update_firmware))
         .route("/api/update/jobs/{id}", get(job_events))
+        .merge(crate::ir::routes())
         .fallback(not_ported)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -1706,5 +1719,276 @@ mod tests {
         // an error is kept for the status
         gh.set(Err("HTTP 401".into()));
         assert!(crate::home::github_poll(&st).await.is_err());
+    }
+
+    // test_pet.py: the agent takes game events (firmware 2.5.0)
+    #[tokio::test]
+    async fn game_events_give_xp_and_go_to_the_dashboard_and_the_faces() {
+        let (_app, st, _fake) = app("games", true).await;
+        let (_, mut rx) = st.hub.subscribe(0);
+        let xp0 = st.home.pet.lock().unwrap().s["xp"].as_i64().unwrap();
+        let worlds = |st: &AppState| st.home.world_sent.lock().unwrap().clone();
+        let w0 = worlds(&st);
+        let m = json!({"src": "agent", "evt": "game", "id": "catch", "score": 14, "best": 20, "new_best": true});
+        crate::home::on_game(&st, &m).await;
+        let ev = loop {
+            let e = rx.recv().await.unwrap();
+            if e["kind"] == "game" {
+                break e;
+            }
+        };
+        assert_eq!((ev["id"].as_str(), ev["score"].as_i64(), ev["best"].as_i64()), (Some("catch"), Some(14), Some(20)));
+        assert_eq!((ev["new_best"].as_bool(), ev["xp"].as_i64()), (Some(true), Some(crate::pet::XP_GAME_BEST)));
+        assert_eq!(st.home.pet.lock().unwrap().s["xp"].as_i64().unwrap(), xp0 + crate::pet::XP_GAME_BEST);
+        assert_ne!(worlds(&st), w0); // the new XP went to the stick's faces
+        crate::home::on_game(&st, &json!({"src": "agent", "evt": "game", "id": "nope", "score": 1})).await;
+        assert!(rx.try_recv().map(|e| e["kind"] != "game").unwrap_or(true));
+        assert_eq!(st.home.pet.lock().unwrap().summary()["games"]["best"]["catch"], 20);
+    }
+
+    // --- test_ir.py: the IR remote (stick 2.5.0) against the fake stick's @ir ----------------------
+
+    fn remotes(fake: &FakeStick, rows: &[(&str, &str, &str, bool)]) {
+        fake.ir(|ir| {
+            ir.devices.clear();
+            for (d, b, c, f) in rows {
+                ir.add(d, b, c, *f);
+            }
+            ir.sent.clear();
+        });
+    }
+
+    fn sent(fake: &FakeStick) -> Vec<(String, String, i64)> {
+        fake.ir(|ir| ir.sent.clone())
+    }
+
+    fn t3(a: &str, b: &str, n: i64) -> (String, String, i64) {
+        (a.into(), b.into(), n)
+    }
+
+    #[tokio::test]
+    async fn ir_list_and_send() {
+        let (_app, st, fake) = app("ir-list", true).await;
+        let mut rows = vec![("tv", "power", "nec:4:8", true), ("tv", "volume up", "nec:4:2", false)];
+        let names: Vec<String> = (16..31).map(|t| format!("cool {t}")).collect();
+        rows.extend(names.iter().map(|n| ("ac", n.as_str(), "raw:38:1,2,3", false)));
+        remotes(&fake, &rows);
+        let d = crate::ir::devices(&st, true).await.unwrap();
+        let tv = d["devices"].as_array().unwrap().iter().find(|x| x["id"] == "tv").unwrap().clone();
+        assert_eq!(tv["buttons"][0], json!({"name": "power", "proto": "nec", "fav": true}));
+        let ac = d["devices"].as_array().unwrap().iter().find(|x| x["id"] == "ac").unwrap().clone();
+        assert_eq!(ac["buttons"].as_array().unwrap().len(), 15); // two pages
+        assert_eq!(crate::ir::send(&st, "TV", "Volume Up", 2).await.unwrap(), "tv: volume up sent");
+        assert_eq!(sent(&fake), vec![t3("tv", "volume up", 2)]);
+        let e = crate::ir::send(&st, "tv", "mute", 0).await.unwrap_err();
+        assert!(e.contains("no 'mute' button on the 'tv' remote"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn ir_brand_fallback() {
+        let (_app, st, fake) = app("ir-brand", true).await;
+        remotes(&fake, &[]);
+        st.update_config(json!({"ir_brands": {"tv": "samsung"}}).as_object().unwrap().clone()).unwrap();
+        assert_eq!(crate::ir::send(&st, "tv", "power", 0).await.unwrap(), "tv: power sent");
+        assert_eq!(sent(&fake), vec![t3("code", "samsung:7:2", 0)]);
+        let listing = crate::ir::listing(&st).await.unwrap();
+        let tv = &listing.iter().find(|(d, _)| d == "tv").unwrap().1;
+        assert!(tv.contains(&"power".to_string()) && tv.contains(&"mute".to_string()));
+        remotes(&fake, &[("tv", "power", "nec:4:8", false)]); // a learned one wins
+        crate::ir::send(&st, "tv", "power", 0).await.unwrap();
+        assert_eq!(sent(&fake).last().unwrap(), &t3("tv", "power", 0));
+    }
+
+    #[tokio::test]
+    async fn ir_old_firmware_and_no_stick() {
+        let (_app, st, fake) = app("ir-old", true).await;
+        fake.ir(|ir| ir.unsupported = true);
+        let e = crate::ir::send(&st, "tv", "power", 0).await.unwrap_err();
+        assert!(e.contains("needs 2.5.0"), "{e}");
+        let state = crate::ir::ask(&st, "@state").await;
+        assert_eq!(
+            crate::ir::supported(state.as_ref()).1.unwrap(),
+            "the stick's firmware (2.3.0) has no IR remote: it needs 2.5.0"
+        );
+        st.link.pause(true);
+        let mut w = st.link.watch_state();
+        tokio::time::timeout(Duration::from_secs(5), w.wait_for(|s| *s != LinkState::Connected)).await.unwrap().unwrap();
+        let e = crate::ir::devices(&st, false).await.unwrap_err();
+        assert!(e.contains("isn't connected"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn ir_learning_reports_its_steps() {
+        let (_app, st, fake) = app("ir-learn", true).await;
+        crate::ir::spawn(st.clone());
+        let (_, mut rx) = st.hub.subscribe(0);
+        let st2 = st.clone();
+        let task = tokio::spawn(async move {
+            crate::ir::learn_and_wait(&st2, "TV", "Power", false, Duration::from_secs(5)).await
+        });
+        for _ in 0..100 {
+            if fake.ir(|ir| ir.learning.is_some()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(fake.ir(|ir| ir.learning.clone()), Some(("tv".into(), "power".into())));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(fake.ir_press("nec:4:8"));
+        let fin = tokio::time::timeout(Duration::from_secs(5), task).await.unwrap().unwrap().unwrap();
+        assert_eq!((fin["state"].as_str(), fin["btn"].as_str()), (Some("saved"), Some("power")));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut seen = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            if e["kind"] == "ir" {
+                seen.push((e["state"].as_str().unwrap_or("").to_string(), e["step"].as_i64()));
+            }
+        }
+        assert!(seen.contains(&("learning".into(), Some(1))) && seen.contains(&("learning".into(), Some(2))), "{seen:?}");
+        assert_eq!(seen.last().unwrap().0, "saved");
+        assert_eq!(st.ir.learn.lock().unwrap().as_ref().unwrap()["state"], "saved");
+        assert_eq!(fake.ir(|ir| ir.devices["tv"].clone()), vec![json!({"n": "power", "c": "nec:4:8"})]);
+    }
+
+    #[tokio::test]
+    async fn ir_export_import_round_trip_and_brands_on_the_stick() {
+        let (_app, st, fake) = app("ir-export", true).await;
+        remotes(&fake, &[("tv", "power", "nec:4:8", true), ("ac", "cool 24", "raw:38:3400,1700,420:0120", false)]);
+        let mut doc = crate::ir::export(&st).await.unwrap();
+        assert_eq!(
+            doc,
+            json!({"stickybot_ir": 1, "devices": {"ac": [{"n": "cool 24", "c": "raw:38:3400,1700,420:0120"}],
+                                                  "tv": [{"n": "power", "c": "nec:4:8", "f": 1}]}})
+        );
+        remotes(&fake, &[]);
+        doc["devices"]["tv"].as_array_mut().unwrap().push(json!({"n": "bad", "c": "nec:zz"}));
+        let r = crate::ir::import_doc(&st, &doc).await.unwrap();
+        assert_eq!((r["added"].as_i64(), r["skipped"].as_array().unwrap().len()), (Some(2), 1));
+        assert_eq!(fake.ir(|ir| ir.devices["tv"].clone()), vec![json!({"n": "power", "c": "nec:4:8", "f": 1})]);
+        let e = crate::ir::import_doc(&st, &json!({"nope": 1})).await.unwrap_err();
+        assert!(e.contains("expected"), "{e}");
+        // a brand's buttons on the stick
+        let r = crate::ir::install_brand(&st, "Bedroom TV", "lg").await.unwrap();
+        assert_eq!(r, json!({"dev": "bedroom-tv", "n": 7}));
+        assert!(fake.ir(|ir| ir.devices["bedroom-tv"].contains(&json!({"n": "power", "c": "nec:4:8", "f": 1}))));
+    }
+
+    #[tokio::test]
+    async fn ir_voice_quick_commands() {
+        let (_app, st, fake) = app("ir-voice", true).await;
+        st.commands.ensure().unwrap(); // the defaults have the TV phrases
+        remotes(&fake, &[("tv", "power", "nec:4:8", false)]);
+        crate::talk::handle_text(st.clone(), "Turn off the TV.".into(), "typed").await;
+        assert_eq!(sent(&fake), vec![t3("tv", "power", 0)]);
+        let screens = fake.screens();
+        assert!(screens.iter().any(|(s, _, t)| s == "done" && t == "tv: power sent"), "{screens:?}");
+        crate::talk::handle_text(st.clone(), "mute the tv".into(), "typed").await; // no such button, no brand: says so
+        let (s, _, t) = fake.screens().last().unwrap().clone();
+        assert!(s == "error" && t.contains("mute"), "{s} {t}");
+        assert_eq!(st.status()["stats"]["quick"], 2);
+        let h = std::fs::read_to_string(st.paths.history()).unwrap();
+        assert!(h.lines().last().unwrap().contains("\"via\":\"quick\""));
+    }
+
+    #[tokio::test]
+    async fn ir_voice_commands_are_added_once() {
+        let (_app, st, _fake) = app("ir-once", false).await;
+        let doc = json!({"commands": [{"name": "Mine", "phrases": ["hello"], "shell": "echo hi"}]});
+        std::fs::write(&st.commands.path, doc.to_string()).unwrap();
+        assert!(crate::ir::ensure_voice_commands(&st));
+        let cmds = st.commands.load();
+        assert_eq!(cmds[0]["name"], "Mine");
+        assert!(cmds.iter().any(|c| c.get("ir") == Some(&json!({"dev": "tv", "btn": "power"}))));
+        assert_eq!(st.cfg.lock().unwrap()["ir_voice_added"], true);
+        assert!(!crate::ir::ensure_voice_commands(&st)); // once
+        assert_eq!(st.commands.load().len(), cmds.len());
+    }
+
+    #[tokio::test]
+    async fn ir_stick_tools() {
+        let (_app, st, fake) = app("ir-mcp", true).await;
+        remotes(&fake, &[("ac", "cool 24", "raw:38:1,2,3", false), ("ac", "off", "nec:1:2", false)]);
+        let (text, err, res) = crate::mcp::call(&st, "ir_list", &json!({}), "test").await;
+        assert!(!err && text.contains("ac: cool 24, off"), "{text}");
+        assert_eq!(res.unwrap()["devices"]["ac"], json!(["cool 24", "off"]));
+        let (text, err, _) = crate::mcp::call(&st, "ir_send", &json!({"device": "ac", "button": "cool 24"}), "test").await;
+        assert!(!err && text == "ac: cool 24 sent", "{text}");
+        let (text, err, _) = crate::mcp::call(&st, "ir_send", &json!({"device": "ac", "button": "heat 30"}), "test").await;
+        assert!(err && text.contains("no 'heat 30' button"), "{text}");
+        assert!(crate::mcp::allowed_tool_names().contains(&"mcp__stick__ir_send".to_string()));
+        assert!(crate::mcp::openai_tools().iter().any(|t| t["function"]["name"] == "ir_list"));
+    }
+
+    #[tokio::test]
+    async fn ir_api() {
+        let (app, st, fake) = app("ir-api", true).await;
+        let tok = Some(st.token.as_str());
+        remotes(&fake, &[("tv", "power", "nec:4:8", false)]);
+        let (_, r, _) = call(&app, req("GET", "/api/ir", None, None)).await;
+        assert!(r["supported"] == true && r["devices"][0]["buttons"][0]["name"] == "power", "{r}");
+        assert!(r["brands"].get("samsung").is_some());
+        let (_, r, _) = call(&app, req("POST", "/api/ir/send", Some(json!({"dev": "tv", "btn": "power"})), tok)).await;
+        assert_eq!(r, json!({"ok": true, "result": "tv: power sent"}));
+        let (s, _, _) = call(&app, req("POST", "/api/ir/send", Some(json!({"brand": "sony", "btn": "Mute"})), tok)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(sent(&fake).last().unwrap(), &t3("code", "sony12:1:14", 0));
+        let (s, r, _) = call(&app, req("POST", "/api/ir/send", Some(json!({"dev": "tv", "btn": "nope"})), tok)).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        assert!(r["error"].as_str().unwrap().starts_with("No 'nope'"), "{r}");
+        let (_, r, _) = call(&app, req("POST", "/api/ir/brand", Some(json!({"dev": "TV", "brand": "lg"})), tok)).await;
+        assert_eq!(r["mapped"], json!({"tv": "lg"}));
+        assert_eq!(st.cfg.lock().unwrap()["ir_brands"], json!({"tv": "lg"}));
+        let (s, _, _) = call(&app, req("POST", "/api/ir/brand", Some(json!({"dev": "tv", "brand": "acme"})), tok)).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        let (s, _, _) = call(&app, req("POST", "/api/ir/learn", Some(json!({"dev": "tv", "btn": "input"})), tok)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(fake.ir(|ir| ir.learning.clone()), Some(("tv".into(), "input".into())));
+        let (s, _, _) = call(&app, req("POST", "/api/ir/learn/cancel", None, tok)).await;
+        assert_eq!(s, StatusCode::OK);
+        let b = json!({"dev": "tv", "btn": "power", "to": "on off"});
+        let (s, _, _) = call(&app, req("POST", "/api/ir/rename", Some(b), tok)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(fake.ir(|ir| ir.devices["tv"][0]["n"].clone()), "on off");
+        let (s, _, _) = call(&app, req("POST", "/api/ir/fav", Some(json!({"dev": "tv", "btn": "on off", "on": true})), tok)).await;
+        assert_eq!(s, StatusCode::OK);
+        let resp = app.clone().oneshot(req("GET", "/api/ir/export", None, None)).await.unwrap();
+        assert!(resp.headers()["content-disposition"].to_str().unwrap().contains("attachment"));
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let doc: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(doc["devices"]["tv"][0], json!({"n": "on off", "c": "nec:4:8", "f": 1}));
+        let (s, r, _) = call(&app, req("POST", "/api/ir/import", Some(json!({"doc": doc})), tok)).await;
+        assert_eq!((s, r["added"].as_i64()), (StatusCode::OK, Some(1)));
+        let (s, _, _) = call(&app, req("POST", "/api/ir/remove", Some(json!({"dev": "tv"})), tok)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert!(fake.ir(|ir| ir.devices.is_empty()));
+        let (s, _, _) = call(&app, req("POST", "/api/ir/remove", Some(json!({})), tok)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let (s, _, _) = call(&app, req("POST", "/api/ir/send", Some(json!({"dev": "tv", "btn": "power"})), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN); // no token
+        let (_, r, _) = call(&app, req("GET", "/api/ir/diag", None, None)).await;
+        assert_eq!(r["pins"], "ok");
+        // not connected: says why
+        st.link.pause(true);
+        let mut w = st.link.watch_state();
+        tokio::time::timeout(Duration::from_secs(5), w.wait_for(|s| *s != LinkState::Connected)).await.unwrap().unwrap();
+        let (_, r, _) = call(&app, req("GET", "/api/ir", None, None)).await;
+        assert_eq!((r["connected"].as_bool(), r["why"].as_str()), (Some(false), Some("the stick isn't connected by Bluetooth")));
+    }
+
+    #[tokio::test]
+    async fn the_25_settings_go_through_the_proto_endpoint() {
+        // the Mouse & presenter card (@air, @mode) and the Games card (@games) use /api/stick/proto
+        let (app, st, _fake) = app("air", true).await;
+        let tok = Some(st.token.as_str());
+        let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@state"})), tok)).await;
+        assert_eq!(r["reply"]["air"]["mode"], "home");
+        assert!(r["reply"]["ir"].is_object());
+        let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@mode name=presenter"})), tok)).await;
+        assert_eq!(r["ok"], true);
+        let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@air sens=7&invx=1&keys=pages"})), tok)).await;
+        assert_eq!((r["reply"]["air"]["sens"].as_i64(), r["reply"]["air"]["invX"].as_bool()), (Some(7), Some(true)));
+        assert_eq!(r["reply"]["air"]["mode"], "presenter");
+        let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@games"})), tok)).await;
+        assert_eq!(r["reply"]["games"].as_array().unwrap().len(), 7);
     }
 }
