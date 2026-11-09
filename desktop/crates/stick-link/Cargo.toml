@@ -12,6 +12,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
 log = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+sha2 = "0.10"
 
 # CoreBluetooth directly (not btleplug: see README "Why not btleplug")
 [target.'cfg(target_os = "macos")'.dependencies]

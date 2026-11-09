@@ -49,16 +49,18 @@ pub const PORTED: &[&str] = &[
     "POST /api/commands/test",
     "GET /api/speech",
     "POST /api/speech/retry",
+    "GET /api/clips",
+    "POST /api/clips/play",
+    "GET /api/firmware",
+    "POST /api/firmware/ota",
+    "GET /api/firmware/jobs/{id}",
+    "POST /api/firmware/jobs/{id}/cancel",
 ];
 
 /// The Python agent's endpoints that aren't here yet, by the phase that brings them.
 pub const NOT_PORTED: &[(&str, &str)] = &[
     ("GET /api/pet", "faces / pet (the Stick page's Face card hides the pet line)"),
-    ("GET /api/firmware", "firmware: bundled build, USB sticks (the Stick page says updates aren't available)"),
     ("POST /api/firmware/flash", "firmware over USB (esptool)"),
-    ("POST /api/firmware/ota", "firmware over Bluetooth (needs canSendWriteWithoutResponse pacing)"),
-    ("GET /api/firmware/jobs/{id}", "firmware job progress (SSE)"),
-    ("POST /api/firmware/jobs/{id}/cancel", "firmware job cancel"),
     ("GET /api/onboarding", "setup wizard progress (the wizard keeps it in the browser meanwhile)"),
     ("POST /api/onboarding", "setup wizard progress"),
     ("GET /api/install", "setup page (#install)"),
@@ -66,8 +68,6 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
     ("GET /api/logs", "log viewer (Logs)"),
     ("POST /api/permission", "Claude Code approvals (hook long-poll)"),
     ("POST /api/permission/decide", "Claude Code approvals"),
-    ("GET /api/clips", "sound clips library"),
-    ("POST /api/clips/play", "sound clips (AUDIO_IN streaming)"),
     ("GET /api/voices", "macOS voices (say)"),
     ("POST /api/voice/test", "speech"),
     ("POST /api/events/test", "stick events"),
@@ -110,6 +110,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/commands/test", post(test_command))
         .route("/api/speech", get(speech_status))
         .route("/api/speech/retry", post(speech_retry))
+        .route("/api/clips", get(clip_list))
+        .route("/api/clips/play", post(clip_play))
+        .route("/api/firmware", get(firmware_info))
+        .route("/api/firmware/ota", post(ota_update))
+        .route("/api/firmware/jobs/{id}", get(job_events))
+        .route("/api/firmware/jobs/{id}/cancel", post(job_cancel))
         .fallback(not_ported)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -359,6 +365,97 @@ async fn speech_retry(State(st): State<Arc<AppState>>) -> Response {
     }
 }
 
+async fn clip_list(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    axum::Json(Value::Array(crate::clips::library(&crate::clips::sounds_dir(&st.paths.home))))
+}
+
+/// Plays a sound-pack clip on the stick's speaker (core.py `play_clip`).
+async fn clip_play(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<Value> {
+    let b = body_obj(&body);
+    let s =
+        |k: &str| b.get(k).map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())).unwrap_or_default();
+    let (pack, name) = (s("pack"), s("name"));
+    let Some(f) = crate::clips::find(&crate::clips::sounds_dir(&st.paths.home), &pack, &name) else {
+        return axum::Json(json!({"ok": false, "error": "no such sound"}));
+    };
+    let pcm = match tokio::task::spawn_blocking(move || crate::clips::load(&f, false)).await {
+        Ok(Ok(p)) => p,
+        Ok(Err(e)) => return axum::Json(json!({"ok": false, "error": e})),
+        Err(e) => return axum::Json(json!({"ok": false, "error": e.to_string()})),
+    };
+    let t = std::time::Instant::now();
+    let ok = st.link.send_audio(&crate::clips::packets(&pcm)).await;
+    log::info!(
+        "clip {pack}/{name}: {:.2}s of audio sent in {:.2}s",
+        pcm.len() as f64 / crate::clips::RATE as f64,
+        t.elapsed().as_secs_f64()
+    );
+    axum::Json(json!({"ok": ok, "error": if ok { Value::Null } else { json!("stick not connected") }}))
+}
+
+/// The bundled firmware, sticks on USB (not in the Rust app: always empty), the connected stick.
+async fn firmware_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    let bundled = st.firmware().first().map(crate::firmware::describe).unwrap_or(Value::Null);
+    axum::Json(json!({"bundled": bundled, "usb": [], "connected": crate::firmware::connected(&st.link).await}))
+}
+
+/// Starts a firmware update over Bluetooth: `{"force"}` -> `{"job"}`.
+async fn ota_update(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    let force = body_obj(&body).get("force").and_then(Value::as_bool).unwrap_or(false);
+    let t = st.ota_timings.lock().unwrap().clone();
+    match crate::firmware::start_ota(&st, force, t) {
+        Ok(job) => axum::Json(json!({"job": job})).into_response(),
+        Err((code, e)) => err(StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_REQUEST), &e),
+    }
+}
+
+/// A job's events as server-sent events, until it's done.
+async fn job_events(State(st): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    let Some(job) = st.jobs.get(&id) else {
+        return err(StatusCode::NOT_FOUND, "no such job");
+    };
+    let s = stream::unfold((job, 0usize, false), |(job, i, finished)| async move {
+        if finished {
+            return None;
+        }
+        loop {
+            let watch = job.clone();
+            let changed = watch.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let evs = job.events_from(i);
+            if !evs.is_empty() {
+                let n = i + evs.len();
+                let done = job.is_done() && job.events_from(n).is_empty();
+                let data: String = evs.iter().map(|e| format!("data: {e}\n\n")).collect();
+                return Some((Ok::<_, Infallible>(Bytes::from(data)), (job, n, done)));
+            }
+            if job.is_done() {
+                return None;
+            }
+            if tokio::time::timeout(Duration::from_secs(15), changed).await.is_err() {
+                return Some((Ok(Bytes::from_static(b": keep-alive\n\n")), (job, i, false)));
+            }
+        }
+    });
+    (
+        [(header::CONTENT_TYPE, "text/event-stream"), (header::CACHE_CONTROL, "no-cache")],
+        axum::body::Body::from_stream(s),
+    )
+        .into_response()
+}
+
+async fn job_cancel(State(st): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    let Some(job) = st.jobs.get(&id) else {
+        return err(StatusCode::NOT_FOUND, "no such job");
+    };
+    if job.cancel() {
+        axum::Json(json!({"ok": true})).into_response()
+    } else {
+        err(StatusCode::CONFLICT, "nothing to cancel")
+    }
+}
+
 /// What this app is and what it can do (for the README and for checking a build).
 async fn rust_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
     axum::Json(json!({
@@ -541,10 +638,168 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), w.wait_for(|s| *s == LinkState::Paused)).await.unwrap().unwrap();
         let (s, v, _) = call(&app, req("GET", "/api/pet", None, None)).await;
         assert_eq!((s, v["missing"].as_bool()), (StatusCode::NOT_FOUND, Some(true)));
-        let (s, _, _) = call(&app, req("POST", "/api/firmware/ota", Some(json!({})), tok)).await;
+        let (s, _, _) = call(&app, req("POST", "/api/firmware/flash", Some(json!({})), tok)).await;
         assert_eq!(s, StatusCode::NOT_FOUND);
         let (_, v, _) = call(&app, req("GET", "/api/rust", None, None)).await;
         assert!(v["ported"].as_array().unwrap().iter().any(|e| e == "POST /api/stick/proto"));
+    }
+
+    // --- firmware over Bluetooth (test_ota.py's API part) -------------------------------------------
+
+    fn bundle(st: &AppState, version: &str, n: usize) {
+        let dir = st.paths.home.join("firmware/local");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app: Vec<u8> = (0..n).map(|i| (i * 13 % 251) as u8).collect();
+        app[0] = 0xE9;
+        std::fs::write(dir.join("app.bin"), &app).unwrap();
+        let m = json!({"version": version, "parts": [{"file": "app.bin", "offset": "0x10000", "size": n}]});
+        std::fs::write(dir.join("manifest.json"), m.to_string()).unwrap();
+    }
+
+    fn quick_ota(st: &AppState) {
+        *st.ota_timings.lock().unwrap() = crate::firmware::UpdateTimings {
+            transfer: stick_link::ota::Timings {
+                ack_wait: Duration::from_millis(50),
+                stall: Duration::from_secs(2),
+                reconnect: Duration::from_secs(10),
+                reply: Duration::from_millis(500),
+                end_reply: Duration::from_millis(500),
+                gap_debounce: Duration::from_millis(500),
+            },
+            reboot: Duration::from_secs(20),
+            poll: Duration::from_millis(200),
+        };
+    }
+
+    /// The job's SSE stream, read to its end (it ends when the job is done).
+    async fn job_stream(app: &Router, id: &str) -> Vec<Value> {
+        let (_, body, ctype) = call(app, req("GET", &format!("/api/firmware/jobs/{id}"), None, None)).await;
+        assert_eq!(ctype, "text/event-stream");
+        body.as_str()
+            .unwrap()
+            .lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn ota_needs_the_token_the_link_and_a_bundle() {
+        let (app, st, _) = app("ota-checks", false).await;
+        let tok = Some(st.token.as_str());
+        let (s, _, _) = call(&app, req("POST", "/api/firmware/ota", Some(json!({})), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, v, _) = call(&app, req("POST", "/api/firmware/ota", Some(json!({})), tok)).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        assert!(v["error"].as_str().unwrap().contains("Bluetooth"));
+        let (app2, st, _) = super::tests::app("ota-nobundle", true).await;
+        let (s, v, _) = call(&app2, req("POST", "/api/firmware/ota", Some(json!({})), Some(st.token.as_str()))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert!(v["error"].as_str().unwrap().contains("no firmware"));
+        let (_, v, _) = call(&app2, req("GET", "/api/firmware", None, None)).await;
+        assert_eq!(v["bundled"], Value::Null);
+        assert_eq!(v["connected"], json!({"name": "StickyBot (fake)", "version": "2.3.0", "ota": true}));
+        let (s, _, _) = call(&app2, req("GET", "/api/firmware/jobs/nope", None, None)).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ota_runs_a_job_streams_it_and_waits_for_the_new_version() {
+        let (app, st, fake) = app("ota-run", true).await;
+        bundle(&st, "2.4.0", 30_000);
+        quick_ota(&st);
+        let (_, v, _) = call(&app, req("GET", "/api/firmware", None, None)).await;
+        assert_eq!((v["bundled"]["version"].as_str(), v["bundled"]["source"].as_str()), (Some("2.4.0"), Some("local")));
+        let (s, v, _) = call(&app, req("POST", "/api/firmware/ota", Some(json!({})), Some(st.token.as_str()))).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let events = job_stream(&app, v["job"].as_str().unwrap()).await;
+        let last = events.last().unwrap();
+        assert_eq!((last["done"].as_bool(), last["ok"].as_bool()), (Some(true), Some(true)), "{events:?}");
+        let r = &last["result"];
+        assert_eq!(
+            (r["from"].as_str(), r["to"].as_str(), r["version"].as_str()),
+            (Some("2.3.0"), Some("2.4.0"), Some("2.4.0"))
+        );
+        assert_eq!(r["confirmed"], true);
+        assert!(events.iter().any(|e| e["stage"] == "reboot" && e["progress"] == 100));
+        assert!(events.iter().any(|e| e["line"].as_str().is_some_and(|l| l.contains("confirmed"))));
+        assert!(fake.ota(|o| o.committed));
+        assert_eq!(fake.stick_state()["fw"], "2.4.0");
+        // the same version again needs force
+        let (s, v, _) = call(&app, req("POST", "/api/firmware/ota", Some(json!({})), Some(st.token.as_str()))).await;
+        assert_eq!(s, StatusCode::OK);
+        let events = job_stream(&app, v["job"].as_str().unwrap()).await;
+        assert!(events.last().unwrap()["error"].as_str().unwrap().contains("force"), "{events:?}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ota_reports_a_rollback() {
+        let (app, st, fake) = app("ota-rollback", true).await;
+        bundle(&st, "2.4.0", 8_000);
+        quick_ota(&st);
+        fake.ota(|o| o.rollback = true);
+        let (_, v, _) = call(&app, req("POST", "/api/firmware/ota", Some(json!({})), Some(st.token.as_str()))).await;
+        let events = job_stream(&app, v["job"].as_str().unwrap()).await;
+        let last = events.last().unwrap();
+        assert_eq!(last["ok"], false);
+        assert!(last["error"].as_str().unwrap().contains("rolled back"), "{last}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ota_cancel_reaches_the_transfer() {
+        let (app, st, fake) = app("ota-cancel", true).await;
+        bundle(&st, "2.4.0", 400_000);
+        quick_ota(&st);
+        fake.ota(|o| o.window = 1024);
+        let tok = Some(st.token.as_str());
+        let (_, v, _) = call(&app, req("POST", "/api/firmware/ota", Some(json!({})), tok)).await;
+        let id = v["job"].as_str().unwrap().to_string();
+        let (s, _, _) = call(&app, req("POST", "/api/firmware/ota", Some(json!({})), tok)).await;
+        assert_eq!(s, StatusCode::CONFLICT); // one at a time
+        for _ in 0..200 {
+            if fake.ota(|o| o.received) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let (s, _, _) = call(&app, req("POST", &format!("/api/firmware/jobs/{id}/cancel"), Some(json!({})), tok)).await;
+        assert_eq!(s, StatusCode::OK);
+        let events = job_stream(&app, &id).await;
+        let last = events.last().unwrap();
+        assert_eq!((last["ok"].as_bool(), last["error"].as_str()), (Some(false), Some("cancelled")));
+        assert!(!fake.ota(|o| o.committed));
+        let (s, _, _) = call(&app, req("POST", &format!("/api/firmware/jobs/{id}/cancel"), Some(json!({})), tok)).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn clips_are_listed_and_played() {
+        let (app, st, fake) = app("clips", true).await;
+        let pack = crate::clips::sounds_dir(&st.paths.home).join("test-pack");
+        std::fs::create_dir_all(&pack).unwrap();
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(pack.join("beep.wav"), spec).unwrap();
+        for i in 0..4000 {
+            w.write_sample(((i as f64 / 3.0).sin() * 8000.0) as i16).unwrap();
+        }
+        w.finalize().unwrap();
+        let (_, v, _) = call(&app, req("GET", "/api/clips", None, None)).await;
+        assert_eq!(v, json!([{"pack": "test-pack", "name": "beep"}]));
+        let tok = Some(st.token.as_str());
+        let (_, v, _) =
+            call(&app, req("POST", "/api/clips/play", Some(json!({"pack": "test-pack", "name": "beep"})), tok)).await;
+        assert_eq!(v, json!({"ok": true, "error": null}));
+        let clips = fake.clips();
+        assert_eq!(clips.len(), 1);
+        assert_eq!(u32::from_le_bytes(clips[0][0][1..5].try_into().unwrap()), 4000);
+        assert_eq!(clips[0].len(), 1 + 13 + 1); // start, 4000 / 320 frames, end
+        let (_, v, _) = call(&app, req("POST", "/api/clips/play", Some(json!({"pack": "..", "name": "x"})), tok)).await;
+        assert_eq!(v["error"], "no such sound");
     }
 
     #[tokio::test]

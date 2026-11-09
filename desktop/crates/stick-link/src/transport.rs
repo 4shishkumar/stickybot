@@ -68,10 +68,39 @@ impl fmt::Display for BleError {
 
 impl std::error::Error for BleError {}
 
+/// The characteristics the Mac writes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Char {
+    /// JSON lines
+    Rx,
+    /// sound clips (PROTOCOL.md "Audio in")
+    AudioIn,
+    /// firmware image packets (stick 1.8.0+)
+    OtaData,
+}
+
+impl Char {
+    pub fn uuid(self) -> &'static str {
+        match self {
+            Char::Rx => crate::proto::RX,
+            Char::AudioIn => crate::proto::AUDIO_IN,
+            Char::OtaData => crate::proto::OTA_DATA,
+        }
+    }
+}
+
 /// One live connection to the stick, with notifications on TX and AUDIO already turned on.
 pub trait Connection: Send + Sync + 'static {
     /// One write with response on RX (at most [`crate::proto::CHUNK`] bytes).
     fn write_rx(&self, chunk: Vec<u8>) -> impl Future<Output = Result<(), BleError>> + Send;
+    /// One write to `ch`: with response (waits for the stick's answer), or without (waits until
+    /// CoreBluetooth has room in its queue — `canSendWriteWithoutResponse` — then queues it;
+    /// a packet can still be lost under pressure, the protocols on top cope with that).
+    fn write(&self, ch: Char, data: Vec<u8>, response: bool) -> impl Future<Output = Result<(), BleError>> + Send;
+    /// The stick has this characteristic (AUDIO_IN / OTA_DATA depend on the firmware).
+    fn has(&self, ch: Char) -> bool;
+    /// The largest write without response (`maximumWriteValueLengthForType`), 0 if unknown.
+    fn max_write_without_response(&self) -> usize;
     /// The ATT MTU (0 if unknown).
     fn mtu(&self) -> usize;
     /// Ends this app's connection (the Mac's keyboard connection to the stick stays).

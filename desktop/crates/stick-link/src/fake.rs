@@ -4,10 +4,16 @@
 //!
 //! Knobs for tests: refuse writes ("Insufficient Resource" or any error), go silent, drop the
 //! connection, be absent, inject notifications.
+//!
+//! It also plays sound clips (AUDIO_IN: start / frames / end) and takes firmware updates over
+//! Bluetooth like `ota_rx.cpp` (acks every 4 KB, a `gap` for a lost packet, resume, the SHA-256
+//! check), with knobs to lose packets, drop the link or cancel at an offset, corrupt the image.
 
 use crate::proto::{Line, LineDecoder};
-use crate::transport::{BleError, Connection, Connector, Found, Incoming, Target};
+use crate::transport::{BleError, Char, Connection, Connector, Found, Incoming, Target};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -31,6 +37,14 @@ struct State {
     last_target: Option<Target>,
     /// what the agent showed on the screen: `(state, heard, text)` per `{"src":"agent","state":…}`
     screens: Vec<(String, String, String)>,
+    /// AUDIO_IN packets of the clip being received, and every clip played (its packets)
+    clip: Vec<Vec<u8>>,
+    clips: Vec<Vec<Vec<u8>>>,
+    /// writes with response on AUDIO_IN (the first and last packet of a clip)
+    audio_in_acked: usize,
+    /// no AUDIO_IN / OTA_DATA (old firmware)
+    old_firmware: bool,
+    pub ota: Ota,
     tx: Option<mpsc::UnboundedSender<Incoming>>,
     decoder: LineDecoder,
 }
@@ -144,6 +158,22 @@ impl FakeStick {
     pub fn clear_screens(&self) {
         self.with(|s| s.screens.clear());
     }
+    /// The clips the stick played, as their AUDIO_IN packets (start, frames, end).
+    pub fn clips(&self) -> Vec<Vec<Vec<u8>>> {
+        self.with(|s| s.clips.clone())
+    }
+    /// AUDIO_IN writes that waited for an answer.
+    pub fn audio_in_acked(&self) -> usize {
+        self.with(|s| s.audio_in_acked)
+    }
+    /// Firmware before 1.8: no AUDIO_IN or OTA_DATA, and `{"ota":…}` is ignored.
+    pub fn set_old_firmware(&self, old: bool) {
+        self.with(|s| s.old_firmware = old);
+    }
+    /// The firmware update side: knobs and what happened.
+    pub fn ota<R>(&self, f: impl FnOnce(&mut Ota) -> R) -> R {
+        self.with(|s| f(&mut s.ota))
+    }
     /// B held while saying `frames` (ADPCM, see [`crate::adpcm::encode`]): `talk start`, the
     /// frames, `talk stop`, in the order the firmware sends them.
     pub fn talk(&self, frames: &[Vec<u8>]) {
@@ -159,6 +189,45 @@ impl FakeStick {
                 let _ = tx.send(Incoming::Audio(frame.to_vec()));
             }
         });
+    }
+
+    fn on_char_write(&self, ch: Char, data: Vec<u8>, response: bool) -> Result<(), BleError> {
+        let drop_now = self.with(|s| -> Result<bool, BleError> {
+            s.attempts += 1;
+            if s.tx.is_none() {
+                return Err(BleError::new("Peripheral disconnected"));
+            }
+            if s.old_firmware {
+                return Err(BleError::new(format!("no {ch:?} characteristic")));
+            }
+            if response && s.busy > 0 {
+                s.busy -= 1;
+                return Err(s.busy_err.clone().unwrap_or_else(|| BleError::new("busy")));
+            }
+            match ch {
+                Char::AudioIn => {
+                    if response {
+                        s.audio_in_acked += 1;
+                    }
+                    match data.first() {
+                        Some(0) => s.clip = vec![data],
+                        Some(2) => {
+                            s.clip.push(data);
+                            let clip = std::mem::take(&mut s.clip);
+                            s.clips.push(clip);
+                        }
+                        _ => s.clip.push(data),
+                    }
+                    Ok(false)
+                }
+                Char::OtaData => Ok(ota_packet(s, &data)),
+                Char::Rx => unreachable!(),
+            }
+        })?;
+        if drop_now {
+            self.drop_connection();
+        }
+        Ok(())
     }
 
     fn on_write(&self, chunk: Vec<u8>) -> Result<(), BleError> {
@@ -213,6 +282,12 @@ fn handle(s: &mut State, msg: &Value) {
             msg.get("id").and_then(Value::as_str).unwrap_or("").chars().filter(|c| *c != '"' && *c != '\\').collect();
         let reply = run_line(&mut s.stick, line.trim());
         emit(s, &json!({"src": "agent", "evt": "proto", "id": id, "reply": reply}));
+        return;
+    }
+    if let Some(o) = msg.get("ota").and_then(Value::as_object) {
+        if !s.old_firmware {
+            ota_message(s, o);
+        }
         return;
     }
     if let Some(snd) = msg.get("sound").and_then(Value::as_object) {
@@ -359,6 +434,215 @@ fn initial_state() -> Value {
     })
 }
 
+// --- firmware update (logic/ota_rx.cpp, roughly; test_ota.py's FakeStick) ------------------------
+
+/// The stick's side of a Bluetooth firmware update, with test knobs.
+#[derive(Debug, Clone)]
+pub struct Ota {
+    pub window: usize,
+    pub chunk: usize,
+    /// `(size, sha256, data so far)`
+    pub session: Option<(usize, String, Vec<u8>)>,
+    /// new bytes taken into the image
+    pub received: usize,
+    acked: usize,
+    gap: bool,
+    pub begins: Vec<Value>,
+    pub ends: usize,
+    pub committed: bool,
+    /// the next `begin` is refused with this code (`why`: "dictation")
+    pub refuse: Option<String>,
+    /// packet offsets to lose once
+    pub drop: HashSet<u32>,
+    /// the link drops once the image reaches this many bytes
+    pub disconnect_at: Option<usize>,
+    /// B pressed on the stick once the image reaches this many bytes
+    pub cancel_at: Option<usize>,
+    /// one byte of the first packet is flipped (the SHA-256 check fails at `end`)
+    pub corrupt: bool,
+    /// acks that get lost on the way (count down)
+    pub lose_acks: usize,
+    /// the next `end` finds the last 100 bytes missing (`incomplete`)
+    pub lose_tail: bool,
+    /// packets that arrived (with their sizes)
+    pub packets: Vec<usize>,
+    /// after `done` the stick restarts (the link drops) into the new version...
+    pub reboot: bool,
+    /// ...or, with this, rolls back to the old one
+    pub rollback: bool,
+    /// the largest number of bytes past the last ack a packet reached
+    pub max_in_flight: usize,
+}
+
+impl Default for Ota {
+    fn default() -> Self {
+        Self {
+            window: 16384,
+            chunk: 240,
+            session: None,
+            received: 0,
+            acked: 0,
+            gap: false,
+            begins: Vec::new(),
+            ends: 0,
+            committed: false,
+            refuse: None,
+            drop: HashSet::new(),
+            disconnect_at: None,
+            cancel_at: None,
+            corrupt: false,
+            lose_acks: 0,
+            lose_tail: false,
+            packets: Vec::new(),
+            max_in_flight: 0,
+            reboot: true,
+            rollback: false,
+        }
+    }
+}
+
+const OTA_ACK_EVERY: usize = 4096;
+
+fn ota_reply(s: &mut State, mut m: Value) {
+    m["src"] = json!("agent");
+    m["evt"] = json!("ota");
+    if m["state"] == "ack" && s.ota.lose_acks > 0 {
+        s.ota.lose_acks -= 1;
+        return;
+    }
+    emit(s, &m);
+}
+
+fn ota_message(s: &mut State, o: &serde_json::Map<String, Value>) {
+    if let Some(b) = o.get("begin") {
+        s.ota.begins.push(b.clone());
+        if let Some(code) = s.ota.refuse.clone() {
+            ota_reply(s, json!({"state": "refused", "error": code, "why": "dictation"}));
+            return;
+        }
+        let size = b["size"].as_u64().unwrap_or(0) as usize;
+        let sha = b["sha256"].as_str().unwrap_or("").to_string();
+        let (window, chunk) = (s.ota.window, s.ota.chunk);
+        if let Some((sz, sh, data)) = &s.ota.session
+            && *sz == size
+            && *sh == sha
+        {
+            let have = data.len();
+            s.ota.gap = false;
+            ota_reply(
+                s,
+                json!({"state": "ready", "offset": have, "size": size, "resumed": true, "window": window, "chunk": chunk}),
+            );
+            return;
+        }
+        s.ota.session = Some((size, sha, Vec::new()));
+        s.ota.acked = 0;
+        ota_reply(
+            s,
+            json!({"state": "ready", "offset": 0, "size": size, "resumed": false, "window": window, "chunk": chunk}),
+        );
+    } else if o.contains_key("end") {
+        s.ota.ends += 1;
+        if s.ota.lose_tail {
+            s.ota.lose_tail = false;
+            if let Some((_, _, data)) = s.ota.session.as_mut() {
+                let n = data.len().saturating_sub(100);
+                data.truncate(n);
+                s.ota.acked = n;
+            }
+        }
+        match s.ota.session.clone() {
+            None => ota_reply(s, json!({"state": "error", "error": "not_started", "offset": 0})),
+            Some((size, _, data)) if data.len() != size => {
+                ota_reply(s, json!({"state": "error", "error": "incomplete", "offset": data.len()}))
+            }
+            Some((size, sha, data)) => {
+                let got: String = Sha256::digest(&data).iter().map(|b| format!("{b:02x}")).collect();
+                if got != sha {
+                    s.ota.session = None;
+                    ota_reply(s, json!({"state": "error", "error": "sha", "offset": size}));
+                } else {
+                    s.ota.committed = true;
+                    ota_reply(s, json!({"state": "done", "offset": size}));
+                    if s.ota.reboot {
+                        let v = s.ota.begins.last().and_then(|b| b["version"].as_str()).unwrap_or("?").to_string();
+                        if !s.ota.rollback {
+                            s.stick["fw"] = json!(v);
+                            s.stick["otaPending"] = json!(false);
+                        }
+                        s.tx = None; // restarting
+                    }
+                }
+            }
+        }
+    } else if o.contains_key("cancel") {
+        s.ota.session = None;
+        ota_reply(s, json!({"state": "cancelled", "by": "agent", "offset": 0}));
+    } else if o.contains_key("status") {
+        let (receiving, offset, size) = match &s.ota.session {
+            Some((size, _, d)) => (true, d.len(), *size),
+            None => (false, 0, 0),
+        };
+        ota_reply(
+            s,
+            json!({"state": "status", "receiving": receiving, "offset": offset, "size": size, "pending": false}),
+        );
+    }
+}
+
+/// One OTA_DATA packet. Returns true when the link should drop now (`disconnect_at`).
+fn ota_packet(s: &mut State, pkt: &[u8]) -> bool {
+    if pkt.len() < 4 {
+        return false;
+    }
+    let off = u32::from_le_bytes([pkt[0], pkt[1], pkt[2], pkt[3]]);
+    let mut body = pkt[4..].to_vec();
+    s.ota.packets.push(body.len());
+    if s.ota.drop.remove(&off) {
+        return false;
+    }
+    let acked = s.ota.acked;
+    let Some((size, _, data)) = s.ota.session.as_mut() else { return false };
+    let size = *size;
+    let have = data.len();
+    let off = off as usize;
+    s.ota.max_in_flight = s.ota.max_in_flight.max((off + body.len()).saturating_sub(acked));
+    if off > have {
+        if !s.ota.gap {
+            s.ota.gap = true;
+            ota_reply(s, json!({"state": "ack", "offset": have, "gap": true}));
+        }
+        return false;
+    }
+    if off + body.len() <= have {
+        // a duplicate (a resend after a lost ack): ignored, and re-acked
+        ota_reply(s, json!({"state": "ack", "offset": have}));
+        return false;
+    }
+    if s.ota.corrupt && have == 0 && body.len() > 1 {
+        body[1] ^= 1;
+    }
+    let new = body.len() - (have - off);
+    data.extend_from_slice(&body[have - off..]);
+    let have = data.len();
+    s.ota.received += new;
+    s.ota.gap = false;
+    if have - s.ota.acked >= OTA_ACK_EVERY || have == size {
+        s.ota.acked = have;
+        ota_reply(s, json!({"state": "ack", "offset": have}));
+    }
+    if s.ota.cancel_at.is_some_and(|c| have >= c) {
+        s.ota.cancel_at = None;
+        s.ota.session = None;
+        ota_reply(s, json!({"state": "cancelled", "by": "stick", "offset": have}));
+    }
+    if s.ota.disconnect_at.is_some_and(|d| have >= d) {
+        s.ota.disconnect_at = None;
+        return true;
+    }
+    false
+}
+
 /// Its connection.
 pub struct FakeConn {
     stick: FakeStick,
@@ -367,6 +651,18 @@ pub struct FakeConn {
 impl Connection for FakeConn {
     async fn write_rx(&self, chunk: Vec<u8>) -> Result<(), BleError> {
         self.stick.on_write(chunk)
+    }
+    async fn write(&self, ch: Char, data: Vec<u8>, response: bool) -> Result<(), BleError> {
+        match ch {
+            Char::Rx => self.stick.on_write(data),
+            _ => self.stick.on_char_write(ch, data, response),
+        }
+    }
+    fn has(&self, ch: Char) -> bool {
+        ch == Char::Rx || !self.stick.with(|s| s.old_firmware)
+    }
+    fn max_write_without_response(&self) -> usize {
+        244
     }
     fn mtu(&self) -> usize {
         247

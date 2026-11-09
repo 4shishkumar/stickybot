@@ -2,7 +2,7 @@
 //! lines, answer `proto` requests by id, reconnect when it drops, stop when paused or unpicked.
 
 use crate::proto::{self, Line, LineDecoder};
-use crate::transport::{BleError, Connection, Connector, Found, Incoming, Target};
+use crate::transport::{BleError, Char, Connection, Connector, Found, Incoming, Target};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::future::Future;
@@ -248,6 +248,56 @@ impl<C: Connector> Link<C> {
         true
     }
 
+    /// The connected stick has this characteristic (AUDIO_IN / OTA_DATA need newer firmware).
+    pub fn has(&self, ch: Char) -> bool {
+        self.inner.current.lock().unwrap().as_ref().is_some_and(|c| c.has(ch))
+    }
+
+    /// Sends a sound clip's packets in order on AUDIO_IN (link.py `send_audio`): the first and the
+    /// last with response (the stick acknowledges start and end), the frames without, each one
+    /// waiting for room in CoreBluetooth's queue. False if not connected or a write failed.
+    pub async fn send_audio(&self, pkts: &[Vec<u8>]) -> bool {
+        let Some(conn) = self.inner.current.lock().unwrap().clone() else {
+            return false;
+        };
+        let _guard = self.inner.write_lock.lock().await;
+        for (i, p) in pkts.iter().enumerate() {
+            let response = i == 0 || i + 1 == pkts.len();
+            let r = if response {
+                write_retrying(&*conn, Char::AudioIn, p).await
+            } else {
+                conn.write(Char::AudioIn, p.clone(), false).await
+            };
+            if let Err(e) = r {
+                log::warn!("audio send failed: {e}");
+                return false;
+            }
+        }
+        true
+    }
+
+    /// One firmware packet on OTA_DATA, without response, after waiting for room (link.py
+    /// `ota_write`). False if the link is down.
+    pub async fn ota_write(&self, pkt: Vec<u8>) -> bool {
+        let Some(conn) = self.inner.current.lock().unwrap().clone() else {
+            return false;
+        };
+        let _guard = self.inner.write_lock.lock().await;
+        match conn.write(Char::OtaData, pkt, false).await {
+            Ok(()) => true,
+            Err(e) => {
+                log::warn!("ota write failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// The largest write without response (MTU - 3 if unknown, at least 20).
+    pub fn ota_max_write(&self) -> usize {
+        let n = self.inner.current.lock().unwrap().as_ref().map(|c| c.max_write_without_response()).unwrap_or(0);
+        if n > 0 { n } else { 20.max(self.mtu().max(23) - 3) }
+    }
+
     /// Runs a settings line on the stick (`@state`, `@brightness pct=60`) and returns its reply;
     /// `None` if not connected, the write failed, or no answer within 5 s.
     pub async fn request(&self, line: &str) -> Option<Value> {
@@ -448,6 +498,21 @@ async fn write_chunk<T: Connection>(conn: &T, part: &[u8]) -> Result<(), BleErro
     }
 }
 
+/// A write with response, tried again while the stick says "Insufficient Resource".
+async fn write_retrying<T: Connection>(conn: &T, ch: Char, data: &[u8]) -> Result<(), BleError> {
+    let mut n = 0;
+    loop {
+        match conn.write(ch, data.to_vec(), true).await {
+            Ok(()) => return Ok(()),
+            Err(e) if e.is_insufficient_resource() && n + 1 < proto::WRITE_TRIES => {
+                tokio::time::sleep(proto::retry_delay(n)).await;
+                n += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// Removes a request's waiter however the request ends.
 struct Forget<'a> {
     link: &'a Mutex<HashMap<String, oneshot::Sender<Option<Value>>>>,
@@ -601,6 +666,37 @@ mod tests {
             });
         }
         assert_eq!(got, ["start", "audio0", "audio1", "stop"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn clips_go_out_with_the_first_and_last_packet_acknowledged() {
+        let fake = FakeStick::new();
+        let link = connected(&fake, quiet()).await;
+        assert!(link.has(Char::AudioIn));
+        let pkts = vec![vec![0, 5, 0, 0, 0, 0x80, 0x3e], vec![1, 9, 9], vec![1, 8, 8], vec![2]];
+        assert!(link.send_audio(&pkts).await);
+        assert_eq!(fake.clips(), vec![pkts.clone()]);
+        assert_eq!(fake.audio_in_acked(), 2);
+        // a busy stick at the start: the acknowledged packet is tried again
+        fake.set_busy(1, "Insufficient Resource");
+        assert!(link.send_audio(&pkts).await);
+        assert_eq!(fake.clips().len(), 2);
+        // old firmware has no AUDIO_IN
+        fake.set_old_firmware(true);
+        assert!(!link.has(Char::AudioIn));
+        assert!(!link.send_audio(&pkts).await);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ota_writes_need_the_link() {
+        let fake = FakeStick::new();
+        let link = Link::with_options(fake.clone(), quiet());
+        assert!(!link.ota_write(vec![0, 0, 0, 0, 1]).await);
+        assert_eq!(link.ota_max_write(), 20);
+        let link = connected(&fake, quiet()).await;
+        assert_eq!(link.ota_max_write(), 244);
+        assert!(link.ota_write(vec![0, 0, 0, 0, 1]).await);
+        assert_eq!(fake.ota(|o| o.packets.clone()), vec![1]);
     }
 
     #[tokio::test(start_paused = true)]

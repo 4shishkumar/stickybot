@@ -1,17 +1,18 @@
 //! CoreBluetooth through objc2 (macOS). Why not btleplug: see the README. In short, btleplug 0.11
 //! drops the error of a failed write on macOS (the write never completes), so "Insufficient
 //! Resource" can't be retried, and it doesn't expose `canSendWriteWithoutResponse` or the write
-//! length, which the firmware update and sound clips (Phase 2) need.
+//! length, which the firmware update and sound clips need (both paced here).
 //!
 //! Every CoreBluetooth call runs on one serial dispatch queue (the manager's), and the delegate's
 //! callbacks arrive there too. They turn into Rust events: connection steps on a broadcast
-//! channel, notifications straight into the connection's channel, write results into its waiter.
+//! channel, notifications straight into the connection's channel, write results into its waiter,
+//! "ready to send" (room again for writes without response) into a `Notify`.
 //!
 //! The central manager is only made when it's first needed (a scan, or a stick to connect to),
 //! because making it is what asks macOS for the Bluetooth permission.
 
-use crate::proto::{AUDIO, NUS, RX, TX};
-use crate::transport::{BleError, Connection, Connector, Found, Incoming, Target};
+use crate::proto::{AUDIO, AUDIO_IN, NUS, OTA_DATA, RX, TX};
+use crate::transport::{BleError, Char, Connection, Connector, Found, Incoming, Target};
 use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
@@ -26,12 +27,15 @@ use objc2_foundation::{
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{OnceCell, broadcast, mpsc, oneshot, watch};
+use tokio::sync::{Notify, OnceCell, broadcast, mpsc, oneshot, watch};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const STEP_TIMEOUT: Duration = Duration::from_secs(10);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const POWER_TIMEOUT: Duration = Duration::from_secs(5);
+/// A write without response waits this long for room in CoreBluetooth's queue, then goes anyway
+/// (link.py waited ~2 s too; the clip / OTA protocols cope with a lost packet).
+const ROOM_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A CoreBluetooth object that crosses threads. SAFETY: we only *message* these objects on the
 /// manager's serial queue (`on_queue`); moving the pointer and retain/release are thread-safe.
@@ -62,7 +66,10 @@ enum Ev {
 
 struct Route {
     incoming: mpsc::UnboundedSender<Incoming>,
-    write_waiter: Option<oneshot::Sender<Result<(), BleError>>>,
+    /// the write with response in flight: its characteristic and who waits for the result
+    write_waiter: Option<(String, oneshot::Sender<Result<(), BleError>>)>,
+    /// `peripheralIsReadyToSendWriteWithoutResponse:` (room in the queue again)
+    ready: Arc<Notify>,
 }
 
 struct Seen {
@@ -154,10 +161,11 @@ define_class!(
         fn did_disconnect(&self, _central: &CBCentralManager, p: &CBPeripheral, _error: Option<&NSError>) {
             let id = peer_id(p);
             // dropping the route closes the connection's channel: the link sees the drop
-            if let Some(mut r) = self.ivars().routes.lock().unwrap().remove(&id)
-                && let Some(w) = r.write_waiter.take()
-            {
-                let _ = w.send(Err(BleError::new("disconnected")));
+            if let Some(mut r) = self.ivars().routes.lock().unwrap().remove(&id) {
+                if let Some((_, w)) = r.write_waiter.take() {
+                    let _ = w.send(Err(BleError::new("disconnected")));
+                }
+                r.ready.notify_waiters();
             }
             let _ = self.ivars().events.send(Ev::Disconnected(id));
         }
@@ -193,17 +201,23 @@ define_class!(
 
         #[unsafe(method(peripheral:didWriteValueForCharacteristic:error:))]
         fn did_write(&self, p: &CBPeripheral, c: &CBCharacteristic, error: Option<&NSError>) {
-            if uuid_of(unsafe { c.UUID() }) != RX {
-                return;
-            }
+            let uuid = uuid_of(unsafe { c.UUID() });
             let res = match error {
                 None => Ok(()),
                 Some(e) => Err(ble_error(e)),
             };
             if let Some(r) = self.ivars().routes.lock().unwrap().get_mut(&peer_id(p))
-                && let Some(w) = r.write_waiter.take()
+                && r.write_waiter.as_ref().is_some_and(|(u, _)| *u == uuid)
+                && let Some((_, w)) = r.write_waiter.take()
             {
                 let _ = w.send(res);
+            }
+        }
+
+        #[unsafe(method(peripheralIsReadyToSendWriteWithoutResponse:))]
+        fn ready_to_send(&self, p: &CBPeripheral) {
+            if let Some(r) = self.ivars().routes.lock().unwrap().get(&peer_id(p)) {
+                r.ready.notify_waiters();
             }
         }
 
@@ -366,7 +380,7 @@ impl CoreBluetooth {
         p: &Obj<CBPeripheral>,
         id: &str,
         ev: &mut broadcast::Receiver<Ev>,
-    ) -> Result<(Obj<CBCharacteristic>, usize), BleError> {
+    ) -> Result<(HashMap<String, Obj<CBCharacteristic>>, usize, usize), BleError> {
         let (central, pp, delegate) = (m.central.clone(), p.clone(), m.delegate.clone());
         self.on_queue(move || unsafe {
             pp.get().setDelegate(Some(ProtocolObject::from_ref(delegate.get())));
@@ -402,7 +416,9 @@ impl CoreBluetooth {
                 .map(|list| list.iter().map(|c| (uuid_of(unsafe { c.UUID() }), Obj(c))).collect())
                 .unwrap_or_default()
         });
-        let rx = chars.get(RX).cloned().ok_or_else(|| BleError::new("the stick has no RX characteristic"))?;
+        if !chars.contains_key(RX) {
+            return Err(BleError::new("the stick has no RX characteristic"));
+        }
         for uuid in [TX, AUDIO] {
             let Some(c) = chars.get(uuid).cloned() else {
                 if uuid == TX {
@@ -425,7 +441,9 @@ impl CoreBluetooth {
         let max = self.on_queue(move || unsafe {
             pp.get().maximumWriteValueLengthForType(CBCharacteristicWriteType::WithoutResponse)
         });
-        Ok((rx, max + 3))
+        let writable: HashMap<String, Obj<CBCharacteristic>> =
+            chars.into_iter().filter(|(u, _)| [RX, AUDIO_IN, OTA_DATA].contains(&u.as_str())).collect();
+        Ok((writable, max + 3, max))
     }
 }
 
@@ -467,22 +485,35 @@ pub struct CbConn {
     bt: CoreBluetooth,
     id: String,
     p: Obj<CBPeripheral>,
-    rx: Obj<CBCharacteristic>,
+    /// RX, and AUDIO_IN / OTA_DATA when the firmware has them
+    chars: HashMap<String, Obj<CBCharacteristic>>,
     mtu: usize,
+    max_without_response: usize,
 }
 
-impl Connection for CbConn {
-    async fn write_rx(&self, chunk: Vec<u8>) -> Result<(), BleError> {
+impl CbConn {
+    fn char(&self, ch: Char) -> Result<Obj<CBCharacteristic>, BleError> {
+        self.chars
+            .get(ch.uuid())
+            .cloned()
+            .ok_or_else(|| BleError::new(format!("the stick has no {ch:?} characteristic")))
+    }
+
+    async fn write_with_response(&self, c: Obj<CBCharacteristic>, data: Vec<u8>) -> Result<(), BleError> {
         let (tx, done) = oneshot::channel();
+        let uuid = {
+            let c = c.clone();
+            self.bt.on_queue(move || uuid_of(unsafe { c.get().UUID() }))
+        };
         {
             let mut routes = self.bt.inner.shared.routes.lock().unwrap();
             let r = routes.get_mut(&self.id).ok_or_else(|| BleError::new("disconnected"))?;
-            r.write_waiter = Some(tx);
+            r.write_waiter = Some((uuid, tx));
         }
-        let (p, c) = (self.p.clone(), self.rx.clone());
+        let p = self.p.clone();
         self.bt.on_queue(move || unsafe {
             p.get().writeValue_forCharacteristic_type(
-                &NSData::with_bytes(&chunk),
+                &NSData::with_bytes(&data),
                 c.get(),
                 CBCharacteristicWriteType::WithResponse,
             )
@@ -492,6 +523,62 @@ impl Connection for CbConn {
             Ok(Err(_)) => Err(BleError::new("disconnected")),
             Err(_) => Err(BleError::new("the write timed out")),
         }
+    }
+
+    /// Waits for `canSendWriteWithoutResponse` (woken by `peripheralIsReadyToSendWriteWithoutResponse:`),
+    /// then queues the packet. Checking and writing happen in one block on the Bluetooth queue, so
+    /// the room can't go away in between.
+    async fn write_without_response(&self, c: Obj<CBCharacteristic>, data: Vec<u8>) -> Result<(), BleError> {
+        let ready = {
+            let routes = self.bt.inner.shared.routes.lock().unwrap();
+            routes.get(&self.id).map(|r| r.ready.clone()).ok_or_else(|| BleError::new("disconnected"))?
+        };
+        let deadline = tokio::time::Instant::now() + ROOM_TIMEOUT;
+        loop {
+            let notified = ready.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable(); // before the check: a wake-up in between isn't lost
+            let late = tokio::time::Instant::now() >= deadline;
+            let (p, c2, d) = (self.p.clone(), c.clone(), data.clone());
+            let wrote = self.bt.on_queue(move || unsafe {
+                if late || p.get().canSendWriteWithoutResponse() {
+                    p.get().writeValue_forCharacteristic_type(
+                        &NSData::with_bytes(&d),
+                        c2.get(),
+                        CBCharacteristicWriteType::WithoutResponse,
+                    );
+                    true
+                } else {
+                    false
+                }
+            });
+            if wrote {
+                return Ok(());
+            }
+            if !self.bt.inner.shared.routes.lock().unwrap().contains_key(&self.id) {
+                return Err(BleError::new("disconnected"));
+            }
+            let _ = tokio::time::timeout_at(deadline, notified).await;
+        }
+    }
+}
+
+impl Connection for CbConn {
+    async fn write_rx(&self, chunk: Vec<u8>) -> Result<(), BleError> {
+        self.write(Char::Rx, chunk, true).await
+    }
+
+    async fn write(&self, ch: Char, data: Vec<u8>, response: bool) -> Result<(), BleError> {
+        let c = self.char(ch)?;
+        if response { self.write_with_response(c, data).await } else { self.write_without_response(c, data).await }
+    }
+
+    fn has(&self, ch: Char) -> bool {
+        self.chars.contains_key(ch.uuid())
+    }
+
+    fn max_write_without_response(&self) -> usize {
+        self.max_without_response
     }
 
     fn mtu(&self) -> usize {
@@ -522,14 +609,15 @@ impl Connector for CoreBluetooth {
             }
         };
         let (tx, rx) = mpsc::unbounded_channel();
-        self.inner.shared.routes.lock().unwrap().insert(id.clone(), Route { incoming: tx, write_waiter: None });
+        let route = Route { incoming: tx, write_waiter: None, ready: Arc::new(Notify::new()) };
+        self.inner.shared.routes.lock().unwrap().insert(id.clone(), route);
         let mut ev = self.inner.shared.events.subscribe();
         // if this future is dropped half way (re-picked, paused), don't leave a connection behind
         let mut guard = CancelOnDrop { bt: self, p: Some(p.clone()), id: &id };
         match self.setup(m, &p, &id, &mut ev).await {
-            Ok((rxc, mtu)) => {
+            Ok((chars, mtu, max_without_response)) => {
                 guard.p = None;
-                Ok((CbConn { bt: self.clone(), id: id.clone(), p, rx: rxc, mtu }, rx))
+                Ok((CbConn { bt: self.clone(), id: id.clone(), p, chars, mtu, max_without_response }, rx))
             }
             Err(e) => Err(e), // the guard cancels
         }

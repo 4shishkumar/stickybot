@@ -6,11 +6,13 @@
 //! - [`Link`]: the reconnect loop, hellos, `proto` requests with ids, the message stream.
 //! - [`transport`]: what the link needs from Bluetooth ([`Connector`] / [`Connection`]).
 //! - [`corebt`]: CoreBluetooth through objc2 (macOS).
+//! - [`ota`]: the firmware update over Bluetooth (the windowed transfer).
 //! - [`fake`]: a stick in memory, for tests and `--fake-stick`.
 
 pub mod adpcm;
 pub mod fake;
 mod link;
+pub mod ota;
 pub mod proto;
 pub mod transport;
 
@@ -18,7 +20,7 @@ pub mod transport;
 pub mod corebt;
 
 pub use link::{FromStick, Gate, Link, LinkState, NOT_FOUND_REASON, Options};
-pub use transport::{BleError, Connection, Connector, Found, Incoming, Target};
+pub use transport::{BleError, Char, Connection, Connector, Found, Incoming, Target};
 
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -57,6 +59,27 @@ impl Connection for BackendConn {
             #[cfg(target_os = "macos")]
             BackendConn::CoreBluetooth(c) => c.write_rx(chunk).await,
             BackendConn::Fake(c) => c.write_rx(chunk).await,
+        }
+    }
+    async fn write(&self, ch: Char, data: Vec<u8>, response: bool) -> Result<(), BleError> {
+        match self {
+            #[cfg(target_os = "macos")]
+            BackendConn::CoreBluetooth(c) => c.write(ch, data, response).await,
+            BackendConn::Fake(c) => c.write(ch, data, response).await,
+        }
+    }
+    fn has(&self, ch: Char) -> bool {
+        match self {
+            #[cfg(target_os = "macos")]
+            BackendConn::CoreBluetooth(c) => c.has(ch),
+            BackendConn::Fake(c) => c.has(ch),
+        }
+    }
+    fn max_write_without_response(&self) -> usize {
+        match self {
+            #[cfg(target_os = "macos")]
+            BackendConn::CoreBluetooth(c) => c.max_write_without_response(),
+            BackendConn::Fake(c) => c.max_write_without_response(),
         }
     }
     fn mtu(&self) -> usize {

@@ -5,8 +5,10 @@
 //! Everything else answers 404, which the page already shows as "not available in this version".
 
 pub mod api;
+pub mod clips;
 pub mod commands;
 pub mod config;
+pub mod firmware;
 pub mod hub;
 pub mod python_agent;
 pub mod speech;
@@ -71,6 +73,10 @@ pub struct AppState {
     stats: Mutex<Map<String, Value>>,
     /// the last good brain reply `{"t", "text"}` (the home card, later)
     pub last_reply: Mutex<Option<Value>>,
+    /// firmware update jobs (Bluetooth)
+    pub jobs: firmware::Jobs,
+    /// how long a firmware update waits for things (tests shorten it)
+    pub ota_timings: Mutex<firmware::UpdateTimings>,
 }
 
 impl AppState {
@@ -107,6 +113,8 @@ impl AppState {
                     .unwrap_or_default(),
             ),
             last_reply: Mutex::new(None),
+            jobs: firmware::Jobs::default(),
+            ota_timings: Mutex::new(firmware::UpdateTimings::default()),
         });
         let weak = Arc::downgrade(&st);
         st.speech.on_change(move |p| {
@@ -115,6 +123,12 @@ impl AppState {
             }
         });
         Ok(st)
+    }
+
+    /// Firmware bundles on this Mac, best first (`~/.stickybot-rs/firmware`, `$STICKYBOT_RS_FIRMWARE`).
+    pub fn firmware(&self) -> Vec<Value> {
+        let extra = std::env::var_os("STICKYBOT_RS_FIRMWARE").map(std::path::PathBuf::from);
+        firmware::bundles(&firmware::firmware_root(&self.paths.home), extra.as_deref())
     }
 
     pub fn runner(&self) -> commands::Runner {
