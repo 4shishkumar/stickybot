@@ -81,7 +81,7 @@ Bluetooth until it's needed.
 | `GET /api/status` | the Python shape; unported parts are `null`/empty (`brain`, `wireless_mic`, `github`, `weather`…), plus `held_back` |
 | `GET /api/events` | SSE: catch-up of the last 150, `link` / `state` / `config` / `sounds` events, keep-alive every 15 s |
 | `GET` / `PUT /api/config` | the Python `DEFAULT_CONFIG` keys and checks (brain, OpenRouter model / max tokens, the stick's shape); unknown keys dropped; a new `stick` re-targets the link |
-| `POST /api/stick/proto` | `{"line":"@state"}` → `{"ok","via":"ble","reply","error"}` over Bluetooth (USB serial fallback not yet) |
+| `POST /api/stick/proto` | `{"line":"@state"}` → `{"ok","via":"ble","reply","error"}` over Bluetooth; when Bluetooth isn't there or doesn't answer, over the stick's USB serial (`via: "usb"`, `usb.rs`: Espressif ports, VID 0x303A, 115200 baud, the `@{…}` reply line) |
 | `GET /api/scan` | sticks advertising the service, strongest first |
 | `POST /api/pause` | pause / resume the link |
 | `GET` / `PUT /api/sounds`, `POST /api/sounds/play` | the stick's sound settings (`{"sound":…}` → `evt: sounds`, 3 s) |
@@ -114,7 +114,7 @@ its *Pick your stick* step scans and saves the stick to **this** app's config.
 | **Wireless Wispr mic** | Hold A away from USB: the stick streams its mic (`prepare` → ADPCM → `stop`); this app makes the **`<stick>-bt-mic`** device (the Python app's name, `stick_mic_device.py`'s slug rules, so Wispr's ranking finds it; UID **`com.stickkey.rust-wireless-mic`**, never the Python agent's `com.stickkey.wireless-mic`), waits `wispr_switch_ms` (250) after creating it, answers `ready`, plays the frames (in order by seq, a lost one = 20 ms of silence, resampled, ~80 ms jitter buffer) into the carrier, keeps the device `wispr_tail_ms` (800) after `stop` (≤ 4 s more while Wispr still reads it), then removes it. `wmic` / `wready` in the hello. Carrier as `wireless_mic_carrier` (`auto`: the tap once its inaudible -80 dBFS check passed, else BlackHole 2ch; `tap`; `blackhole`). The stick on USB (`evt: usb`): no device, `ready` with `"device": false` (Wispr uses the stick's USB mic). `POST /api/wireless-mic/show` `{secs}`, `POST /api/wireless-mic/check`, `status.wireless_mic`, `wispr_mic` / `stick_mic` events. Cleanup of *our UID only* at start, on quit (Tauri `Exit`, headless Ctrl-C) and on disconnect / USB / off / rename. |
 | **Logs** | `GET /api/logs?n=` (300): the last lines of `~/.stickybot-rs/app.log` (`logs.rs`: every log line goes to stderr as before (`RUST_LOG`, default `info`), to `app.log` (rotated at 2 MB, `app.log.1`/`.2` kept, like the Python `RotatingFileHandler`) and to the live feed as `log` events, the Logs page's *Follow live*). |
 | **Updates (firmware)** | `releases.rs` (releases.py): SemVer precedence, the latest release per channel (`update_channel` stable / beta), listed with `gh` when installed, else api.github.com over HTTPS; the release's firmware downloaded into `~/.stickybot-rs/firmware/<version>/` through a temporary folder, every part checked against the manifest's sha256 and GitHub's asset digest, 3 versions kept. `updates.rs` (updates.py): a check 20 s after start-up and every 24 h (`update_check`), state in `updates.json`, the stick's version from `@state` → `firmware_update` / the banner (`status.update`, `update` events). `GET /api/update`, `POST /api/update/check`, `GET /api/update/jobs/{id}`. Not ported: the app updating itself (`POST /api/update/agent` answers 409 with why; build it from the repo) and the "Update ready" toast on the stick (needs the events notifier). |
-| **Firmware over Bluetooth** | `GET /api/firmware` (bundle + connected stick; `usb` always empty), `POST /api/firmware/ota` `{force}`, `GET /api/firmware/jobs/{id}` (SSE), `POST /api/firmware/jobs/{id}/cancel`. Bundles in `~/.stickybot-rs/firmware/<version>|local/` or `$STICKYBOT_RS_FIRMWARE`. `ota.py`'s checks (support, pending, versions / force, manifest SHA-256), windowed transfer, resume, then waits for the stick to come back with the new version (confirmed / rolled back). |
+| **Firmware over Bluetooth** | `GET /api/firmware` (bundle + connected stick; `usb`: sticks on USB with their version from `@state`, cached 10 s; a port in the bootloader is listed as "download mode" and never opened), `POST /api/firmware/ota` `{force}`, `GET /api/firmware/jobs/{id}` (SSE), `POST /api/firmware/jobs/{id}/cancel`. Bundles in `~/.stickybot-rs/firmware/<version>|local/` or `$STICKYBOT_RS_FIRMWARE`. `ota.py`'s checks (support, pending, versions / force, manifest SHA-256), windowed transfer, resume, then waits for the stick to come back with the new version (confirmed / rolled back). |
 
 ### Importing the Python app's settings (`migrate.rs`)
 
@@ -157,7 +157,7 @@ where the time goes on the real stick.
 - The hello carries `t` / `tz` / `wmic` / `wready` (no home card, weather, `world`).
 - The stick renamed on the stick itself (the `@state` name check on connect) doesn't rename the mic
   yet; picking the stick again in the dashboard does.
-- Speech output (reading replies aloud), USB serial for `@…` lines, USB flashing.
+- Speech output (reading replies aloud).
 
 ## Safety: one stick, one connection
 

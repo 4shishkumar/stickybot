@@ -278,16 +278,18 @@ async fn stick_proto(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json
         Ok(l) => l,
         Err(e) => return axum::Json(json!({"ok": false, "via": null, "reply": null, "error": e})),
     };
-    if st.link.connected() {
-        if let Some(reply) = st.link.request(line).await {
-            let ok = reply.get("ok").and_then(Value::as_bool).unwrap_or(true);
-            let error = reply.get("error").cloned().unwrap_or(Value::Null);
-            return axum::Json(json!({"ok": ok, "via": "ble", "reply": reply, "error": error}));
-        }
+    let ble = st.link.connected();
+    if ble && let Some(reply) = st.link.request(line).await {
+        let ok = reply.get("ok").and_then(Value::as_bool).unwrap_or(true);
+        let error = reply.get("error").cloned().unwrap_or(Value::Null);
+        return axum::Json(json!({"ok": ok, "via": "ble", "reply": reply, "error": error}));
+    }
+    // over USB (firmware_api.py `Stick.run`): when Bluetooth isn't there or didn't answer
+    let r = st.usb.run(line).await;
+    if ble && r["via"].is_null() && !st.usb.is_flashing() {
         return axum::Json(json!({"ok": false, "via": "ble", "reply": null, "error": "the stick didn't answer"}));
     }
-    axum::Json(json!({"ok": false, "via": null, "reply": null,
-                      "error": "no stick connected by Bluetooth (USB isn't in the Rust app yet)"}))
+    axum::Json(r)
 }
 
 async fn scan(State(st): State<Arc<AppState>>) -> Response {
@@ -548,10 +550,11 @@ async fn clip_play(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<V
     axum::Json(json!({"ok": ok, "error": if ok { Value::Null } else { json!("stick not connected") }}))
 }
 
-/// The bundled firmware, sticks on USB (not in the Rust app: always empty), the connected stick.
+/// The bundled firmware, sticks on USB (with their versions), the connected stick.
 async fn firmware_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
     let bundled = st.firmware().first().map(crate::firmware::describe).unwrap_or(Value::Null);
-    axum::Json(json!({"bundled": bundled, "usb": [], "connected": crate::firmware::connected(&st.link).await}))
+    let usb = st.usb.sticks().await;
+    axum::Json(json!({"bundled": bundled, "usb": usb, "connected": crate::firmware::connected(&st.link).await}))
 }
 
 /// Starts a firmware update over Bluetooth: `{"force"}` -> `{"job"}`.
@@ -1127,6 +1130,27 @@ mod tests {
         let (s, v, _) = call(&app, req("POST", "/api/update/agent", Some(json!({})), tok)).await;
         assert_eq!(s, StatusCode::CONFLICT);
         assert!(v["error"].as_str().unwrap().contains("doesn't update itself"));
+    }
+
+    #[tokio::test]
+    async fn proto_falls_back_to_usb_and_usb_sticks_are_listed() {
+        let (app, st, fake) = app("usb", true).await;
+        let usb = crate::usb::FakeUsb::stick("/dev/cu.usbmodem9", "2.1.0");
+        st.usb.set_backend(usb.clone());
+        let tok = Some(st.token.as_str());
+        // Bluetooth first
+        let (_, v, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@state"})), tok)).await;
+        assert_eq!(v["via"], "ble");
+        // Bluetooth silent: the stick on USB answers
+        fake.set_silent(true);
+        let (_, v, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@state"})), tok)).await;
+        assert_eq!((v["via"].as_str(), v["reply"]["fw"].as_str()), (Some("usb"), Some("2.1.0")));
+        let (_, v, _) = call(&app, req("GET", "/api/firmware", None, None)).await;
+        assert_eq!(v["usb"], json!([{"port": "/dev/cu.usbmodem9", "serial": "SN1", "version": "2.1.0", "board": "m5stick-s3"}]));
+        // no stick on USB either: Bluetooth's answer
+        usb.ports.lock().unwrap().clear();
+        let (_, v, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@state"})), tok)).await;
+        assert_eq!((v["via"].as_str(), v["error"].as_str()), (Some("ble"), Some("the stick didn't answer")));
     }
 
     #[tokio::test]

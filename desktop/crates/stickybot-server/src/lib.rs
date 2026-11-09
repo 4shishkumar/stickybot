@@ -19,6 +19,7 @@ pub mod releases;
 pub mod speech;
 pub mod talk;
 pub mod updates;
+pub mod usb;
 pub mod wmic;
 
 use serde_json::{Map, Value, json};
@@ -94,6 +95,9 @@ pub struct AppState {
     pub wmic: wmic::WirelessMic,
     /// release checks + firmware downloads (`updates.rs`)
     pub updates: updates::Updates,
+    /// the stick on USB: `@…` lines, the list with versions, flashing (`usb.rs`, `flasher.rs`).
+    /// With the fake stick there's no USB at all (tests never open a real port).
+    pub usb: usb::UsbSticks,
     /// the Python app's folder (read-only; see `migrate.rs`)
     pub import_from: Option<PathBuf>,
     me: OnceLock<Weak<AppState>>,
@@ -139,6 +143,11 @@ impl AppState {
             ota_timings: Mutex::new(firmware::UpdateTimings::default()),
             wmic: wmic::WirelessMic::new(),
             updates: updates::Updates::new(&paths_home),
+            usb: if fake {
+                usb::UsbSticks::new(Arc::new(usb::FakeUsb::default()))
+            } else {
+                usb::UsbSticks::default()
+            },
             import_from: opts.import_from.clone(),
             me: OnceLock::new(),
         });
