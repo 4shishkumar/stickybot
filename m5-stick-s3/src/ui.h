@@ -62,7 +62,7 @@ struct Dash {
 
 struct MenuView {
   const char* title;
-  String      lines[30];
+  String      lines[40];  // the menu has 35 items (2.5.0); menu.cpp static_asserts it fits
   int         count;
   int         selected;
   const char* hint;
@@ -75,6 +75,9 @@ void setFlipped(bool flipped);
 // have a landscape layout. Takes effect at the next draw.
 void setOrientation(bool flipped, int side);
 void setBrightness(uint8_t pct);
+// For a screen drawn outside ui.cpp with a landscape layout (the remote modes, air_ui.cpp):
+// turns to the held side (setOrientation) and undims; true = draw the landscape layout.
+bool turnToHeldSide();
 
 // Screen power. The screen is off by default to save battery: on for a while
 // after boot, then only when woken (button B, menu, pairing, web settings).

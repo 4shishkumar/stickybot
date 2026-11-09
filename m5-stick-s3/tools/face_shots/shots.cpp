@@ -21,6 +21,7 @@
 #include "ui_draw.h"
 #include "faces/faces.h"
 #include "faces/pkg/engine.h"
+#include "air_ui.h"
 
 // --- The bits of the firmware the screens touch -------------------------------------
 static uint32_t now_ = 1000;
@@ -395,6 +396,43 @@ static int fuzz(const std::string& file, int n) {
   return 0;
 }
 
+// The remote modes' screens (air_ui.cpp), portrait and landscape -> <dir>/air-*.png + a sheet
+static void airShots(const std::string& dir) {
+  mkdir(dir.c_str(), 0755);
+  size_t first = shots.size();
+  struct Case { const char* name; airui::View v; };
+  std::vector<Case> cases;
+  auto add = [&](const char* name, airui::View v) { cases.push_back({name, v}); };
+  airui::View m;
+  m.battery = 78;
+  add("mouse", m);
+  m.state = airui::SCROLLING; add("mouse-scroll", m);
+  m.state = airui::PAUSED; m.flash = "Paused"; m.flashT = 0.2f; add("mouse-paused", m);
+  m.flash = ""; m.flashT = 1;
+  m.state = airui::RESTING; add("mouse-resting", m);
+  m.state = airui::POINTING; m.mouseUnknown = true; add("mouse-repair", m);
+  airui::View p;
+  p.screen = airui::Screen::PRESENTER; p.battery = 64; p.targetMin = 20;
+  add("presenter-idle", p);
+  p.phase = 1; p.timerRunning = true; p.elapsedMs = 7 * 60000 + 42000; p.slide = 9; add("presenter", p);
+  p.phase = 2; p.elapsedMs = 18 * 60000 + 5000; p.laser = true; p.slide = 23; add("presenter-warn-laser", p);
+  p.laser = false; p.phase = 3; p.elapsedMs = 21 * 60000 + 30000; p.black = true; add("presenter-over-black", p);
+  airui::View d;
+  d.screen = airui::Screen::MEDIA; d.battery = 51;
+  add("media", d);
+  d.lastAction = airui::VOL_UP; d.knob = 0.6f; d.flashT = 0.3f; add("media-volume", d);
+  d.lastAction = airui::NEXT; d.knob = 0; add("media-next", d);
+  d.connected = false; add("media-offline", d);
+  for (int side : {0, 1}) {
+    ui::setOrientation(false, side);
+    for (auto& c : cases) {
+      airui::draw(c.v);
+      savePng(dir + "/air-" + c.name + (side ? "-wide" : "") + ".png");
+    }
+  }
+  sheet(dir + "/air-sheet.png", first, shots.size(), 7);
+}
+
 int main(int argc, char** argv) {
   ui::begin();
   std::string mode = argc > 1 ? argv[1] : "demo";
@@ -410,6 +448,7 @@ int main(int argc, char** argv) {
     printf("%s\n", ok ? "ok" : (String("invalid: ") + err).c_str());
     return ok ? 0 : 3;
   }
+  if (mode == "air") { airShots(dir); return 0; }
   if (mode == "previews") previews(dir);
   else demo(dir, argc > 3 ? argv[3] : "all");
   return 0;

@@ -39,6 +39,26 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   the stick's firmware) before sending it over Bluetooth. A stick older than 2.4.0 is asked
   to update first. CI checks face pull requests (validation, re-rendered previews, version
   raised) and publishes the signed catalog.
+- **Air mouse, presenter and media remote (firmware 2.5.0).** The stick is now a mouse too
+  (Bluetooth keyboard + media keys + mouse). Three modes, from the stick's menu (the last
+  items), the dashboard's Stick page (*Mouse & presenter*) or `@mode`:
+  - **Air mouse**: turn the stick to point (gyro, follows how you hold it: like a remote,
+    upright or sideways). A = left button (hold to drag), B = right click, hold B and tilt
+    to scroll, A+B together pauses. Set down, it stops at once and re-learns the gyro's
+    drift; untouched for 5 minutes it goes back to Home.
+  - **Presenter**: A = next slide, B = previous, hold A = laser pointer (the mouse pointer
+    moves while held), double-press B = black screen. A big talk timer (starts on the first
+    click; orange near the target, red past it), the battery. Keynote, PowerPoint, Google
+    Slides (arrow keys, or Page Down / Up).
+  - **Media remote**: twist like a knob for volume, flick right / left for the next / previous
+    track, A = play / pause, B = mute.
+  - Hold A and B together for a second to go back to Home. Pointer speed, invert, scroll
+    speed and direction, the talk length and the slide keys are on the dashboard and in
+    `@air` (PROTOCOL.md).
+  - **Updating from an older firmware:** the Mac learns about the new mouse when the stick
+    reconnects (the stick tells it its services changed). If the air mouse says *Pair again
+    once* (or the pointer doesn't move), forget the stick in the Mac's Bluetooth settings and
+    connect it again, once. The keyboard, the password key and the combos work as before.
 
 ### Fixed
 - **The wireless Wispr mic failed or lagged with Bluetooth headphones as the Mac's output**

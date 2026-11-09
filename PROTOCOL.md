@@ -92,6 +92,8 @@ and can be ignored.
 | `face` | `id=<face>` or `demo=<face\|all>` | StickS3 2.1.0+: the Home face (saved; state: `face`, and `faces`: `[{"id","title","about"}]`), or play a face's demo on the stick (A or B ends it). 2.4.0+: an installed face package's id works too |
 | `faces` | `page=<n>` or `rm=<id\|all>` | StickS3 2.4.0+: the installed face packages, 6 a page, or remove them (see section 5, *Face packages over Bluetooth*; state: `pkgFaces`) |
 | `clock24` | `on=0\|1` | StickS3 2.4.0+: the time as 24-hour ("15:05") on every face, the dock clock and the demos (state: `clock24`) |
+| `mode` | `name=mouse\|presenter\|media\|home` | StickS3 2.5.0+: start a remote mode on the stick (air mouse, presenter, media remote), or end it (`home`). Human form: `mode <name>` |
+| `air` | any of `sens=1..10`, `invx=0\|1`, `invy=0\|1`, `scroll=1..10`, `invscroll=0\|1`, `talk=0..600`, `keys=arrows\|pages` | StickS3 2.5.0+: the remote modes' settings (pointer speed, invert, tilt-scroll speed and direction, the presenter's talk length in minutes (0 = none), the slide keys). Replies `{"ok":true,"air":{…}}` |
 
 Responses that end in a restart include `"restarting":true`.
 
@@ -118,6 +120,11 @@ Errors: `@{"ok":false,"error":"<message>"}`.
 - `standby`: only present on boards with a battery (minutes, 0 = never)
 - `brightness`: only present on boards with a screen (percent)
 - `web.mode`: `off` | `joining` | `home` (joined home Wi-Fi) | `hotspot`
+- StickS3 2.5.0+: `air`: `{"mode":"home|mouse|presenter|media","sens":5,"invX":false,"invY":false,
+  "scroll":5,"invScroll":false,"talkMin":0,"keys":"arrows|pages","mouseKnown":true}`.
+  `mouseKnown`: the Mac subscribed to the mouse report on this connection (false after it
+  connected = it kept a keyboard-only copy from before 2.5.0: forget the stick on the Mac and
+  pair again, once). The HID report map is keyboard (ID 1) + consumer (ID 2) + mouse (ID 3).
 - StickS3 2.4.0+: `clock24` (true: 24-hour time), `pkgFaces` (`{"n":<installed face packages>,"fmt":[1]}`;
   their list is `@faces`, section 5)
 

@@ -2,6 +2,7 @@
 // and its firmware.
 import {h, clear, card, field, toggle, proto, get, put, post, report, toast, store, fmtAgo, recall, remember} from "../lib.js";
 import {firmwarePanel} from "../firmware.js";
+import {airCard} from "./air.js";
 
 export const title = "Stick";
 export const subtitle = "The stick's own settings. They're saved on the stick, so they stay with it.";
@@ -55,7 +56,7 @@ function paint(res) {
         : (res && res.error) || "Check it's switched on and connected (Overview shows the link)."))));
   } else {
     root.append(identityCard(), ...(st.faces ? [faceCard(), marketCard()] : []), comboCard(), unlockCard(), slotsCard(),
-      screenCard(), motionCard(), soundCard());
+      screenCard(), motionCard(), ...(st.air ? [airCard(st, send)] : []), soundCard());  // air: firmware 2.5.0+
   }
   root.appendChild(card("Firmware", firmwarePanel()));
 }

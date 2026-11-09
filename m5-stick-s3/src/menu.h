@@ -8,7 +8,7 @@
 
 namespace menu {
 
-enum class Action { NONE, REDRAW, TEST, WEB, FLIP, BT_TOGGLE, FORGET, BRIGHTNESS, VOLUME, POWER_OFF, SAVE, CANCEL };
+enum class Action { NONE, REDRAW, TEST, WEB, FLIP, BT_TOGGLE, FORGET, BRIGHTNESS, VOLUME, POWER_OFF, SAVE, CANCEL, AIR };
 
 struct Draft {
   Combo   combo;
@@ -34,5 +34,6 @@ Action       repeat();    // BtnB held (auto-repeat)
 bool         timedOut();
 const Draft& draft();
 ui::MenuView view();
+uint8_t      remoteMode();  // after Action::AIR: 1 air mouse, 2 presenter, 3 media (air.h)
 
 }  // namespace menu

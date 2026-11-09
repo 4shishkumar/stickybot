@@ -22,5 +22,9 @@ const orientation::Tracker& facing();     // which way up, debounced (auto-rotat
 void  resetFacing(orientation::Orient o);  // at boot: start from the saved flip
 void  accel(float& x, float& y, float& z);  // last reading (g)
 void  gyro(float& x, float& y, float& z);   // last reading (deg/s)
+// The air mouse (air.cpp) reads at 100 Hz instead of 50, and takes each new sample once.
+void     setFast(bool on);
+uint32_t sampleCount();      // goes up by one per new reading
+uint32_t sampleMicros();     // when the last one was read
 
 }  // namespace motion
