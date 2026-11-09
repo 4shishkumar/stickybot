@@ -244,6 +244,14 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
 }
 
 fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<Recording>) {
+    if msg.get("cmd").and_then(Value::as_str) == Some("permission") {
+        // A / B on an approval prompt
+        let (id, decision) = (msg.get("id").and_then(Value::as_str), msg.get("decision").and_then(Value::as_str));
+        if let (Some(id), Some(d)) = (id, decision) {
+            st.approvals.decide(id, d, "stick");
+        }
+        return;
+    }
     if msg.get("src").and_then(Value::as_str) != Some("agent") {
         return;
     }
@@ -420,7 +428,7 @@ pub async fn handle_text(st: Arc<AppState>, text: String, source: &str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::Options;
     use crate::commands::Action;

@@ -5,6 +5,7 @@
 //! Everything else answers 404, which the page already shows as "not available in this version".
 
 pub mod api;
+pub mod approvals;
 pub mod clips;
 pub mod commands;
 pub mod config;
@@ -75,6 +76,8 @@ pub struct AppState {
     pub last_reply: Mutex<Option<Value>>,
     /// firmware update jobs (Bluetooth)
     pub jobs: firmware::Jobs,
+    /// Claude Code permission prompts waiting on the stick
+    pub approvals: approvals::Approvals,
     /// how long a firmware update waits for things (tests shorten it)
     pub ota_timings: Mutex<firmware::UpdateTimings>,
 }
@@ -114,6 +117,7 @@ impl AppState {
             ),
             last_reply: Mutex::new(None),
             jobs: firmware::Jobs::default(),
+            approvals: approvals::Approvals::default(),
             ota_timings: Mutex::new(firmware::UpdateTimings::default()),
         });
         let weak = Arc::downgrade(&st);
@@ -251,7 +255,7 @@ impl AppState {
             "busy": self.brain().busy(),
             "mtu": self.link.mtu(),
             "stats": Value::Object(self.stats.lock().unwrap().clone()),
-            "prompts": [],
+            "prompts": self.approvals.list(),
             "asks": [],
             "mcp": false,
             "model": cfg.get("model").cloned().unwrap_or(Value::Null),

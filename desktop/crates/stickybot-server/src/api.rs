@@ -51,6 +51,8 @@ pub const PORTED: &[&str] = &[
     "POST /api/speech/retry",
     "GET /api/clips",
     "POST /api/clips/play",
+    "POST /api/permission",
+    "POST /api/permission/decide",
     "GET /api/firmware",
     "POST /api/firmware/ota",
     "GET /api/firmware/jobs/{id}",
@@ -66,8 +68,6 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
     ("GET /api/install", "setup page (#install)"),
     ("/api/install/*", "setup page steps and jobs"),
     ("GET /api/logs", "log viewer (Logs)"),
-    ("POST /api/permission", "Claude Code approvals (hook long-poll)"),
-    ("POST /api/permission/decide", "Claude Code approvals"),
     ("GET /api/voices", "macOS voices (say)"),
     ("POST /api/voice/test", "speech"),
     ("POST /api/events/test", "stick events"),
@@ -110,6 +110,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/commands/test", post(test_command))
         .route("/api/speech", get(speech_status))
         .route("/api/speech/retry", post(speech_retry))
+        .route("/api/permission", post(permission))
+        .route("/api/permission/decide", post(permission_decide))
         .route("/api/clips", get(clip_list))
         .route("/api/clips/play", post(clip_play))
         .route("/api/firmware", get(firmware_info))
@@ -363,6 +365,31 @@ async fn speech_retry(State(st): State<Arc<AppState>>) -> Response {
         }
         _ => err(StatusCode::CONFLICT, "the speech model is already loading or ready"),
     }
+}
+
+/// Long-poll from the Claude Code hook: waits for A / B on the stick or the dashboard.
+/// `{"tool","hint","from","wait"}` -> `{"decision": "allow"|"deny"|null}`.
+async fn permission(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<Value> {
+    let b = body_obj(&body);
+    let s = |k: &str, d: &str| b.get(k).and_then(Value::as_str).unwrap_or(d).to_string();
+    let wait = b.get("wait").and_then(Value::as_f64).unwrap_or(30.0).clamp(0.0, 120.0);
+    let d = crate::approvals::ask_permission(
+        &st,
+        &s("tool", "?"),
+        &s("hint", ""),
+        &s("from", "terminal"),
+        Duration::from_secs_f64(wait),
+    )
+    .await;
+    axum::Json(json!({"decision": d}))
+}
+
+async fn permission_decide(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<Value> {
+    let b = body_obj(&body);
+    let id = b.get("id").and_then(Value::as_str).unwrap_or("");
+    let allow = b.get("allow").and_then(Value::as_bool).unwrap_or(false);
+    st.approvals.decide(id, if allow { "allow" } else { "deny" }, "dashboard");
+    axum::Json(json!({"ok": true}))
 }
 
 async fn clip_list(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
@@ -800,6 +827,31 @@ mod tests {
         assert_eq!(clips[0].len(), 1 + 13 + 1); // start, 4000 / 320 frames, end
         let (_, v, _) = call(&app, req("POST", "/api/clips/play", Some(json!({"pack": "..", "name": "x"})), tok)).await;
         assert_eq!(v["error"], "no such sound");
+    }
+
+    #[tokio::test]
+    async fn the_hook_long_polls_and_the_dashboard_decides() {
+        let (app, st, fake) = app("perm", true).await;
+        crate::talk::spawn(st.clone());
+        let tok = st.token.clone();
+        let a = app.clone();
+        let t2 = tok.clone();
+        let poll = tokio::spawn(async move {
+            call(&a, req("POST", "/api/permission", Some(json!({"tool": "Bash", "hint": "ls", "wait": 5})), Some(&t2)))
+                .await
+        });
+        let mut id = String::new();
+        for _ in 0..100 {
+            if let Some(i) = st.status()["prompts"][0]["id"].as_str() {
+                id = i.to_string();
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(String::from_utf8(fake.writes().concat()).unwrap().contains(&id));
+        call(&app, req("POST", "/api/permission/decide", Some(json!({"id": id, "allow": true})), Some(&tok))).await;
+        let (_, v, _) = poll.await.unwrap();
+        assert_eq!(v, json!({"decision": "allow"}));
     }
 
     #[tokio::test]
