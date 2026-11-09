@@ -105,6 +105,8 @@ static bool wide() {
 
 // Landscape: the end of the screen that button A is at (+1 right, -1 left). The
 // stick turned with its right edge up (rotation 1) has A on the right.
+bool turnToHeldSide() { return wide(); }
+
 static int aEnd() { return orientation::buttonAOnRight(orient_) ? 1 : -1; }
 
 void setBrightness(uint8_t pct) {

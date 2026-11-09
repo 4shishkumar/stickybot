@@ -9,6 +9,7 @@ constexpr uint8_t  STANDBY_STEPS[] = {0, 5, 10, 30};
 constexpr uint16_t ENTER_STEPS[]   = {0, 500, 1000, 1500, 2000, 3000};
 
 enum Item {
+  R_MOUSE, R_PRESENT, R_MEDIA,  // the remote modes (2.5.0, air.h): start one
   MOD_FN, MOD_CTRL, MOD_OPTION, MOD_SHIFT, MOD_CMD, KEY, TEST, ENTER,
   SLOT, BT, FORGET, STANDBY, SOUND, VOLUME, WMIC, M_LIFT, M_FACE, M_SHAKE, BRIGHT, HOME_FACE, CLOCK24, AUTOROT, LANDSCAPE, FLIP, WEB, DEV, POWER, SAVE, CANCEL, COUNT
 };
@@ -19,6 +20,9 @@ static bool     btOff_;
 static int      sel = 0;
 static uint32_t lastInput = 0, forgetArmedAt = 0;
 static bool     forgetArmed = false, emptyWarning = false;
+static uint8_t  remote_ = 0;
+
+uint8_t remoteMode() { return remote_; }
 
 void open(const Draft& current, bool btOff) {
   draft_ = current;
@@ -61,8 +65,11 @@ Action select() {
   touch();
   emptyWarning = false;
   switch (sel) {
+    case R_MOUSE: case R_PRESENT: case R_MEDIA:
+      remote_ = sel - R_MOUSE + 1;
+      return Action::REMOTE;
     case MOD_FN: case MOD_CTRL: case MOD_OPTION: case MOD_SHIFT: case MOD_CMD:
-      draft_.combo.mods ^= MODS[sel].bit;
+      draft_.combo.mods ^= MODS[sel - MOD_FN].bit;
       return Action::REDRAW;
     case KEY:     nextKey(); return Action::REDRAW;
     case TEST:
@@ -120,8 +127,11 @@ ui::MenuView view() {
   title = emptyWarning ? "Pick a key or modifier" : comboToString(draft_.combo);
 
   ui::MenuView v{title.c_str(), {}, COUNT, sel, "A next  B change"};
+  v.lines[R_MOUSE]   = "Air mouse  >";
+  v.lines[R_PRESENT] = "Presenter  >";
+  v.lines[R_MEDIA]   = "Media remote  >";
   for (int i = MOD_FN; i <= MOD_CMD; i++)
-    v.lines[i] = String(MODS[i].name) + ": " + ((draft_.combo.mods & MODS[i].bit) ? "ON" : "off");
+    v.lines[i] = String(MODS[i - MOD_FN].name) + ": " + ((draft_.combo.mods & MODS[i].bit) ? "ON" : "off");
   v.lines[KEY]     = String("Key: ") + KEYS[max(0, keyIndex(draft_.combo.key))].name;
   v.lines[TEST]    = "Test combo";
   v.lines[ENTER]   = draft_.enterDelayMs ? String("Enter after: ") + String(draft_.enterDelayMs / 1000.0f, 1) + "s"
@@ -156,6 +166,7 @@ ui::MenuView view() {
   else if (sel == WMIC) v.hint = "A hold: Wispr mic by BT";
   else if (sel == HOME_FACE) v.hint = "Home screen look";
   else if (sel == LANDSCAPE) v.hint = draft_.autoRotate ? "Held sideways: wide" : "Needs auto-rotate";
+  else if (sel >= R_MOUSE && sel <= R_MEDIA) v.hint = "B start  A+B hold: exit";
   else if (sel == TEST || sel == BT || sel == FLIP || sel == WEB || sel == POWER || sel >= SAVE) v.hint = "A next  B select";
   return v;
 }

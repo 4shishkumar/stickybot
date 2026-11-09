@@ -13,6 +13,7 @@
 #include <Preferences.h>
 #include "faces/faces.h"
 #include "faces/pkg/package.h"
+#include "air.h"
 
 namespace protocol {
 
@@ -64,6 +65,7 @@ static String stateJson() {
   j += String(",\"devMode\":") + (settings::devMode() ? "true" : "false");
   j += ",\"face\":" + q(faces::active().id()) + ",\"faces\":" + faces::json();  // 2.0.0
   j += "," + faces::pkg::stateJson();  // 2.4.0: the face packages (their list: @faces)
+  j += "," + air::stateJson();  // 2.5.0: the remote modes (air mouse / presenter / media) and their settings
   j += String(",\"wirelessMic\":") + (settings::wirelessMic() ? "true" : "false");
   j += String(",\"ota\":1,\"otaPending\":") + (ota::pendingVerify() ? "true" : "false");  // Bluetooth update (1.8.0+)
   j += String(",\"usbMounted\":") + (mic::usbMounted() ? "true" : "false");
@@ -271,6 +273,11 @@ Result run(const String& action, const Args& arg) {
     return ok("\"brightness\":" + String(p));
   }
 
+  {  // 2.5.0: @mode name=mouse|presenter|media|home, @air <settings> (air.h)
+    Result r;
+    if (air::command(action, arg, r.status, r.json)) return r;
+  }
+
   if (action == "web-on")  { web::start(); return ok(); }
   if (action == "web-off") { web::stop();  return ok(); }
 
@@ -461,6 +468,7 @@ static void runHuman(const String& line) {
     r = run("face", [=](const char* n) { return String(n) == "demo" ? demo : String(n) == "id" ? rest : String(); });
   }
   else if (cmd == "standby")      r = run("standby", with("min"));
+  else if (cmd == "mode")         r = run("mode", with("name"));  // mode mouse|presenter|media|home
   else if (cmd == "brightness")   r = run("brightness", with("pct"));
   else if (cmd == "web")          r = run(rest == "off" ? "web-off" : "web-on", with(""));
   else {

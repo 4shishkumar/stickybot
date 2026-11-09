@@ -45,6 +45,7 @@
 #include "events.h"
 #include "ota.h"
 #include "faces/faces.h"
+#include "air.h"
 #include <HijelHID_BLEKeyboard.h>  // KEY_MOD_* constants
 
 constexpr uint32_t CPU_MHZ           = 80;
@@ -390,6 +391,7 @@ static const char* otaBusy() {
   if (mode == Mode::MENU) return "menu";
   if (web::busy()) return "wifi-update";
   if (faces::pkg::install::receiving()) return "faces";  // a face package is arriving (one transfer at a time)
+  if (air::active()) return "remote";  // the air mouse / presenter / media remote (air.h)
   return nullptr;
 }
 
@@ -445,6 +447,12 @@ static void onMenu(menu::Action a) {
       break;
     case menu::Action::POWER_OFF:
       powerOff();
+      break;
+    case menu::Action::REMOTE:  // air mouse / presenter / media remote (air.h)
+      ui::setBrightness(settings::brightnessPct());  // undo a brightness preview
+      air::request(menu::remoteMode() == 1 ? air::Mode::MOUSE : menu::remoteMode() == 2 ? air::Mode::PRESENTER
+                                                                                       : air::Mode::MEDIA);
+      mode = Mode::STATUS;
       break;
     case menu::Action::VOLUME:  // takes effect (and plays a preview) right away
       settings::saveSoundVolume(menu::draft().volume);
@@ -665,6 +673,7 @@ void setup() {
   Serial.begin(115200);
 
   settings::begin();
+  air::begin();
   faces::begin();
   faces::select(settings::face());
   ui::begin();
@@ -813,6 +822,31 @@ void loop() {
   if (mev != motion::Event::NONE) {
     static const char* NAMES[] = {"none", "lift", "face-down", "shake", "flick left", "flick right"};
     Log.printf("motion: %s\n", NAMES[(int)mev]);
+  }
+
+  // A remote mode (air mouse / presenter / media, air.h) owns the buttons, the motion and
+  // the screen; only a pairing request still shows (below, A accepts).
+  {
+    static bool airWas = false;
+    if (air::active() && !hid::pairingCode()) {
+      if (comboDown) comboRelease();
+      if (keyUpAt) comboUp();
+      airWas = true;
+      if (air::loop()) {
+        delay(1);
+        return;
+      }
+    }
+    if (airWas && !air::active()) {  // ended: back to Home; the buttons still down don't count
+      airWas = false;
+      ignoreAUntilRelease = A.isPressed();
+      swallowB = B.isPressed();
+      aDown = aUp = bDown = bSingle = bDouble = bTriple = bHold = false;
+      lastInput = millis();
+      page = ui::Page::HOME;
+      lastFrame = 0;
+      dirty = true;
+    }
   }
 
   // Escape: on an agent screen, a click of B (or a shake) dismisses it and cancels

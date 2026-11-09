@@ -219,6 +219,34 @@ code into `tools/face_shots/out/` (PNGs and contact sheets; `SCALE=3` for big pi
 
 ---
 
+### Air mouse, presenter, media remote (firmware 2.5.0)
+
+Menu (triple-press B) → the first three items, the dashboard's Stick page (*Mouse &
+presenter*) or serial `mode mouse|presenter|media|home`. Hold **A + B** together for a second
+to go back to Home.
+
+| Mode | Buttons | Motion |
+|---|---|---|
+| Air mouse | A = left button (hold + move = drag), B = right click, A+B tap = pause | turn to point; hold B and tilt to scroll |
+| Presenter | A = next slide, B = previous, double B = black screen, hold B = restart the timer, A+B tap = pause the timer | hold A = laser pointer |
+| Media | A = play / pause, B = mute | twist = volume, flick right / left = next / previous track |
+
+The pointer follows the world, not the stick: turning around gravity moves it sideways and
+tipping moves it up and down, held like a remote, upright or sideways. Set down, it stops at
+once and re-learns the gyro's drift; untouched for 5 minutes the mode ends. Settings (pointer
+speed, invert, scroll speed / direction, talk length, arrow or page keys) live on the stick
+(`@air`, PROTOCOL.md). Screens: `make -C tools/face_shots air`.
+
+**After updating from 2.4 or older:** the stick added a mouse to its Bluetooth keyboard, and
+tells the Mac its services changed. If the air mouse screen says *Pair again once*, or the
+pointer doesn't move: Mac → System Settings → Bluetooth → the stick → (i) → Forget This
+Device, then Connect again and accept the code on the stick.
+
+**Tuning on a real stick** (the defaults are from the maths, not a hand): the pointer gain
+and acceleration (`gainFor`, `accelFactor`), dead zone and smoothing are in
+`src/logic/air_motion.cpp`; the stillness thresholds in `air_motion.h`; serial `imulog`
+prints the raw gyro to check the axes and signs.
+
 ## 6. Changing the combo — three ways, no reflashing
 
 The combo is saved in the stick's flash (NVS) and used immediately.
@@ -354,6 +382,7 @@ make build     # the stick firmware still builds with the same logic
 | `test_city` | StickyWorld's city: the same buildings from a seed, towers in place, squeeze then scroll to fit |
 | `test_sky` | the sky by time of day and weather, sun and moon arcs |
 | `test_school` | Aquarium: fish per session (swim in, grow, leap out), the full tank, tilt drift, the damped spring |
+| `test_air` | the air mouse: the gyro to pointer mapping in any orientation, dead zone / smoothing / acceleration / sensitivity / invert, stillness and the gyro bias, tilt-scroll, the media knob (twist, flick), the remote buttons (click, hold, double, A+B), the talk timer |
 | `test_clockface` | the Words face's time in words (fives, "just after" / "nearly", midnight / noon, the hour rolling over), the Analog face's hands, words stacked to fit |
 
 Hardware-facing code (screens, Bluetooth, audio I/O) isn't covered by these;
