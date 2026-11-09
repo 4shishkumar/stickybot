@@ -63,11 +63,15 @@ pub const PORTED: &[&str] = &[
     "GET /api/import",
     "POST /api/import",
     "GET /static-rs/*",
+    "GET /api/pet",
+    "POST /api/events/test",
+    "GET /api/events/history",
+    "GET /api/events/kinds",
+    "POST /api/claude-event",
 ];
 
 /// The Python agent's endpoints that aren't here yet, by the phase that brings them.
 pub const NOT_PORTED: &[(&str, &str)] = &[
-    ("GET /api/pet", "faces / pet (the Stick page's Face card hides the pet line)"),
     ("POST /api/firmware/flash", "firmware over USB (esptool)"),
     ("GET /api/onboarding", "setup wizard progress (the wizard keeps it in the browser meanwhile)"),
     ("POST /api/onboarding", "setup wizard progress"),
@@ -76,10 +80,6 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
     ("GET /api/logs", "log viewer (Logs)"),
     ("GET /api/voices", "macOS voices (say)"),
     ("POST /api/voice/test", "speech"),
-    ("POST /api/events/test", "stick events"),
-    ("GET /api/events/history", "stick events"),
-    ("GET /api/events/kinds", "stick events"),
-    ("POST /api/claude-event", "Claude Code Stop hook"),
     ("GET /api/mcp", "stick tools (MCP)"),
     ("POST /mcp", "stick tools (MCP server)"),
     ("POST /api/mcp/terminal/{action}", "stick tools (MCP)"),
@@ -126,6 +126,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/wireless-mic/check", post(wireless_mic_check))
         .route("/api/import", get(import_info).post(import_run))
         .route("/static-rs/{*path}", get(rust_static))
+        .route("/api/pet", get(pet_status))
+        .route("/api/events/test", post(event_test))
+        .route("/api/events/history", get(event_history))
+        .route("/api/events/kinds", get(event_kinds))
+        .route("/api/claude-event", post(claude_event))
         .fallback(not_ported)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -349,6 +354,38 @@ async fn play_sound(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<
 #[derive(serde::Deserialize)]
 struct HistoryQuery {
     n: Option<usize>,
+}
+
+/// The faces' pet (level, streak, city…) and the world the stick gets.
+async fn pet_status(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    let pet = st.home.pet.lock().unwrap().summary();
+    axum::Json(json!({"pet": pet, "world": crate::home::world(&st)}))
+}
+
+/// The Events page's Test button: `{"kind"}` -> the kind's sample on the stick.
+async fn event_test(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<Value> {
+    let b = body_obj(&body);
+    let kind = b.get("kind").map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string()));
+    let ev = crate::events::test(&st, &kind.unwrap_or_else(|| "test".into())).await;
+    axum::Json(json!({"ok": true, "event": ev}))
+}
+
+async fn event_history(State(st): State<Arc<AppState>>, Query(q): Query<HistoryQuery>) -> axum::Json<Value> {
+    axum::Json(Value::Array(crate::events::history(&st, q.n.unwrap_or(50))))
+}
+
+async fn event_kinds(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    let cfg = st.cfg.lock().unwrap().clone();
+    axum::Json(crate::events::kinds_json(&cfg))
+}
+
+/// The Claude Code Stop hook (`claude_hooks.py`): `{"elapsed_s", "cwd", "prompt"}`.
+async fn claude_event(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<Value> {
+    let b = body_obj(&body);
+    let elapsed = b.get("elapsed_s").and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))).unwrap_or(0);
+    let s = |k: &str| b.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let ev = crate::home::claude_finished(&st, elapsed, &s("cwd"), &s("prompt")).await;
+    axum::Json(json!({"ok": true, "shown": ev.is_some()}))
 }
 
 /// The last `n` (50) requests, newest first (server.py `history`).
@@ -748,7 +785,7 @@ mod tests {
         call(&app, req("POST", "/api/pause", Some(json!({"paused": true})), tok)).await;
         let mut w = st.link.watch_state();
         tokio::time::timeout(Duration::from_secs(5), w.wait_for(|s| *s == LinkState::Paused)).await.unwrap().unwrap();
-        let (s, v, _) = call(&app, req("GET", "/api/pet", None, None)).await;
+        let (s, v, _) = call(&app, req("GET", "/api/onboarding", None, None)).await;
         assert_eq!((s, v["missing"].as_bool()), (StatusCode::NOT_FOUND, Some(true)));
         let (s, _, _) = call(&app, req("POST", "/api/firmware/flash", Some(json!({})), tok)).await;
         assert_eq!(s, StatusCode::NOT_FOUND);
@@ -1109,5 +1146,139 @@ mod tests {
         assert_eq!((s, ctype.as_str()), (StatusCode::OK, "text/javascript"));
         assert!(v.as_str().unwrap().contains("/api/import"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The JSON lines the fake stick got.
+    fn stick_lines(fake: &FakeStick) -> Vec<Value> {
+        String::from_utf8(fake.writes().concat()).unwrap().lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+    }
+
+    #[tokio::test]
+    async fn the_hello_carries_the_home_card_world_and_weather() {
+        let (_app, st, fake) = app("hello-home", true).await;
+        // the hello on connect: home + world, wmic / wready, like core.py `_hello_extra`
+        let h = fake.last_hello().unwrap();
+        assert_eq!(h["home"], json!({"k": "hello", "a": h["home"]["a"], "b": "Hold B to ask me anything."}));
+        assert!(h["home"]["a"].as_str().unwrap().starts_with("Good "));
+        let w = &h["world"];
+        assert_eq!((w["merged"].as_i64(), w["ci"].as_str(), w["asks"].as_i64(), w["reviews"].as_i64()), (Some(0), Some("none"), Some(0), Some(0)));
+        assert_eq!(w["claude"], json!([]));
+        for k in ["xp", "streak", "acc", "seed", "greens", "towers"] {
+            assert!(w["pet"].get(k).is_some(), "{k}");
+        }
+        assert_eq!(h["wready"], true);
+        assert!(h.get("wx").is_none());
+        // with weather (stick-safe place name)
+        st.home.weather.lock().unwrap().now = Some(json!({"t": 18, "i": "cloudy", "c": "cloudy", "day": 1, "hi": 25, "lo": 11, "at": "Zürich"}));
+        let x = crate::home::hello_extra(&st);
+        assert_eq!(x["wx"]["at"], "Zurich");
+        assert_eq!(st.status()["weather"]["t"], 18);
+        // an approval waiting pins the card
+        let st2 = st.clone();
+        let wait = tokio::spawn(async move { crate::approvals::ask_permission(&st2, "Bash", "ls", "terminal", Duration::from_secs(5)).await });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let card = crate::home::home_card(&st);
+        assert_eq!((card["k"].as_str(), card["u"].as_bool()), (Some("approval"), Some(true)));
+        assert_eq!(card["a"], "Claude wants Bash");
+        assert_eq!(crate::home::world(&st)["asks"], 1);
+        wait.abort();
+    }
+
+    #[tokio::test]
+    async fn events_pet_and_the_claude_stop_hook() {
+        let (app, st, fake) = app("events", true).await;
+        let tok = Some(st.token.as_str());
+        let (_, v, _) = call(&app, req("GET", "/api/events/kinds", None, None)).await;
+        assert_eq!(v["kinds"]["pr_merged"], json!({"default": "celebrate", "icon": "merge", "title": "PR #5507 merged!"}));
+        assert_eq!(v["levels"], json!(["celebrate", "nice", "headsup", "off"]));
+        assert_eq!(v["rules"]["ci_failed"], "headsup");
+
+        let (_, v, _) = call(&app, req("POST", "/api/events/test", Some(json!({"kind": "pr_merged"})), tok)).await;
+        let ev = &v["event"];
+        assert_eq!((ev["id"].as_str(), ev["level"].as_str(), ev["icon"].as_str()), (Some("e1"), Some("celebrate"), Some("merge")));
+        let sent: Vec<Value> = stick_lines(&fake).into_iter().filter(|l| l.get("event").is_some()).collect();
+        assert_eq!(
+            sent,
+            vec![json!({"src": "agent", "event": {"id": "e1", "level": "celebrate", "title": "PR #5507 merged!",
+                        "sub": "web - Add stick agent", "icon": "merge", "sound": "", "kind": "pr_merged"}})]
+        );
+        let (_, h, _) = call(&app, req("GET", "/api/events/history?n=5", None, None)).await;
+        assert_eq!((h[0]["kind"].as_str(), h[0]["sent"].as_bool(), h[0]["quiet"].as_bool()), (Some("pr_merged"), Some(true), Some(false)));
+        // the stick says it showed it (the loops: offline in fake mode)
+        crate::home::spawn(st.clone());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        fake.notify(&json!({"src": "agent", "evt": "event_shown", "id": "e1"}));
+        for _ in 0..50 {
+            if st.home.notifier.shown.lock().unwrap().contains("e1") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(st.home.notifier.shown.lock().unwrap().contains("e1"));
+        // a kind turned off: nothing
+        st.update_config(json!({"event_rules": {"test": "off"}}).as_object().unwrap().clone()).unwrap();
+        let (_, v, _) = call(&app, req("POST", "/api/events/test", Some(json!({"kind": "test"})), tok)).await;
+        assert_eq!(v["event"], Value::Null);
+
+        // the Stop hook: short tasks feed the pet only; long ones show "Claude finished"
+        let (_, p0, _) = call(&app, req("GET", "/api/pet", None, None)).await;
+        assert_eq!(p0["pet"]["level"], 1);
+        let (_, v, _) = call(&app, req("POST", "/api/claude-event", Some(json!({"elapsed_s": 30, "cwd": "/x/web"})), None)).await;
+        assert_eq!(v["error"], "bad token");
+        let (_, v, _) = call(&app, req("POST", "/api/claude-event", Some(json!({"elapsed_s": 30, "cwd": "/x/web"})), tok)).await;
+        assert_eq!(v, json!({"ok": true, "shown": false}));
+        let (_, v, _) = call(
+            &app,
+            req("POST", "/api/claude-event", Some(json!({"elapsed_s": 245, "cwd": "/Users/a/code/web/", "prompt": "fix the tests"})), tok),
+        )
+        .await;
+        assert_eq!(v, json!({"ok": true, "shown": true}));
+        let last = stick_lines(&fake).into_iter().rev().find(|l| l.get("event").is_some()).unwrap();
+        assert_eq!(last["event"]["title"], "Claude finished in web");
+        assert_eq!(last["event"]["sub"], "took 4 min - fix the tests");
+        assert!(stick_lines(&fake).iter().any(|l| l.get("world").is_some())); // pushed at once
+        let (_, p1, _) = call(&app, req("GET", "/api/pet", None, None)).await;
+        assert_eq!(p1["pet"]["claude"], p0["pet"]["claude"].as_i64().unwrap() + 2);
+        assert_eq!(p1["pet"]["xp"], p0["pet"]["xp"].as_i64().unwrap() + 4);
+        assert_eq!(p1["pet"]["streak"], 1);
+        assert!(p1["world"]["pet"]["seed"].as_i64().unwrap() > 0);
+    }
+
+    #[tokio::test]
+    async fn the_github_watcher_turns_changes_into_events() {
+        let (_app, st, fake) = app("github", true).await;
+        let gh = crate::github::FakeGh::default();
+        st.home.set_sources(Arc::new(crate::net::FakeHttp::default()), Arc::new(gh.clone()), Arc::new(|| 0));
+        // no gh: says so
+        crate::home::github_poll(&st).await.unwrap();
+        assert!(st.status()["github"]["error"].as_str().unwrap().contains("gh CLI not found"));
+        let pr = |merged: bool, ci: &str| {
+            json!({"mine": {"nodes": [{"number": 7, "title": "Dark mode", "state": if merged { "MERGED" } else { "OPEN" },
+                    "merged": merged, "createdAt": "2020-01-01T00:00:00Z", "repository": {"nameWithOwner": "acme/web"},
+                    "reviewDecision": null, "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": ci}}}]},
+                    "reviews": {"nodes": []}}]},
+                   "asks": {"nodes": []}, "primary": {"releases": {"nodes": []}}})
+        };
+        st.update_config(json!({"github": {"on": true, "interval_s": 120, "primary_repo": "acme/web"}}).as_object().unwrap().clone())
+            .unwrap();
+        gh.set(Ok(pr(false, "PENDING")));
+        crate::home::github_poll(&st).await.unwrap();
+        assert!(stick_lines(&fake).iter().all(|l| l.get("event").is_none())); // first look: no events
+        let status = st.status()["github"].clone();
+        assert_eq!((status["tracked"].as_i64(), status["error"].as_str()), (Some(1), Some("")));
+        assert!(st.paths.home.join("github_state.json").exists());
+        gh.set(Ok(pr(true, "SUCCESS")));
+        crate::home::github_poll(&st).await.unwrap();
+        let evs: Vec<Value> = stick_lines(&fake).into_iter().filter_map(|l| l.get("event").cloned()).collect();
+        assert_eq!(evs.len(), 1);
+        assert_eq!((evs[0]["title"].as_str(), evs[0]["sub"].as_str()), (Some("PR #7 merged!"), Some("web #7 - Dark mode")));
+        let pet = st.home.pet.lock().unwrap().summary();
+        assert_eq!((pet["merged"].as_i64(), pet["greens"].as_i64(), pet["xp"].as_i64()), (Some(1), Some(1), Some(13)));
+        // the world went out with the change
+        let w = stick_lines(&fake).into_iter().rev().find_map(|l| l.get("world").cloned()).unwrap();
+        assert_eq!(w["merged"], 1);
+        // an error is kept for the status
+        gh.set(Err("HTTP 401".into()));
+        assert!(crate::home::github_poll(&st).await.is_err());
     }
 }

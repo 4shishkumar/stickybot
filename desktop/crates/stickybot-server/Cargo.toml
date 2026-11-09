@@ -24,6 +24,7 @@ anyhow = "1"
 regex = "1"
 unicode-normalization = "0.1"
 sha2 = "0.10"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 ureq = "2"
 bzip2 = "0.6"
 tar = "0.4"

@@ -740,7 +740,16 @@ pub fn init(st: &Arc<AppState>) {
         apply_carrier(st);
     }
     let weak = Arc::downgrade(st);
-    st.link.set_hello_extra(move || weak.upgrade().map(|st| hello_extra(&st)).unwrap_or_default());
+    // the whole hello extra (core.py `_hello_extra`): home, world, wx (home.rs) + wmic, wready
+    st.link.set_hello_extra(move || {
+        weak.upgrade()
+            .map(|st| {
+                let mut m = crate::home::hello_extra(&st);
+                m.extend(hello_extra(&st));
+                m
+            })
+            .unwrap_or_default()
+    });
 }
 
 /// At start: what a crashed run left behind goes (our UID only), then the tap check (inaudible)

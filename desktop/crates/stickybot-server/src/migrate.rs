@@ -2,7 +2,8 @@
 //! primary repo), the wireless mic, the brain and model, sounds, approvals, events… (every
 //! `config.json` key both apps share), the voice commands (`commands.json`, with their real repo
 //! URLs), the sound packs (`sounds/<pack>/`), the request history (`history.jsonl`, same format)
-//! and Claude's workspace notes (`workspace/CLAUDE.md`).
+//! and Claude's workspace notes (`workspace/CLAUDE.md`), the faces' pet (`pet.json`), the GitHub
+//! watcher's state (`github_state.json`, so nothing replays) and the events log (`events.jsonl`).
 //!
 //! **Read-only** on the Python folder: files are read and copied, never written, moved or
 //! deleted there. Runs on its own on the first start (no `config.json` and no earlier import in
@@ -75,6 +76,7 @@ pub fn import(from: &Path, paths: &Paths, sounds: &Path, mode: Mode) -> Result<R
     import_sounds(&from.join("sounds"), sounds, &mut r);
     import_history(from, paths, &mut r);
     import_workspace(from, paths, mode, &mut r);
+    import_state(from, paths, mode, &mut r);
     let marker = json!({"t": crate::hub::now(), "from": from, "mode": format!("{mode:?}"),
                         "imported": r.imported, "skipped": r.skipped});
     if let Err(e) = fs::write(paths.home.join(MARKER), serde_json::to_string_pretty(&marker).unwrap_or_default()) {
@@ -236,8 +238,62 @@ fn history_entry(line: &str) -> Option<(f64, String)> {
 }
 
 fn import_history(from: &Path, paths: &Paths, r: &mut Report) {
-    let Ok(py) = fs::read_to_string(from.join("history.jsonl")) else { return };
-    let mine = fs::read_to_string(paths.history()).unwrap_or_default();
+    merge_jsonl(&from.join("history.jsonl"), &paths.history(), "history", "requests", r);
+}
+
+/// A pet nothing has happened to yet (made on this app's first start).
+fn untouched_pet(v: &Value) -> bool {
+    ["claude", "greens", "releases"].iter().all(|k| v.get(*k).and_then(Value::as_i64).unwrap_or(0) == 0)
+        && v["streak"]["last"].as_i64().unwrap_or(-1) < 0
+}
+
+fn valid_state(file: &str, v: &Value) -> bool {
+    match file {
+        "pet.json" => v.get("xp").is_some_and(Value::is_i64) && v.get("seed").is_some() && v["streak"].is_object(),
+        _ => v.get("prs").is_some_and(Value::is_object),
+    }
+}
+
+/// The pet's progress (`pet.json`) and the GitHub watcher's state (`github_state.json`): taken
+/// over on an explicit import, and on the first start unless this app already has its own; the
+/// events log (`events.jsonl`) merged like the history.
+fn import_state(from: &Path, paths: &Paths, mode: Mode, r: &mut Report) {
+    for (file, what) in [("pet.json", "pet"), ("github_state.json", "github")] {
+        let Some(v) = read_json(&from.join(file)) else { continue };
+        if !v.is_object() || !valid_state(file, &v) {
+            r.skipped.push(format!("{what}: {file} in an unknown format"));
+            continue;
+        }
+        let dst = paths.home.join(file);
+        let mine = read_json(&dst);
+        if mine.as_ref() == Some(&v) {
+            continue;
+        }
+        let replaceable = match &mine {
+            None => true,
+            Some(m) => file == "pet.json" && untouched_pet(m),
+        };
+        if mode == Mode::FirstRun && !replaceable {
+            r.skipped.push(format!("{what}: this app's own {file} was kept"));
+            continue;
+        }
+        backup(&dst);
+        match fs::write(&dst, v.to_string()) {
+            Ok(()) => r.imported.push(if what == "pet" {
+                format!("pet: level {} ({} XP)", crate::pet::level_for(v["xp"].as_i64().unwrap_or(0)).0, v["xp"])
+            } else {
+                format!("github: {} PRs watched", v["prs"].as_object().map_or(0, Map::len))
+            }),
+            Err(e) => r.skipped.push(format!("{what}: {e}")),
+        }
+    }
+    merge_jsonl(&from.join("events.jsonl"), &paths.home.join("events.jsonl"), "events", "events", r);
+}
+
+/// Merges a JSON-lines log (`{"t": …, …}` per line) into ours: in time order, no duplicates.
+fn merge_jsonl(src: &Path, dst: &Path, what: &str, unit: &str, r: &mut Report) {
+    let Ok(py) = fs::read_to_string(src) else { return };
+    let mine = fs::read_to_string(dst).unwrap_or_default();
     let have: std::collections::HashSet<&str> = mine.lines().map(str::trim).collect();
     let (mut entries, mut unknown) = (Vec::new(), 0);
     for line in py.lines().filter(|l| !l.trim().is_empty()) {
@@ -248,7 +304,7 @@ fn import_history(from: &Path, paths: &Paths, r: &mut Report) {
         }
     }
     if unknown > 0 {
-        r.skipped.push(format!("history: {unknown} lines in an unknown format"));
+        r.skipped.push(format!("{what}: {unknown} lines in an unknown format"));
     }
     if entries.is_empty() {
         return;
@@ -257,10 +313,12 @@ fn import_history(from: &Path, paths: &Paths, r: &mut Report) {
     entries.extend(mine.lines().filter_map(history_entry));
     entries.sort_by(|a, b| a.0.total_cmp(&b.0));
     let text: String = entries.into_iter().map(|(_, l)| l + "\n").collect();
-    let tmp = paths.home.join("history.jsonl.tmp");
-    match fs::write(&tmp, text).and_then(|_| fs::rename(&tmp, paths.history())) {
-        Ok(()) => r.imported.push(format!("history: {n} requests")),
-        Err(e) => r.skipped.push(format!("history: {e}")),
+    let mut tmp = dst.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    match fs::write(&tmp, text).and_then(|_| fs::rename(&tmp, dst)) {
+        Ok(()) => r.imported.push(format!("{what}: {n} {unit}")),
+        Err(e) => r.skipped.push(format!("{what}: {e}")),
     }
 }
 
@@ -521,5 +579,49 @@ mod tests {
 
         let empty = f.root.join("nothing-here");
         assert!(import(&empty, &f.paths, &f.sounds, Mode::Explicit).is_err());
+    }
+
+    #[test]
+    fn the_pet_github_state_and_events_come_over() {
+        let f = Fake::new("pet");
+        fs::write(f.py.join("config.json"), "{}").unwrap();
+        let pet = json!({"xp": 125, "merged": 9, "greens": 4, "claude": 7, "releases": 1, "towers": [8], "seed": 4242,
+                         "streak": {"days": 3, "best": 6, "last": 739000}, "today": {"day": 739000, "merged": 1}});
+        fs::write(f.py.join("pet.json"), pet.to_string()).unwrap();
+        let gh = json!({"prs": {"acme/web#7": {"repo": "acme/web", "number": 7, "merged": true}}, "asks": {},
+                        "release": "v1", "primary": "acme/web", "seen_at": 100.0});
+        fs::write(f.py.join("github_state.json"), gh.to_string()).unwrap();
+        fs::write(
+            f.py.join("events.jsonl"),
+            format!("{}\n{}\n", json!({"t": 5.0, "kind": "pr_merged", "id": "e1"}), json!({"t": 9.0, "kind": "test", "id": "e2"})),
+        )
+        .unwrap();
+        // this app's first start already made a fresh pet: it's replaced
+        crate::pet::Pet::load(&f.paths.home.join("pet.json"), 0);
+        let before = f.python_files();
+        let r = f.import(Mode::FirstRun);
+        assert_eq!(read_json(&f.paths.home.join("pet.json")).unwrap(), pet);
+        assert_eq!(read_json(&f.paths.home.join("github_state.json")).unwrap(), gh);
+        assert_eq!(fs::read_to_string(f.paths.home.join("events.jsonl")).unwrap().lines().count(), 2);
+        assert!(r.imported.contains(&"pet: level 4 (125 XP)".to_string()), "{r:?}");
+        assert!(r.imported.contains(&"github: 1 PRs watched".to_string()), "{r:?}");
+        assert!(r.imported.contains(&"events: 2 events".to_string()), "{r:?}");
+        assert_eq!(f.python_files(), before);
+
+        // a pet with progress of its own is kept on a first run, replaced on an explicit import
+        let mut mine = pet.clone();
+        mine["claude"] = json!(99);
+        fs::write(f.paths.home.join("pet.json"), mine.to_string()).unwrap();
+        let r = f.import(Mode::FirstRun);
+        assert!(r.skipped.contains(&"pet: this app's own pet.json was kept".to_string()), "{r:?}");
+        f.import(Mode::Explicit);
+        assert_eq!(read_json(&f.paths.home.join("pet.json")).unwrap(), pet);
+        assert_eq!(read_json(&f.paths.home.join("pet.json.before-import")).unwrap(), mine);
+        assert_eq!(fs::read_to_string(f.paths.home.join("events.jsonl")).unwrap().lines().count(), 2);
+
+        // unknown formats are skipped
+        fs::write(f.py.join("pet.json"), "[1, 2]").unwrap();
+        let r = f.import(Mode::Explicit);
+        assert!(r.skipped.contains(&"pet: pet.json in an unknown format".to_string()), "{r:?}");
     }
 }
