@@ -31,7 +31,7 @@ def bundle(tmp_path, monkeypatch):
 @pytest.fixture
 def ports(monkeypatch):
     found = [STICK_PORT]
-    monkeypatch.setattr(flasher, "espressif_ports", lambda: list(found))
+    monkeypatch.setattr(flasher, "espressif_ports", lambda sticks_only=True: list(found))
     return found
 
 
@@ -319,3 +319,18 @@ def test_parts_never_touch_the_settings(tmp_path, bundle):
     edge.write_bytes(b"\xe9" * 0x9001)  # its last sector (0x9000-0xA000) is inside NVS
     with pytest.raises(flasher.FlashError):
         flasher.check_parts([("0x0", str(edge))])
+
+
+def test_only_stickybot_ports_count_as_sticks(monkeypatch):
+    """Another ESP32 board on the Mac (MicroPython: "Espressif Device") is never "the stick"."""
+    from types import SimpleNamespace as P
+
+    from serial.tools import list_ports
+    found = [P(vid=0x303A, pid=0x4001, device="/dev/cu.usbmodem101", serial_number="1", product="Espressif Device",
+               description=""),
+             P(vid=0x303A, pid=0x1001, device="/dev/cu.usbmodemJ", serial_number="2", product="USB JTAG/serial debug unit",
+               description=""),
+             P(vid=0x303A, pid=0x1001, device="/dev/cu.usbmodemS", serial_number="3", product="StickyBot", description="")]
+    monkeypatch.setattr(list_ports, "comports", lambda: found)
+    assert [p["port"] for p in flasher.espressif_ports()] == ["/dev/cu.usbmodemJ", "/dev/cu.usbmodemS"]
+    assert len(flasher.espressif_ports(sticks_only=False)) == 3
