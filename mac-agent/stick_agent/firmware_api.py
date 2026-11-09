@@ -276,6 +276,8 @@ def routes(agent):
             return web.json_response({"error": "a flash is already running"}, status=409)
         if not agent.link.connected:
             return web.json_response({"error": "the stick isn't connected by Bluetooth"}, status=409)
+        if getattr(agent, "faces_busy", False):  # one transfer at a time over the OTA characteristic
+            return web.json_response({"error": "a face is being installed; try again when it's done"}, status=409)
         try:
             ota.bundled_app()
         except ota.OtaError as e:

@@ -24,9 +24,10 @@
 
 // ─── HID Report Descriptor ────────────────────────────────────────────────
 //
-// Two top-level collections:
+// Three top-level collections:
 //   Report ID 0x01 — Standard keyboard (8-byte input + 1-byte LED output)
 //   Report ID 0x02 — Consumer Control  (2-byte 16-bit usage ID input)
+//   Report ID 0x03 — Mouse             (5-byte input) [stick-key change]
 //
 // Keyboard report layout (8 bytes):
 //   Byte 0: Modifier bitmask  (Ctrl / Shift / Alt / GUI × Left / Right)
@@ -109,6 +110,47 @@ static const uint8_t _hidReportDescriptor[] = {
     0x95, 0x01,        //   Report Count (1)
     0x81, 0x00,        //   Input (Data, Array, Absolute)
     0xC0,              // End Collection (Consumer Control)
+
+    // ── Mouse (Report ID 0x03) [stick-key change] ─────────────────────
+    // Added for the air mouse / presenter (firmware 2.5.0). 5 bytes:
+    //   [buttons: 5 bits + 3 padding][X][Y][Wheel][AC Pan], all relative int8.
+    // Appended after the existing collections so the keyboard and consumer
+    // reports keep their IDs and layout.
+    0x05, 0x01,        // Usage Page (Generic Desktop)
+    0x09, 0x02,        // Usage (Mouse)
+    0xA1, 0x01,        // Collection (Application)
+    0x85, 0x03,        //   Report ID (3)
+    0x09, 0x01,        //   Usage (Pointer)
+    0xA1, 0x00,        //   Collection (Physical)
+    0x05, 0x09,        //     Usage Page (Buttons)
+    0x19, 0x01,        //     Usage Minimum (Button 1)
+    0x29, 0x05,        //     Usage Maximum (Button 5)
+    0x15, 0x00,        //     Logical Minimum (0)
+    0x25, 0x01,        //     Logical Maximum (1)
+    0x95, 0x05,        //     Report Count (5)
+    0x75, 0x01,        //     Report Size (1 bit)
+    0x81, 0x02,        //     Input (Data, Variable, Absolute)
+    0x95, 0x01,        //     Report Count (1)
+    0x75, 0x03,        //     Report Size (3 bits)
+    0x81, 0x03,        //     Input (Constant) — padding
+    0x05, 0x01,        //     Usage Page (Generic Desktop)
+    0x09, 0x30,        //     Usage (X)
+    0x09, 0x31,        //     Usage (Y)
+    0x09, 0x38,        //     Usage (Wheel)
+    0x15, 0x81,        //     Logical Minimum (-127)
+    0x25, 0x7F,        //     Logical Maximum (127)
+    0x75, 0x08,        //     Report Size (8 bits)
+    0x95, 0x03,        //     Report Count (3)
+    0x81, 0x06,        //     Input (Data, Variable, Relative)
+    0x05, 0x0C,        //     Usage Page (Consumer)
+    0x0A, 0x38, 0x02,  //     Usage (AC Pan) — horizontal scroll
+    0x15, 0x81,        //     Logical Minimum (-127)
+    0x25, 0x7F,        //     Logical Maximum (127)
+    0x75, 0x08,        //     Report Size (8 bits)
+    0x95, 0x01,        //     Report Count (1)
+    0x81, 0x06,        //     Input (Data, Variable, Relative)
+    0xC0,              //   End Collection (Physical)
+    0xC0,              // End Collection (Mouse)
 };
 
 // ─── ASCII → HID Lookup Tables ───────────────────────────────────────────
@@ -306,6 +348,8 @@ HijelHID_BLEKeyboard::HijelHID_BLEKeyboard(const char* deviceName,
       _pKeyboardInput(nullptr),
       _pKeyboardOutput(nullptr),
       _pConsumerInput(nullptr),
+      _pMouseInput(nullptr),
+      _mouseButtons(0),
       _pServerCb(nullptr),
       _pLEDCb(nullptr)
 {
@@ -507,6 +551,7 @@ void HijelHID_BLEKeyboard::begin() {
     _pKeyboardInput  = _pHID->getInputReport(HID_REPORT_ID_KEYBOARD);
     _pKeyboardOutput = _pHID->getOutputReport(HID_REPORT_ID_KEYBOARD);
     _pConsumerInput  = _pHID->getInputReport(HID_REPORT_ID_CONSUMER);
+    _pMouseInput     = _pHID->getInputReport(HID_REPORT_ID_MOUSE);  // [stick-key change]
 
     // Register LED output callback if the characteristic was created
     if (_pKeyboardOutput != nullptr) {
@@ -926,6 +971,51 @@ void HijelHID_BLEKeyboard::releaseAll() {
         _consumerActive = false;
         _sendConsumerReport(0x0000);
     }
+    // [stick-key change] mouse buttons too, only when one is held (no extra notify otherwise)
+    if (_mouseButtons) {
+        _mouseButtons = 0;
+        _sendMouseReport(0, 0, 0, 0, true);
+    }
+}
+
+// ─── Mouse [stick-key change] ─────────────────────────────────────────────
+
+bool HijelHID_BLEKeyboard::mouseMove(int8_t x, int8_t y, int8_t wheel, int8_t pan) {
+    if (!_connected) return false;
+    if (_pendingIdleTransition) {
+        _transitionToActive();
+    } else if (_connState == _ConnState::Active) {
+        _startIdleTimer();
+    }
+    return _sendMouseReport(x, y, wheel, pan, false);
+}
+
+bool HijelHID_BLEKeyboard::mouseButtons(uint8_t buttons) {
+    if (!_connected) return false;
+    if (_pendingIdleTransition) {
+        _transitionToActive();
+    } else if (_connState == _ConnState::Active) {
+        _startIdleTimer();
+    }
+    _mouseButtons = buttons & 0x1F;
+    return _sendMouseReport(0, 0, 0, 0, true);
+}
+
+// Movement is sent at up to ~100 Hz: when no Bluetooth buffer is free the report is
+// dropped at once (the caller keeps the motion for the next one) instead of blocking
+// the loop. A button change must arrive, so it waits up to 500 ms like a key.
+bool HijelHID_BLEKeyboard::_sendMouseReport(int8_t x, int8_t y, int8_t wheel, int8_t pan, bool wait) {
+    if (_pMouseInput == nullptr || !_connected) return false;
+    uint8_t report[HID_MOUSE_REPORT_SIZE] = {_mouseButtons, (uint8_t)x, (uint8_t)y, (uint8_t)wheel, (uint8_t)pan};
+    _pMouseInput->setValue(report, HID_MOUSE_REPORT_SIZE);
+    bool ok = _pMouseInput->notify();
+    const uint32_t start = millis();
+    while (!ok && wait && _connected && millis() - start < 500) {
+        vTaskDelay(2);
+        ok = _pMouseInput->notify();
+    }
+    if (ok) _lastReportMs = millis();
+    return ok;
 }
 
 // ─── Fn key [stick-key change] ────────────────────────────────────────────

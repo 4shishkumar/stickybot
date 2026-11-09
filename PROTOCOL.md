@@ -89,7 +89,13 @@ and can be ignored.
 | `wmic` | `on=0\|1` | StickS3: the wireless Wispr mic switch (see section 5) |
 | `autorotate` | `on=0\|1` | StickS3: turn the screen with the motion sensor (state: `autoRotate`) |
 | `landscape` | `on=0\|1` | StickS3 1.9.0+: with auto-rotate, landscape screens when held sideways (state: `landscape`) |
-| `face` | `id=<face>` or `demo=<face\|all>` | StickS3 2.1.0+: the Home face (saved; state: `face`, and `faces`: `[{"id","title","about"}]`), or play a face's demo on the stick (A or B ends it) |
+| `face` | `id=<face>` or `demo=<face\|all>` | StickS3 2.1.0+: the Home face (saved; state: `face`, and `faces`: `[{"id","title","about"}]`), or play a face's demo on the stick (A or B ends it). 2.4.0+: an installed face package's id works too |
+| `faces` | `page=<n>` or `rm=<id\|all>` | StickS3 2.4.0+: the installed face packages, 6 a page, or remove them (see section 5, *Face packages over Bluetooth*; state: `pkgFaces`) |
+| `clock24` | `on=0\|1` | StickS3 2.4.0+: the time as 24-hour ("15:05") on every face, the dock clock and the demos (state: `clock24`) |
+| `mode` | `name=mouse\|presenter\|media\|home` | StickS3 2.5.0+: start a remote mode on the stick (air mouse, presenter, media remote), or end it (`home`). Human form: `mode <name>` |
+| `air` | any of `sens=1..10`, `invx=0\|1`, `invy=0\|1`, `scroll=1..10`, `invscroll=0\|1`, `talk=0..600`, `keys=arrows\|pages` | StickS3 2.5.0+: the remote modes' settings (pointer speed, invert, tilt-scroll speed and direction, the presenter's talk length in minutes (0 = none), the slide keys). Replies `{"ok":true,"air":{…}}` |
+| `games` | | StickS3 2.5.0+: the games and their best scores (kept on the stick, NVS): `{"ok":true,"games":[{"id":"stack","title":"Stack","best":23,"tilt":false,"low":false},…]}` — `best` 0 = not played yet; `low`: lower is better (Reaction, milliseconds). See section 5, *Games* |
+| `ir` | `<op> ...` | StickS3 2.5.0+: the IR remote (see section 5, *IR remote*; state: `ir`) |
 
 Responses that end in a restart include `"restarting":true`.
 
@@ -116,6 +122,14 @@ Errors: `@{"ok":false,"error":"<message>"}`.
 - `standby`: only present on boards with a battery (minutes, 0 = never)
 - `brightness`: only present on boards with a screen (percent)
 - `web.mode`: `off` | `joining` | `home` (joined home Wi-Fi) | `hotspot`
+- StickS3 2.5.0+: `air`: `{"mode":"home|mouse|presenter|media","sens":5,"invX":false,"invY":false,
+  "scroll":5,"invScroll":false,"talkMin":0,"keys":"arrows|pages","mouseKnown":true}`.
+  `mouseKnown`: the Mac subscribed to the mouse report on this connection (false after it
+  connected = it kept a keyboard-only copy from before 2.5.0: forget the stick on the Mac and
+  pair again, once). The HID report map is keyboard (ID 1) + consumer (ID 2) + mouse (ID 3).
+- StickS3 2.4.0+: `clock24` (true: 24-hour time), `pkgFaces` (`{"n":<installed face packages>,"fmt":[1]}`;
+  their list is `@faces`, section 5)
+- StickS3 2.5.0+: `ir` (`{"v":1,"n":<remotes>,"tx":46,"rx":42}`; the IR remote, section 5)
 
 ## 4. Wi-Fi settings page + OTA
 
@@ -161,7 +175,7 @@ Bluetooth connection as the keyboard. Writes need the paired (encrypted) link.
 | TX | `…0003…` | board → Mac | JSON lines (notify, split into ≤180-byte pieces) |
 | Audio | `…0004…` | board → Mac | agent audio frames (notify) |
 | Audio in | `…0005…` | Mac → board | sound clips: `[0][samples u32][rate u16]` start, `[1][frame]` data, `[2]` end → play (write without response; first/last acknowledged) |
-| OTA data | `…0006…` | Mac → board | firmware image packets `[offset u32 LE][bytes]` (write without response; StickS3 1.8.0+, see *Firmware update over Bluetooth*) |
+| OTA data | `…0006…` | Mac → board | firmware image packets `[offset u32 LE][bytes]` (write without response; StickS3 1.8.0+, see *Firmware update over Bluetooth*), and face packages (2.4.0+, *Face packages over Bluetooth*): one transfer at a time |
 
 The service UUID is in the advertisement (while connected too), so Mac
 programs find the board by it; they should then stay with the one board the
@@ -319,6 +333,25 @@ session's `progress()` / `pin_home()` changes it (at most every 0.5 s); boards s
   sessions) in NVS, so the faces draw before the agent connects. It compares each new one with the last to react
   (a PR merged → StickyBot eats a snack, a session gone → its fish leaps out); the first one after a restart isn't news.
 
+**Games** (StickS3 2.5.0+; the menu's *Games*):
+
+| Direction | Message |
+|---|---|
+| board → Mac | `{"src":"agent","evt":"game","id":"stack","score":12,"best":15,"new_best":false}` at the end of each game (also one quit or restarted from the pause menu with points), when the agent is linked |
+
+- `id`: `stack`, `flappy`, `dino`, `reaction`, `maze`, `balance`, `catch` (`@games` lists them).
+- `score`: the game's score (Reaction: the average of three rounds in ms, lower is better; `0` = a false
+  start). `best`: the stick's best after this game (it keeps the bests in NVS; the agent only remembers the
+  last it heard, for the dashboard). `new_best`: this game set it.
+- The agent gives StickyBot a little XP: +1 for a game with points, +3 for a new best, **at most 10 XP a
+  day from games** (`pet.py`: `GAME_XP_DAY_CAP`), so playing can't outrun real work (a merged PR is +10;
+  a level from level 2 on needs 30+). Games don't count for the streak. The new XP reaches the faces in
+  the next `world`.
+- Sent once, not acknowledged: a game finished while the agent isn't linked earns nothing (the best still
+  counts on the stick and shows in `@games`).
+- While a game is on, approvals and questions still take the screen (the game pauses), events wait until
+  the games close, and a firmware update or a face package is refused with `"why":"game"`.
+
 ### Firmware update over Bluetooth (StickS3 1.8.0+)
 
 The agent can update the stick over this link — no USB cable, no Wi-Fi. Only the
@@ -348,7 +381,7 @@ Older firmware has neither, and no `…0006…` characteristic: update it over U
 | Mac → board | `{"ota":{"status":1}}` → `{"evt":"ota","state":"status","receiving":…,"offset":…,"size":…,"pending":…}` |
 | board → Mac | `{"evt":"ota","state":"confirmed","fw":"1.8.1"}` — after a reboot into a new image, once it has confirmed itself (see Rollback) |
 
-Refusal / error codes: `busy` (+ `why`: `dictation`, `talk`, `approval`, `pairing`, `menu`, `wifi-update`),
+Refusal / error codes: `busy` (+ `why`: `dictation`, `talk`, `approval`, `pairing`, `menu`, `wifi-update`, `game` (2.5.0)),
 `battery` (below 30 % and not on USB power; unknown counts as low), `pending` (the running image isn't
 confirmed yet), `unsupported` (`compressed:true` — not implemented, send the raw image), `size` (0, bigger
 than the slot, or data past the end), `sha` (not 64 hex digits, or the image read back from flash doesn't
@@ -382,3 +415,124 @@ doesn't go to standby (waking is a reset) and refuses another update (`pending`)
 prompts, events and standby wait. Then "Restarting". On `begin` the stick asks the Mac for a quick connection interval, long
 link-layer packets and the 2M PHY (macOS decides what it grants; apps on the Mac cannot set these).
 
+### Face packages over Bluetooth (StickS3 2.4.0+)
+
+Faces made of data ([docs/faces/FORMAT.md](docs/faces/FORMAT.md)): the dashboard installs a compiled
+face (`.sfb`, at most 64 KB) on the stick, which keeps it in its flash (LittleFS on the 1.5 MB `spiffs`
+partition, `/fs/faces/<id>.sfb`, at most 12). The transfer is the firmware update's: the same receiver
+(windows, acks, gaps, resume), the same `…0006…` characteristic, only a file at the end instead of a
+firmware image. **One bulk transfer at a time:** while a face arrives it owns `…0006…` and a firmware
+`begin` is refused `busy` with `"why":"faces"`; while a firmware update runs (or is about to restart), a
+face is refused `ota`.
+
+**Support:** `@state` has `"pkgFaces":{"n":3,"fmt":[1]}` (the faces installed, the face formats the
+stick reads). Older firmware has no `pkgFaces`: don't send `faces` messages or `@faces` to it.
+
+**Messages** (all `"src":"agent"`; the board's answers are `"evt":"faces"`, with `"src":"agent"` like the
+`ota` ones):
+
+| Direction | Message |
+|---|---|
+| Mac → board | `{"faces":{"put":{"id":"catnap","version":"1.0.0","size":8772,"sha256":"<64 hex>","name":"Cat Nap"}}}` — `name` is optional (what the toast says; else the id) |
+| board → Mac | `{"evt":"faces","state":"ready","id":"catnap","offset":0,"size":8772,"window":16384,"chunk":240,"resumed":false}` — send from `offset` (window and chunk as for firmware) |
+| board → Mac | `{"evt":"faces","state":"refused","error":"busy","why":"dictation"}` — nothing started (codes below) |
+| Mac → board | packets on `…0006…`: `[offset u32 LE][bytes]`, in order, write without response |
+| board → Mac | `{"evt":"faces","state":"ack","offset":N}` and `…,"gap":true}` — exactly as for firmware (every 4 KB, at the end, 150 ms after news; gap: resend from N) |
+| Mac → board | `{"faces":{"end":1}}` once everything is acknowledged |
+| board → Mac | `{"evt":"faces","state":"done","id":"catnap","version":"1.0.0"}` — the sha256 of the file read back from flash matches, the face loads (the same checks as when it's drawn), and it replaced the old `<id>.sfb` at once. `version` is the manifest's. A repeated `end` gets `done` again |
+| board → Mac | `{"evt":"faces","state":"error","error":"invalid","why":"portrait element 3: unknown type 'video'","offset":N}` — the transfer is over and nothing was installed (`incomplete` is the exception: bytes are missing, the session stays; `put` again to resume) |
+| Mac → board | `{"faces":{"cancel":1}}` → `{"evt":"faces","state":"cancelled","by":"agent","offset":N}`; **B** on the stick while the toast shows → `"by":"stick"` |
+| Mac → board | `{"faces":{"rm":"catnap"}}` → `{"evt":"faces","state":"removed","id":"catnap","n":1}`; `"rm":"all"` removes every one (`"id":"all","n":<how many>`); a face that isn't installed → `{"evt":"faces","state":"error","error":"notfound","id":"catnap"}` (the OTA code `not_started` keeps its underscore) |
+| Mac → board | `@face id=catnap` (unchanged): make it the Home face |
+
+Refusals (`put`): `busy` (+ `why`: `dictation`, `talk`, `approval`, `pairing`, `menu`, `wifi-update`, `game` (2.5.0), as
+for firmware), `ota` (a firmware update is running), `size` (0 or more than 64 KB), `full` (12 faces
+installed, or not enough room; + `why`), `id` (not `^[a-z][a-z0-9]{2,11}$`, or a built-in face's or a
+reserved id), `sha` (not 64 hex digits). There is no battery minimum.
+
+Errors (after the bytes, or instead of them): `sha` (the file read back doesn't match), `invalid` (+ `why`:
+the stick never trusts the Mac, see FORMAT.md section 16), `format` (a face format this firmware doesn't
+read), `firmware` (the manifest's `minFirmware` is newer than the stick's; + `why`: "needs firmware 2.5.0"),
+`incomplete`, `timeout` (nothing for 3 min), `size` (data past the end), `open`, `write`, `read`,
+`not_started`. **`format` and `firmware` are errors, not refusals:** the stick only knows them once it has
+the file (the agent should check the catalog's `format` and `minFirmware` before sending).
+
+**Resume:** as for firmware, the session stays 3 min after a disconnect and the same `put` (id, size,
+sha256) answers `ready` with `"resumed":true`. The stick also keeps the part file
+(`/fs/faces/.part` + `.part.json`), so the same `put` after a restart resumes from what it had.
+
+**On the stick:** a small toast over Home, "Installing Cat Nap  60 %" ("waiting" when the data stops),
+then "Installed Cat Nap" or "Couldn't install …" for a few seconds; the screen wakes for it.
+
+**Listing:** `@faces` (also over Bluetooth as `{"proto":"@faces"}`) answers one page of the installed
+faces, at most 6, so the reply stays short:
+
+```json
+{"ok":true,"faces":[{"id":"catnap","v":"1.0.0","sz":8772,"sha":"3f9c0a1b"},
+                    {"id":"dialclock","v":"1.0.0","sz":3224,"sha":"7d10e2c4","err":"image 0: short image data"}],
+ "free":712,"max":12,"more":false}
+```
+
+`v` the face's version, `sz` its size in bytes, `sha` the first 8 hex digits of its sha256, `err` only for
+a face that doesn't load (the stick draws Classic instead), `free` the room left in KB, `more`: `@faces
+page=1` has the next 6. `@faces rm=<id|all>` removes (`{"ok":true,"removed":N}`; 404 if it isn't
+installed). Removing the Home face makes Classic the Home face. Names and titles stay on the Mac (the
+catalog has them). `@state`'s `faces` still lists only the built-in faces.
+
+### IR remote (StickS3 2.5.0+)
+
+The stick's infrared LED and receiver (pins in `src/ir/pins.h`: TX G46, RX G42 by M5Stack's pin map;
+`@ir diag` checks it) make it a learning remote. It keeps the codes itself, so its **Remote** screen
+(menu → *Remote*) works without the Mac: LittleFS `/ir/<device>.json` (the face packages' partition),
+at most 16 remotes of 48 buttons, 48 KB a file (`src/logic/ir_doc.h`).
+
+**Support:** `@state` has `"ir":{"v":1,"n":<remotes>,"tx":46,"rx":42}`. Older firmware answers `@ir`
+with `Unknown command`.
+
+**Codes** are strings (`src/logic/ir_codec.h`): `nec:<addr>:<cmd>` (hex; an address / command that
+isn't followed by its inverse is NEC-extended, 16 bits), `samsung:7:2`, `lg:88:c05` (LG's 28-bit AC
+protocol; LG TVs are NEC), `sony12|sony15|sony20:<addr>:<cmd>`, `rc5:<addr>:<cmd>`, `rc6:<addr>:<cmd>`
+(mode 0), `panasonic:<addr>:<cmd>` / `kaseikyo:<vendor>:<addr>:<cmd>`, and `raw:<kHz>:<µs>,<µs>,...`
+(marks and spaces from a mark) or its compact form `raw:<kHz>:<v0>,<v1>,...:<one character 0-9a-z per
+duration>`. Remotes the decoders don't know (air conditioners' long state frames) are kept raw.
+
+**Commands** (`@ir <op> name=value&...` — on the serial port also space-separated: `ir send dev=tv
+btn=volume up`). Names: devices `[a-z0-9-]`, 1–16 (`"Living Room TV"` → `living-room-tv`); buttons
+lower case, letters, digits, spaces, `+ - _ . #`, 1–24.
+
+| Op | Parameters | Answer |
+|---|---|---|
+| `list` | — or `dev=` (+ `page=`) | `{"devices":[{"id","n","fav"}],"max":16,"maxButtons":48,"free":<KB>}`; with `dev`: `{"dev","buttons":[{"n","p","f"}],"page","total","more"}`, 12 a page |
+| `get` | `dev= btn=` | `{"dev","btn","c":"<code>","f"}` (export) |
+| `send` | `dev= btn= [repeat=]` or `code= [repeat=]` | `{"sent":…}` at once; the stick sends in the background. `repeat` = extra frames (NEC/LG: repeat frames; the others the frame again; Sony at least 3) |
+| `learn` | `dev= [btn=] [once=1]` | `{"learning":true,"dev","btn"}`; events follow. No `btn`: "button N". `once`: one press is enough (state remotes) |
+| `listen` | `[secs=10]` | the receiver on for a while: a `heard` event per signal (finding the right pin / remote) |
+| `cancel` | | stops a learn / listen |
+| `put` | `dev= btn= code= [fav=]` | stores a code (import, built-in code sets) |
+| `rm` | `dev= [btn=]` | removes a button, or the whole remote |
+| `rename` | `dev= [btn=] to=` | renames a button, or the remote |
+| `fav` | `dev= btn= [on=0\|1]` | favourites come first on the stick |
+| `diag` | | `{"tx":46,"rx":42,"txIdle","rxIdle","pins":"ok"\|"swapped"\|"unknown","rmtTx","rmtRx",...}`: a receiver idles high, the LED driver's input low |
+
+Errors: `{"ok":false,"error":"<words>","code":"notfound"|"code"|"name"|"full"|"exists"|"hardware"|"storage"}`.
+
+Over Bluetooth the agent sends these as `{"proto":"@ir op=…"}`, or as `{"src":"agent","ir":{"<op>":{…args}}}`
+(answered `{"src":"agent","evt":"ir","op":"<op>","reply":{…}}`). Learning and listening report
+(board → Mac, `"src":"agent","evt":"ir"`):
+
+| `state` | Fields | When |
+|---|---|---|
+| `learning` | `dev`, `btn`, `step` 1 / 2 | started; first press heard (press again) |
+| `mismatch` | `dev`, `btn` | the second press differed: press again (it counts as the first) |
+| `saved` | `dev`, `btn`, `p` (protocol or `raw`), `code` (≤ 64 chars), `n` | learned and stored |
+| `timeout` / `error` (`error`) / `cancelled` (`by`) | | nothing for 30 s / couldn't store / stopped (B on the stick or `cancel`) |
+| `listening` / `heard` (`code` or `p:"raw"`, `n`) / `listened` | | `listen` |
+
+**Receiving** uses the RMT peripheral (DMA, two buffers taking turns, a 1 µs glitch filter, 12 ms idle
+ends a frame; frames < 150 ms apart are one capture with their gap). Learning compares two presses (the
+same protocol code, or every duration within 25 %). **Sending**: RMT at 1 µs with the protocol's carrier
+(38 kHz; Sony 40, RC5/RC6 36, Panasonic 37; raw: its own), 33 % duty.
+
+**On the stick:** menu → *Remote*: the remotes (and *Favourites*), A opens, B next, B-B previous, hold B
+leaves; in a remote A sends (held: repeats), B-B-B stars, *+ Learn a button* learns. A learn started
+from the Mac shows on the stick too (B cancels).

@@ -30,8 +30,9 @@ struct Dash {
   int      battery;      // 0-100, -1 unknown
   bool     charging;
   String   batLine;      // "4.02 V · charging"
-  String   clock;        // "3:05" (12-hour) once the Mac agent has sent the time, else ""
-  String   ampm;         // "AM" / "PM"
+  String   clock;        // "3:05" (or "15:05" with the 24-hour setting) once the Mac agent has sent the time, else ""
+  String   ampm;         // "AM" / "PM" ("" with the 24-hour setting)
+  bool     clock24 = false;  // the 12 / 24-hour setting
   // Mac agent (+ the Claude desktop app, if the stick is named "Claude...")
   bool     agentLinked;
   String   agentHeard, agentText;
@@ -39,6 +40,7 @@ struct Dash {
   String   longDate;     // "Tuesday 20 October" (dock clock)
   int      minute = -1;  // minutes since local midnight (the faces' sky), -1 until the agent has sent the time
   int      second = -1;  // 0-59 along with minute (the Analog face's second hand)
+  int      wday = -1, mday = 0, mon = 0;  // the date's parts (wday 0 Sunday, mon 0 January), wday -1 until then
   // bottom card on the home screen (from the agent)
   String   cardKind, cardA, cardB;
   bool     cardUrgent;
@@ -60,7 +62,7 @@ struct Dash {
 
 struct MenuView {
   const char* title;
-  String      lines[30];
+  String      lines[40];  // the menu has 35 items (2.5.0); menu.cpp static_asserts it fits
   int         count;
   int         selected;
   const char* hint;
@@ -72,7 +74,13 @@ void setFlipped(bool flipped);
 // (rotation 1, button A on the right / rotation 3, A on the left) for the screens that
 // have a landscape layout. Takes effect at the next draw.
 void setOrientation(bool flipped, int side);
+// Games (2.5.0): turn to this side now (0 portrait, +1 / -1 landscape) and draw there; the
+// screens with a landscape layout use it too until the next setOrientation().
+void useSide(int side);
 void setBrightness(uint8_t pct);
+// For a screen drawn outside ui.cpp with a landscape layout (the remote modes, air_ui.cpp):
+// turns to the held side (setOrientation) and undims; true = draw the landscape layout.
+bool turnToHeldSide();
 
 // Screen power. The screen is off by default to save battery: on for a while
 // after boot, then only when woken (button B, menu, pairing, web settings).

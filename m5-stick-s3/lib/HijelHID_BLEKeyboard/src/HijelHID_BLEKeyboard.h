@@ -46,6 +46,7 @@
 // ─── Report IDs ────────────────────────────────────────────────────────────
 #define HID_REPORT_ID_KEYBOARD  0x01
 #define HID_REPORT_ID_CONSUMER  0x02
+#define HID_REPORT_ID_MOUSE     0x03  // [stick-key change]
 
 // ─── Report Sizes ──────────────────────────────────────────────────────────
 // Keyboard input:  8 bytes — [modifiers][reserved][key0..key5]
@@ -54,6 +55,12 @@
 #define HID_KEYBOARD_REPORT_SIZE  8
 #define HID_LED_REPORT_SIZE       1
 #define HID_CONSUMER_REPORT_SIZE  2
+#define HID_MOUSE_REPORT_SIZE     5   // [stick-key change] buttons, x, y, wheel, pan
+
+// Mouse buttons for mouseButtons() [stick-key change]
+#define MOUSE_BUTTON_LEFT    0x01
+#define MOUSE_BUTTON_RIGHT   0x02
+#define MOUSE_BUTTON_MIDDLE  0x04
 
 // ─── LED Bitmask Constants (host → keyboard) ──────────────────────────────
 // Received via the LED output report. Use with isNumLockOn() etc. or the
@@ -453,6 +460,22 @@ public:
     void setPnpId(uint8_t source, uint16_t vid, uint16_t pid, uint16_t version);
 
     /**
+     * [stick-key change] Relative mouse movement (Report ID 3): x / y in counts,
+     * wheel (+ = up) and pan (+ = right) in detents. Never blocks: returns
+     * `false` when no Bluetooth buffer was free (keep the motion for the next call).
+     */
+    bool mouseMove(int8_t x, int8_t y, int8_t wheel = 0, int8_t pan = 0);
+    /**
+     * [stick-key change] Set the held mouse buttons (`MOUSE_BUTTON_*` bits, 0 = none).
+     * Waits up to 500 ms for a buffer, like a key. `releaseAll()` releases them too.
+     */
+    bool mouseButtons(uint8_t buttons);
+    uint8_t heldMouseButtons() const { return _mouseButtons; }
+    /** [stick-key change] The mouse input report's characteristic (after `begin()`), e.g. to
+     *  see whether the host subscribed to it (it knows the mouse). */
+    NimBLECharacteristic* mouseInput() const { return _pMouseInput; }
+
+    /**
      * Press and release a keyboard key in one call.
      *
      * `keycode` is a `KEY_*` constant from `BLEHIDKeys.h`.
@@ -672,12 +695,15 @@ private:
     NimBLECharacteristic*      _pKeyboardInput;   // Report ID 0x01 Input  (keys → host)
     NimBLECharacteristic*      _pKeyboardOutput;  // Report ID 0x01 Output (LEDs ← host)
     NimBLECharacteristic*      _pConsumerInput;   // Report ID 0x02 Input  (media → host)
+    NimBLECharacteristic*      _pMouseInput;      // Report ID 0x03 Input  (mouse → host) [stick-key change]
+    uint8_t                    _mouseButtons;     // held mouse buttons [stick-key change]
     HijelHID_Internal::KBServerCallbacks*   _pServerCb;  // Owned by us, passed to NimBLE
     HijelHID_Internal::KBLEDCallbacks*      _pLEDCb;      // Owned by us, passed to NimBLE
 
     // ── Internal Helpers ──────────────────────────────────────────────────
     void    _sendKeyReport();
     void    _sendConsumerReport(uint16_t usageId);
+    bool    _sendMouseReport(int8_t x, int8_t y, int8_t wheel, int8_t pan, bool wait);  // [stick-key change]
     void    _updateConnParams(uint16_t minInterval, uint16_t maxInterval,
                               uint16_t latency, uint16_t timeout);
     void    _transitionToActive();

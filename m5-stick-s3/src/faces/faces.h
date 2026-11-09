@@ -13,6 +13,11 @@
 //   stickydark   StickyWorld Dark: the same world always at night, low glare (stickyworld.cpp)
 //   aquadark     Aquarium Dark: the deep sea, glowing fish and weed (aquarium.cpp)
 //
+// After them, the face packages installed on the stick (docs/faces/FORMAT.md, pkg/package.cpp):
+// faces made of data that the dashboard installs over Bluetooth. They're in the registry like
+// the built-in ones (the pickers, "@face id=", the demo), but @state lists only the built-in
+// ones ("faces"; the packages are in "@faces", to keep @state short).
+//
 // Adding a face: one file in src/faces/ that subclasses Face and defines `Face& myFace()`
 // (a variant of a face, like the dark ones: a subclass in the same file, with its own id)
 // (see classic.cpp, the smallest), plus one X(myFace) in FACES in faces.cpp (and, for a
@@ -43,12 +48,15 @@ class Face {
   virtual uint32_t frameMs(bool onBattery, uint32_t idleMs) const { return 0; }
   // Forget the animation state (after a demo, so its fake fish don't all leap out).
   virtual void reset() {}
+  // A clock with no world to show: the demo plays it the short script (demo.cpp)
+  virtual bool clockOnly() const { return false; }
 };
 
 // --- Registry ---------------------------------------------------------------------
 int         count();
 Face&       at(int i);
 int         find(const String& id);   // -1 if unknown
+int         builtinCount();           // the first ones; then the installed packages
 Face&       active();
 void        select(const String& id); // unknown -> classic (the caller saves the setting)
 
@@ -62,7 +70,7 @@ void begin();                                  // loads the cached world from NV
 const world::Snapshot& world();                // the demo's while one runs
 void onWorld(JsonObjectConst w);               // {"src":"agent","world":{...}} or in the hello
 void onEventKind(const char* kind);            // an event's "kind" (events.py), for reactions
-String json();                                 // [{"id","title","about"},...] for @state
+String json();                                 // [{"id","title","about"},...] for @state (built-in ones)
 
 // --- Demo / preview (serial "screens faces", protocol "@face demo=<id>") -------------
 bool demoStart(const String& id);   // "all" or "" = every face; false if unknown

@@ -10,8 +10,14 @@ constexpr uint16_t ENTER_STEPS[]   = {0, 500, 1000, 1500, 2000, 3000};
 
 enum Item {
   MOD_FN, MOD_CTRL, MOD_OPTION, MOD_SHIFT, MOD_CMD, KEY, TEST, ENTER,
-  SLOT, BT, FORGET, STANDBY, SOUND, VOLUME, WMIC, M_LIFT, M_FACE, M_SHAKE, BRIGHT, HOME_FACE, AUTOROT, LANDSCAPE, FLIP, WEB, DEV, POWER, SAVE, CANCEL, COUNT
+  SLOT, BT, FORGET, STANDBY, SOUND, VOLUME, WMIC, M_LIFT, M_FACE, M_SHAKE, BRIGHT, HOME_FACE, CLOCK24, AUTOROT, LANDSCAPE, FLIP, WEB, DEV, POWER, SAVE, CANCEL,
+  // 2.5.0: the new screens come after the settings, so the existing items keep their places
+  GAMES,                        // the games (games/games.h)
+  REMOTE,                       // the IR remote screen (src/ir/screen.cpp)
+  R_MOUSE, R_PRESENT, R_MEDIA,  // the remote modes (air.h): start one
+  COUNT
 };
+static_assert(COUNT <= sizeof(ui::MenuView::lines) / sizeof(ui::MenuView::lines[0]), "ui::MenuView::lines is too small for the menu");
 
 static Draft    draft_;
 static uint8_t  originalSlot;
@@ -19,6 +25,9 @@ static bool     btOff_;
 static int      sel = 0;
 static uint32_t lastInput = 0, forgetArmedAt = 0;
 static bool     forgetArmed = false, emptyWarning = false;
+static uint8_t  remote_ = 0;
+
+uint8_t remoteMode() { return remote_; }
 
 void open(const Draft& current, bool btOff) {
   draft_ = current;
@@ -61,13 +70,17 @@ Action select() {
   touch();
   emptyWarning = false;
   switch (sel) {
+    case R_MOUSE: case R_PRESENT: case R_MEDIA:
+      remote_ = sel - R_MOUSE + 1;
+      return Action::AIR;
     case MOD_FN: case MOD_CTRL: case MOD_OPTION: case MOD_SHIFT: case MOD_CMD:
-      draft_.combo.mods ^= MODS[sel].bit;
+      draft_.combo.mods ^= MODS[sel - MOD_FN].bit;
       return Action::REDRAW;
     case KEY:     nextKey(); return Action::REDRAW;
     case TEST:
       if (!draft_.combo.valid()) { emptyWarning = true; return Action::REDRAW; }
       return Action::TEST;
+    case REMOTE:  return Action::REMOTE;  // the IR remote screen (src/ir/screen.cpp)
     case ENTER: {
       size_t n = sizeof(ENTER_STEPS) / sizeof(ENTER_STEPS[0]), i = 0;
       while (i < n && ENTER_STEPS[i] != draft_.enterDelayMs) i++;
@@ -89,6 +102,7 @@ Action select() {
       draft_.brightnessPct = draft_.brightnessPct >= 100 ? 25 : (draft_.brightnessPct / 25 + 1) * 25;
       return Action::BRIGHTNESS;
     case HOME_FACE: draft_.face = (draft_.face + 1) % faces::count(); return Action::REDRAW;
+    case CLOCK24: draft_.clock24 = !draft_.clock24; return Action::REDRAW;
     case AUTOROT: draft_.autoRotate = !draft_.autoRotate; return Action::REDRAW;
     case LANDSCAPE: draft_.landscape = !draft_.landscape; return Action::REDRAW;
     case FLIP:    return Action::FLIP;
@@ -97,6 +111,7 @@ Action select() {
     case WMIC:    draft_.wmic = !draft_.wmic; return Action::REDRAW;
     case VOLUME:  draft_.volume = draft_.volume >= 255 ? 64 : draft_.volume >= 192 ? 255 : draft_.volume >= 128 ? 192 : 128;
                   return Action::VOLUME;
+    case GAMES:   return Action::GAMES;
     case POWER:   return Action::POWER_OFF;
     case WEB:     return Action::WEB;
     case SAVE:
@@ -120,9 +135,11 @@ ui::MenuView view() {
 
   ui::MenuView v{title.c_str(), {}, COUNT, sel, "A next  B change"};
   for (int i = MOD_FN; i <= MOD_CMD; i++)
-    v.lines[i] = String(MODS[i].name) + ": " + ((draft_.combo.mods & MODS[i].bit) ? "ON" : "off");
+    v.lines[i] = String(MODS[i - MOD_FN].name) + ": " + ((draft_.combo.mods & MODS[i - MOD_FN].bit) ? "ON" : "off");
   v.lines[KEY]     = String("Key: ") + KEYS[max(0, keyIndex(draft_.combo.key))].name;
   v.lines[TEST]    = "Test combo";
+  v.lines[GAMES]   = "Games";
+  v.lines[REMOTE]  = "Remote (IR)";
   v.lines[ENTER]   = draft_.enterDelayMs ? String("Enter after: ") + String(draft_.enterDelayMs / 1000.0f, 1) + "s"
                                          : String("Enter after: off");
   v.lines[SLOT]    = String("Mac slot: ") + draft_.slot + (draft_.slot != originalSlot ? " *" : "");
@@ -134,6 +151,7 @@ ui::MenuView view() {
   v.lines[M_SHAKE] = String("Shake = Esc: ") + (draft_.shake ? "ON" : "off");
   v.lines[BRIGHT]  = String("Brightness: ") + draft_.brightnessPct + "%";
   v.lines[HOME_FACE] = String("Face: ") + faces::at(draft_.face).title();
+  v.lines[CLOCK24] = String("Clock: ") + (draft_.clock24 ? "24-hour" : "12-hour");
   v.lines[AUTOROT] = String("Auto-rotate: ") + (draft_.autoRotate ? "ON" : "off");
   v.lines[LANDSCAPE] = String("Landscape screens: ") + (draft_.landscape ? "ON" : "off");
   v.lines[FLIP]    = "Flip screen";
@@ -146,6 +164,9 @@ ui::MenuView view() {
   bool restart = draft_.slot != originalSlot;
   v.lines[SAVE]    = restart ? "Save & restart" : "Save & exit";
   v.lines[CANCEL]  = "Cancel";
+  v.lines[R_MOUSE]   = "Air mouse  >";
+  v.lines[R_PRESENT] = "Presenter  >";
+  v.lines[R_MEDIA]   = "Media remote  >";
 
   if (sel == KEY) v.hint = "B next  hold=fast";
   else if (sel == ENTER) v.hint = "Enter after a hold";
@@ -153,8 +174,11 @@ ui::MenuView view() {
   else if (sel == DEV) v.hint = "USB: Wi-Fi on, OTA+logs";
   else if (sel == WMIC) v.hint = "A hold: Wispr mic by BT";
   else if (sel == HOME_FACE) v.hint = "Home screen look";
+  else if (sel == GAMES) v.hint = "B: play a game";
+  else if (sel == REMOTE) v.hint = "TV / AC: send, learn";
   else if (sel == LANDSCAPE) v.hint = draft_.autoRotate ? "Held sideways: wide" : "Needs auto-rotate";
-  else if (sel == TEST || sel == BT || sel == FLIP || sel == WEB || sel == POWER || sel >= SAVE) v.hint = "A next  B select";
+  else if (sel >= R_MOUSE && sel <= R_MEDIA) v.hint = "B start  A+B hold: exit";
+  else if (sel == TEST || sel == BT || sel == FLIP || sel == WEB || sel == POWER || sel == SAVE || sel == CANCEL) v.hint = "A next  B select";
   return v;
 }
 

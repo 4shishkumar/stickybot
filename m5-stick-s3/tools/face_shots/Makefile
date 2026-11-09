@@ -4,32 +4,73 @@
 #
 #   make -C tools/face_shots            every face's demo, a picture per step -> out/
 #   make -C tools/face_shots FACE=<id>  one face's demo
+#   make -C tools/face_shots air        the remote modes' screens (air mouse, presenter, media) -> out/air/
 #   make -C tools/face_shots previews   the dashboard's face pictures (mac-agent static/faces/)
+#   make -C tools/face_shots pkg PKG=<dir> [PREVIEWS=1]
+#                                       a face package (docs/faces/FORMAT.md): validated and
+#                                       compiled (tools/faces/validate.py), drawn in several
+#                                       states -> out/pkg/<id>-*.png + <id>-sheet.png;
+#                                       PREVIEWS=1 also writes <dir>/previews/*.png
+#   make -C tools/face_shots games [OUT=<dir>]
+#                                       the games (src/games/draw.cpp): the picker, each game's
+#                                       title card, play, pause and game over -> OUT (out/games),
+#                                       a contact sheet games-sheet.png, and each game's frame
+#                                       cost on this Mac
+#   make -C tools/face_shots fuzz PKG=<dir> [N=5000] [SAN=1]
+#                                       the engine's loader against N broken copies of a
+#                                       package (SAN=1: with AddressSanitizer + UBSan)
+#
+# Face packages are drawn by the firmware's own engine (src/faces/pkg/engine.cpp).
 SRC  := ../../src
 LIBS := ../../.pio/libdeps/sticks3
 GFX  := $(LIBS)/M5GFX/src
 JSON := $(LIBS)/ArduinoJson/src
-B    := build
+SAN  ?=
+B    := build$(if $(SAN),-san)
+N    ?= 5000
 FACE ?= all
+PYTHON ?= python3
+PKG  ?= ../../../faces/examples/textclock
 
-CXXFLAGS := -std=gnu++17 -O1 -w -Imock -I$(SRC) -I$(GFX) -I$(JSON)
-CFLAGS   := -O1 -w -Imock -I$(GFX)
+SANFLAGS := $(if $(SAN),-g -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer)
+CXXFLAGS := -std=gnu++17 -O1 -w -Imock -I$(SRC) -I$(GFX) -I$(JSON) $(SANFLAGS)
+CFLAGS   := -O1 -w -Imock -I$(GFX) $(SANFLAGS)
 
-APP  := shots.cpp $(SRC)/ui.cpp $(SRC)/fonts_vlw.cpp $(wildcard $(SRC)/faces/*.cpp) $(wildcard $(SRC)/logic/*.cpp)
+APP  := shots.cpp $(SRC)/ui.cpp $(SRC)/air_ui.cpp $(SRC)/fonts_vlw.cpp $(wildcard $(SRC)/faces/*.cpp) $(SRC)/faces/pkg/engine.cpp $(SRC)/games/draw.cpp $(wildcard $(SRC)/logic/*.cpp)
 LGFX := $(GFX)/lgfx/v1/LGFXBase.cpp $(GFX)/lgfx/v1/lgfx_v1.cpp $(GFX)/lgfx/v1/lgfx_fonts.cpp \
         $(GFX)/lgfx/v1/lgfx_v1_panel.cpp fbbase.cpp
 CSRC := $(wildcard $(GFX)/lgfx/utility/*.c) fontstubs.c
 OBJ  := $(addprefix $(B)/,$(notdir $(APP:.cpp=.o) $(LGFX:.cpp=.o) $(CSRC:.c=.o)))
-VPATH := $(SRC) $(SRC)/faces $(SRC)/logic $(GFX)/lgfx/v1 $(GFX)/lgfx/utility .
+VPATH := $(SRC) $(SRC)/faces $(SRC)/faces/pkg $(SRC)/logic $(SRC)/games $(GFX)/lgfx/v1 $(GFX)/lgfx/utility .
 
-.PHONY: demo previews clean
+.PHONY: demo previews pkg fuzz air games clean
+OUT ?= out/games
 demo: $(B)/shots
 	cd $(B)/.. && $(B)/shots demo out $(FACE)
+air: $(B)/shots
+	mkdir -p out/air && $(B)/shots air out/air
+games: $(B)/shots
+	$(B)/shots games $(OUT)
 previews: $(B)/shots
 	$(B)/shots previews ../../../mac-agent/stick_agent/static/faces
 
+pkg: $(B)/shots
+	$(PYTHON) ../../../tools/faces/validate.py --no-previews --compile $(B)/sfb $(PKG)
+	@mkdir -p out
+	@id=$$($(PYTHON) -c "import json,sys; print(json.load(open(sys.argv[1]))['id'])" $(PKG)/manifest.json) && \
+	  $(B)/shots pkg $(B)/sfb/$$id.sfb out/pkg && \
+	  if [ -n "$(PREVIEWS)" ]; then $(B)/shots pkgpreview $(B)/sfb/$$id.sfb $(PKG)/previews; fi
+
+fuzz: $(B)/shots
+	$(PYTHON) ../../../tools/faces/validate.py --no-previews --compile $(B)/sfb $(PKG)
+	@id=$$($(PYTHON) -c "import json,sys; print(json.load(open(sys.argv[1]))['id'])" $(PKG)/manifest.json) && \
+	  $(B)/shots fuzz $(B)/sfb/$$id.sfb $(N)
+
 $(B)/shots: $(OBJ)
-	$(CXX) -o $@ $^ -lz
+	$(CXX) $(SANFLAGS) -o $@ $^ -lz
+# a header changed (ui::Dash, an engine struct): rebuild what includes it, or the objects disagree
+HDRS := $(wildcard $(SRC)/*.h $(SRC)/games/*.h $(SRC)/faces/*.h $(SRC)/faces/pkg/*.h $(SRC)/logic/*.h)
+$(addprefix $(B)/,$(notdir $(APP:.cpp=.o))): $(HDRS)
 $(B)/%.o: %.cpp | $(B)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 $(B)/%.o: %.c | $(B)

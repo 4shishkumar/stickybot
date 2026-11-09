@@ -10,6 +10,7 @@
 // Writes need an encrypted (paired) link, so only your own Mac can use it.
 #pragma once
 #include <Arduino.h>
+#include "logic/clock.h"
 
 namespace buddy {
 
@@ -63,8 +64,9 @@ void   fastLink();                 // ask the Mac for a quick connection interva
 void   fastData();                 // ... plus long packets + the 2M PHY (firmware update coming)
 void   sendLine(const String& json, bool log = true);  // one JSON line to the Mac (TX notify, split as needed)
 String linkInfo();                 // "MTU 256, 15 ms" (for logs)
-String clock();                    // local 12-hour time "3:25" from the agent's clock, "" until it has sent it
-String ampm();                     // "AM" / "PM"
+String clock();                    // local time "3:25" (24-hour setting: "15:25") from the agent's clock, "" until it has sent it
+String ampm();                     // "AM" / "PM" ("" with the 24-hour setting)
+bool   localTime(clockfmt::Local& t);  // the agent's clock in local time; false until it has sent it
 int    hour();                     // local hour 0-23, -1 until the agent has sent the time
 int    minuteOfDay();              // local minutes since midnight 0-1439, -1 until then
 String longDate();                 // "Tuesday 20 October", "" until then

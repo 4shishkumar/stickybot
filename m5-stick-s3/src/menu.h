@@ -1,6 +1,7 @@
 // On-device settings menu.
 //   BtnA (front) = next item
 //   BtnB (side)  = change / select; hold on "Key" to scroll fast
+// "Games" leaves the menu (unsaved changes are dropped, as with Cancel) for the games.
 // Changes to combo, Mac slot and standby are drafts until "Save & exit".
 #pragma once
 #include "combo.h"
@@ -8,7 +9,7 @@
 
 namespace menu {
 
-enum class Action { NONE, REDRAW, TEST, WEB, FLIP, BT_TOGGLE, FORGET, BRIGHTNESS, VOLUME, POWER_OFF, SAVE, CANCEL };
+enum class Action { NONE, REDRAW, TEST, WEB, FLIP, BT_TOGGLE, FORGET, BRIGHTNESS, VOLUME, POWER_OFF, SAVE, CANCEL, AIR, GAMES, REMOTE };
 
 struct Draft {
   Combo   combo;
@@ -19,6 +20,7 @@ struct Draft {
   bool    lift, faceDown, shake;
   bool    autoRotate;
   bool    landscape;   // landscape screens when held sideways (with auto-rotate)
+  bool    clock24;     // 24-hour time
   bool    devMode;
   bool    sound;
   uint8_t volume;  // 0-255
@@ -33,5 +35,6 @@ Action       repeat();    // BtnB held (auto-repeat)
 bool         timedOut();
 const Draft& draft();
 ui::MenuView view();
+uint8_t      remoteMode();  // after Action::AIR: 1 air mouse, 2 presenter, 3 media (air.h)
 
 }  // namespace menu

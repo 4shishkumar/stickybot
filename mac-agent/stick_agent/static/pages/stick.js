@@ -1,14 +1,15 @@
 // Stick: the stick's own settings (sent over Bluetooth, or USB when plugged in)
 // and its firmware.
-import {h, clear, card, field, toggle, proto, get, put, post, report, toast, store} from "../lib.js";
+import {h, clear, card, field, toggle, proto, get, put, post, report, toast, store, fmtAgo, recall, remember} from "../lib.js";
 import {firmwarePanel} from "../firmware.js";
+import {airCard} from "./air.js";
 
 export const title = "Stick";
 export const subtitle = "The stick's own settings. They're saved on the stick, so they stay with it.";
 
 // Fallback for older firmware; newer sticks send their own list (with Fn) in `keys`.
 const MODS = [["Ctrl", 1], ["Option", 4], ["Shift", 2], ["Cmd", 8]];
-let root = null, st = null, keys = null, via = null, snd = null, petInfo = null;
+let root = null, st = null, keys = null, via = null, snd = null, petInfo = null, gamesInfo = null;
 
 export function actions() {
   return [h("button", {class: "btn", type: "button", onclick: load}, "Refresh"),
@@ -21,9 +22,10 @@ export function leave() { root = null; }
 async function load() {
   if (!root) return;
   clear(root).appendChild(h("div", {class: "empty"}, "Asking the stick…"));
-  const [r, k, s, pt] = await Promise.all([proto("state"), keys ? Promise.resolve(null) : proto("keys"), get("/api/sounds"),
-    get("/api/pet").catch(() => null)]);
+  const [r, k, s, pt, gm] = await Promise.all([proto("state"), keys ? Promise.resolve(null) : proto("keys"), get("/api/sounds"),
+    get("/api/pet").catch(() => null), proto("games").catch(() => null)]);
   petInfo = pt && pt.pet ? pt.pet : null;
+  gamesInfo = gm && gm.ok && gm.reply && Array.isArray(gm.reply.games) ? gm.reply.games : null;  // firmware 2.5.0+
   if (k && k.ok && k.reply) keys = k.reply;
   st = r.ok && r.reply ? r.reply : null;
   via = r.via;
@@ -54,8 +56,9 @@ function paint(res) {
         ? "This version of the agent can't change the stick's settings yet. The stick's own menu (triple-press B) still works."
         : (res && res.error) || "Check it's switched on and connected (Overview shows the link)."))));
   } else {
-    root.append(identityCard(), ...(st.faces ? [faceCard()] : []), comboCard(), unlockCard(), slotsCard(), screenCard(),
-      motionCard(), soundCard());
+    root.append(identityCard(), ...(st.faces ? [faceCard(), marketCard()] : []), ...(gamesInfo ? [gamesCard()] : []),
+      comboCard(), unlockCard(), slotsCard(), screenCard(), motionCard(),
+      ...(st.air ? [airCard(st, send)] : []), soundCard());  // games, air: firmware 2.5.0+
   }
   root.appendChild(card("Firmware", firmwarePanel()));
 }
@@ -118,6 +121,236 @@ function faceCard() {
     h("p", {class: "lead"}, "How the stick's Home screen looks. Approvals, questions and alerts still take over the screen, ",
       "and every face keeps the time and anything urgent in view."),
     facts, h("div", {class: "faces"}, tiles));
+}
+
+// Games (firmware 2.5.0+): the stick's best scores (`@games`, kept on the stick) and the XP
+// games earned StickyBot today (capped, pet.py).
+function gamesCard() {
+  const g = (petInfo && petInfo.games) || {};
+  const plays = g.plays || {};
+  const rows = gamesInfo.map(x => h("div", {class: "game-row"},
+    h("b", null, x.title),
+    h("span", {class: "small dim"}, x.tilt ? "tilt" : "button A"),
+    h("span", {class: "game-best"}, x.best > 0 ? `${x.best}${x.low ? " ms" : ""}` : "—"),
+    h("span", {class: "small faint"}, plays[x.id] ? `${plays[x.id]} played` : "")));
+  return card("Games",
+    h("p", {class: "lead"}, "Seven little games on the stick: menu (triple-press B) → Games. ",
+      "Each game StickyBot plays earns a little XP: ", h("b", null, `${g.xpToday || 0} of ${g.cap || 10} XP today`), "."),
+    h("div", {class: "games"}, rows));
+}
+
+// Face packages (firmware 2.4.0+, docs/faces/CATALOG.md): the faces installed on the stick
+// (Use / Update / Remove, or "didn't load"), "Get more faces" from the catalog with filters,
+// and "Install from file…" for people making faces. The agent fetches and caches the catalog
+// (/api/faces/catalog), checks every file, and sends it over Bluetooth (/api/faces/install, a
+// job with progress like firmware updates).
+const MIN_FACES_FW = "2.4.0";
+const KINDS = {  // the filters, from a face's tags and motion (GUIDELINES.md, Naming)
+  minimal: f => tagged(f, "minimal") || (f.motion || "static") === "static" && !tagged(f, "animated", "scene", "cute", "pixel-art"),
+  fun: f => tagged(f, "animated", "scene", "cute", "pixel-art", "retro") || (f.motion || "static") !== "static",
+  utility: f => tagged(f, "data", "clock", "analog", "digital"),
+};
+const MOTION = {static: "Static", calm: "Calm", lively: "Lively · uses a little more battery"};
+let market = null, marketBox = null, marketOpen = false, marketJob = null, marketMsg = null;
+let marketFilter = recall("faceFilter", {kind: "all", channel: "all"});
+const tagged = (f, ...tags) => (f.tags || []).some(t => tags.includes(t));
+const cap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
+const kb = n => n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} bytes`;
+
+function marketCard() {
+  marketBox = h("div", {class: "market"}, h("div", {class: "empty"}, "Looking at the faces on the stick…"));
+  loadMarket(false);
+  return card(h("div", {class: "row grow"}, h("h2", null, "More faces"),
+    h("span", {class: "small faint", style: "margin-left:auto"}, "made by people, checked before they're added")), marketBox);
+}
+
+async function loadMarket(refresh) {
+  const r = await get("/api/faces/catalog" + (refresh ? "?refresh=1" : ""));
+  market = r;
+  paintMarket();
+}
+
+function paintMarket() {
+  if (!marketBox || !marketBox.isConnected) return;
+  const m = market;
+  clear(marketBox);
+  if (!m) return;
+  if (m.missing) { marketBox.appendChild(h("div", {class: "empty"}, "This version of the agent can't add faces yet.")); return; }
+  const s = m.stick || {};
+  if (marketMsg) marketBox.appendChild(marketMsg);
+  if (marketJob) marketBox.appendChild(marketJob.el);
+  if (s.connected && !s.supported && s.fw) {
+    marketBox.appendChild(h("div", {class: "notice warn"}, h("div", {class: "grow"},
+      h("b", null, `Update the stick to ${MIN_FACES_FW} to add faces`),
+      h("span", {class: "dim"}, `It runs ${s.fw}. The Firmware section below updates it over Bluetooth or USB; you can look through the faces meanwhile.`))));
+  } else if (!s.connected) {
+    marketBox.appendChild(h("div", {class: "notice"}, h("div", {class: "grow"},
+      h("b", null, "The stick isn't connected"), h("span", {class: "dim"}, "Faces go on over Bluetooth. You can still look through them."))));
+  } else if (s.error) {
+    marketBox.appendChild(h("div", {class: "notice warn"}, h("div", {class: "grow"}, h("b", null, "Couldn't list the stick's faces"), h("span", {class: "dim"}, cap(s.error)))));
+  }
+  if (m.installed) marketBox.appendChild(installedList(m.installed, s));
+  const head = h("div", {class: "row"},
+    h("button", {class: "btn" + (marketOpen ? "" : " primary"), type: "button", "aria-expanded": String(marketOpen), onclick: () => {
+      marketOpen = !marketOpen;
+      if (marketOpen) loadMarket(true); else paintMarket();
+    }}, marketOpen ? "Hide the catalog" : "Get more faces"),
+    fileButton(s),
+    m.fetched ? h("span", {class: "small faint"}, `catalog ${m.offline ? "saved" : "checked"} ${fmtAgo(m.fetched)}${m.signed ? "" : " · unsigned (custom catalog)"}`) : null);
+  marketBox.appendChild(head);
+  if (!marketOpen) return;
+  if (m.error) {
+    marketBox.appendChild(h("div", {class: "notice " + (m.faces && m.faces.length ? "" : "warn")}, h("div", {class: "grow"},
+      h("b", null, m.offline ? "Showing the last copy of the catalog" : "Can't load the faces catalog"), h("span", {class: "dim"}, cap(m.error)))));
+  }
+  const all = m.faces || [];
+  if (!all.length) { if (!m.error) marketBox.appendChild(h("div", {class: "empty"}, "The catalog has no faces yet.")); return; }
+  marketBox.appendChild(filters());
+  const shown = all.filter(f => (marketFilter.kind === "all" || KINDS[marketFilter.kind](f)) &&
+    (marketFilter.channel === "all" || (marketFilter.channel === "official") === (f.channel === "examples")));
+  marketBox.appendChild(shown.length ? h("div", {class: "faces market-grid"}, shown.map(f => catalogTile(f, s)))
+    : h("div", {class: "empty"}, "No faces match these filters."));
+}
+
+function filters() {
+  const seg = (key, opts) => h("div", {class: "seg", role: "group"}, opts.map(([v, label]) =>
+    h("button", {type: "button", class: marketFilter[key] === v ? "on" : null, "aria-pressed": String(marketFilter[key] === v),
+      onclick: () => { marketFilter = {...marketFilter, [key]: v}; remember("faceFilter", marketFilter); paintMarket(); }}, label)));
+  return h("div", {class: "row market-filters"},
+    seg("kind", [["all", "All"], ["minimal", "Minimal"], ["fun", "Fun"], ["utility", "Utility"]]),
+    seg("channel", [["all", "Everyone's"], ["official", "Official"], ["community", "Community"]]));
+}
+
+function shots(id, previews) {
+  const img = (cls, side) => h("img", {class: cls, src: previews ? previews[side] : `/api/faces/preview/${encodeURIComponent(id)}/${side}`,
+    alt: "", loading: "lazy", onerror: e => e.target.remove()});
+  return h("div", {class: "shots"}, img("tall", "portrait"), img("wide", "landscape"));
+}
+
+function catalogTile(f, s) {
+  const busy = !!(marketJob && !marketJob.done) || s.busy;
+  const author = f.author && (f.author.github ? "@" + f.author.github : f.author.name);
+  let action;
+  if (f.installed && !f.update) action = h("span", {class: "ok-text small"}, st && st.face === f.id ? "✓ on the stick, in use" : "✓ on the stick");
+  else if (f.fits) action = h("span", {class: "small dim"}, cap(f.fits));
+  else if (!s.connected || !s.supported) action = h("span", {class: "small faint"}, s.connected ? `Needs firmware ${MIN_FACES_FW}` : "Connect the stick to install");
+  else action = h("button", {class: "btn sm primary", type: "button", disabled: busy, onclick: () => install({id: f.id}, f.name)},
+    f.update ? `Update to ${f.version}` : "Install");
+  return h("div", {class: "face" + (f.installed ? " on" : "")},
+    shots(f.id, f.previews),
+    h("b", null, f.name),
+    h("span", {class: "small dim"}, author ? `by ${author}` : ""),
+    h("span", {class: "small dim"}, f.about),
+    h("div", {class: "chips small"},
+      f.channel === "examples" ? h("span", {class: "tag agent"}, "Official") : h("span", {class: "tag you"}, "Community"),
+      h("span", {class: "tag"}, MOTION[f.motion || "static"] || f.motion),
+      h("span", {class: "faint"}, kb(f.size))),
+    (f.tags || []).length ? h("span", {class: "small faint"}, f.tags.join(" · ")) : null,
+    h("div", {class: "row", style: "margin-top:auto;padding-top:4px"}, action));
+}
+
+function installedList(list, s) {
+  if (!list.length) return h("div", {class: "small dim", style: "margin-bottom:12px"},
+    `No added faces on the stick yet${s.max ? ` (room for ${s.max})` : ""}.`);
+  const busy = !!(marketJob && !marketJob.done) || s.busy;
+  return h("div", {style: "margin-bottom:14px"},
+    h("div", {class: "eyebrow", style: "margin-bottom:4px"}, `On the stick · ${list.length}${s.max ? ` of ${s.max}` : ""}`),
+    h("div", {class: "list"}, list.map(f => {
+      const using = st && st.face === f.id;
+      const note = f.err ? h("span", {class: "tag err"}, "Didn't load on your stick")
+        : f.update ? h("span", {class: "tag ask"}, `Update: ${f.latest}`)
+        : !f.inCatalog ? h("span", {class: "tag"}, f.retired ? "Removed from the catalog" : "Not in the catalog")
+        : using ? h("span", {class: "tag ok"}, "In use") : null;
+      const rm = h("button", {class: "btn sm danger", type: "button", disabled: busy,
+        onclick: e => confirmTwice(e.currentTarget, () => removeFace(f))}, "Remove");
+      return h("div", {class: "item"},
+        h("img", {class: "mini", src: `/api/faces/preview/${encodeURIComponent(f.id)}/portrait`, alt: "",
+          onerror: e => { e.target.style.visibility = "hidden"; }}),
+        h("div", {class: "what"},
+          h("b", null, f.name, " ", note),
+          h("span", {class: "sub"}, [f.version, f.size ? kb(f.size) : null, f.author && f.author.github ? "@" + f.author.github : null,
+            f.err ? `the stick says: ${f.err}` : null].filter(Boolean).join(" · "))),
+        h("div", {class: "row"},
+          !using && !f.err ? h("button", {class: "btn sm primary", type: "button", disabled: busy, onclick: () => useFace(f)}, "Use") : null,
+          f.update || (f.err && f.inCatalog) ? h("button", {class: "btn sm", type: "button", disabled: busy || !s.supported,
+            onclick: () => install({id: f.id}, f.name)}, f.err ? "Reinstall" : "Update") : null,
+          rm));
+    })));
+}
+
+function fileButton(s) {
+  const input = h("input", {type: "file", accept: ".sfb", style: "display:none", onchange: async () => {
+    const file = input.files && input.files[0];
+    input.value = "";
+    if (!file) return;
+    if (file.size > 64 * 1024) { showMarketMsg("err", "That file is too big", "A face is 64 KB at most."); return; }
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    install({file: btoa(bin), name: file.name}, file.name.replace(/\.sfb$/, ""));
+  }});
+  return h("span", null, input, h("button", {class: "btn ghost", type: "button", disabled: !s.supported || !!(marketJob && !marketJob.done),
+    title: "A compiled face (.sfb) from tools/faces/validate.py --compile, for trying your own face before you share it",
+    onclick: () => input.click()}, "Install from file…"));
+}
+
+function showMarketMsg(kind, title, text, ...extra) {
+  marketMsg = h("div", {class: "notice " + kind}, h("div", {class: "grow"}, h("b", null, title), text ? h("span", {class: "dim"}, text) : null,
+    extra.length ? h("div", {class: "row", style: "margin-top:8px"}, ...extra) : null),
+    h("button", {class: "btn sm ghost", type: "button", "aria-label": "Dismiss", onclick: () => { marketMsg = null; paintMarket(); }}, "×"));
+  paintMarket();
+}
+
+const FACE_STAGES = {download: "Downloading and checking", send: "Sending over Bluetooth", verify: "The stick is checking it"};
+
+async function install(body, name) {
+  marketMsg = null;
+  const r = await post("/api/faces/install", body);
+  if (r.error) { showMarketMsg("err", `Couldn't install ${name}`, r.error); return; }
+  const bar = h("div", {class: "progress"}, h("i"));
+  const stage = h("div", {class: "small dim"}, "Starting…");
+  const stop = h("button", {class: "btn sm ghost", type: "button", onclick: async () => {
+    stop.disabled = true;
+    const c = await post(`/api/faces/jobs/${encodeURIComponent(r.job)}/cancel`, {});
+    if (c.error) { toast(c.error, "err"); stop.disabled = false; }
+  }}, "Cancel");
+  marketJob = {id: r.job, done: false, el: h("div", {class: "notice market-job"}, h("div", {class: "grow"},
+    h("b", null, `Installing ${name}`), h("span", {class: "dim"}, "Keep the stick near this Mac; it takes a few seconds."), stage, bar), stop)};
+  paintMarket();
+  const es = new EventSource(`/api/faces/jobs/${encodeURIComponent(r.job)}`);
+  es.onmessage = e => {
+    let m;
+    try { m = JSON.parse(e.data); } catch (err) { return; }
+    if (m.progress !== undefined) bar.firstChild.style.width = Math.max(0, Math.min(100, m.progress)) + "%";
+    if (m.stage) stage.textContent = (FACE_STAGES[m.stage] || m.stage) + (m.progress !== undefined && m.progress < 100 ? ` · ${m.progress}%` : "");
+    if (!m.done) return;
+    es.close();
+    marketJob = null;
+    const res = m.result || {};
+    if (m.ok) {
+      const useBtn = h("button", {class: "btn sm primary", type: "button", onclick: () => { marketMsg = null; useFace({id: res.id, name: res.name}); }}, "Use it now");
+      showMarketMsg("ok", `${res.name || name} is on your stick`, null, useBtn,
+        h("button", {class: "btn sm ghost", type: "button", onclick: () => { marketMsg = null; paintMarket(); }}, "Not now"));
+    } else if (/^cancelled/i.test(m.error || "")) {
+      showMarketMsg("", "Install cancelled", "Nothing changed on the stick.");
+    } else {
+      showMarketMsg("err", `Couldn't install ${name}`, m.error || "Something went wrong.");
+    }
+    loadMarket(false);
+  };
+  es.onerror = () => { if (es.readyState !== EventSource.CLOSED) stage.textContent = "Lost the connection to the agent. The install may still be running."; };
+}
+
+async function useFace(f) {
+  const r = await post("/api/faces/use", {id: f.id});
+  if (!report(r, `Face: ${f.name || f.id}`)) return;
+  if (st) st.face = f.id;
+  load();
+}
+
+async function removeFace(f) {
+  const r = await post("/api/faces/remove", {id: f.id});
+  if (report(r, `Removed ${f.name || f.id} from the stick`)) loadMarket(false);
 }
 
 function unlockCard() {
@@ -205,6 +438,9 @@ function screenCard() {
     st.landscape === undefined ? null :  // firmware 1.9.0+
       field("Landscape screens", toggle("landscape", "Held sideways, approvals, questions, alerts and replies turn landscape (needs auto-rotate)",
         st.landscape, e => send("landscape", {on: e.target.checked ? 1 : 0}, "Saved"))),
+    st.clock24 === undefined ? null :  // firmware 2.4.0+
+      field("24-hour clock", toggle("clock24", "Show the time as 15:05 instead of 3:05 PM (on every face that shows the time)",
+        st.clock24, e => send("clock24", {on: e.target.checked ? 1 : 0}, "Saved"))),
     field("Developer mode", toggle("devMode", "Keep Wi-Fi on while on USB (for wireless updates and logs)", st.devMode,
       e => send("devmode", {on: e.target.checked ? 1 : 0}, "Saved"))));
 }

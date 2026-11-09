@@ -74,6 +74,13 @@ DEFAULT_CONFIG = {
     # "stable" = releases only, "beta" = prereleases (vX.Y.Z-beta.N) too
     "update_check": True,
     "update_channel": "stable",
+    # Face packages (faces.py): the catalog the dashboard's "Get more faces" offers. Another URL
+    # (a fork, a test server) needn't be signed; the default one must be (faces.CATALOG_KEYS)
+    # The IR remote (ir.py, stick firmware 2.5.0+): devices that use a built-in code set instead of
+    # (or besides) learned buttons, {"tv": "samsung"}; the voice phrases were added to commands.json
+    "ir_brands": {},
+    "ir_voice_added": False,
+    "faces_catalog_url": "https://ashish-kumar-noon.github.io/stickybot/faces/catalog.json",
 }
 
 

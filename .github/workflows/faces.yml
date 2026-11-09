@@ -1,0 +1,120 @@
+# The faces catalog (docs/faces/CATALOG.md, PLAN.md steps 5-6).
+#
+# Pull requests touching faces/: validate the changed packages, re-render them with the
+# reference renderer (face_shots, the stick's own drawing code), fail if the committed
+# previews differ or a changed package kept its version, and attach the contact sheets.
+#
+# main (and nightly, to pick up retirements): build catalog.json and the compiled faces, sign
+# catalog.json with the ed25519 key in the FACES_SIGNING_KEY secret, check the signature
+# against the keys built into the agent, and deploy to GitHub Pages:
+#   https://ashish-kumar-noon.github.io/stickybot/faces/catalog.json
+# Needs Settings -> Pages -> Source: "GitHub Actions", and the FACES_SIGNING_KEY secret.
+name: Faces
+on:
+  pull_request:
+    paths: ["faces/**", "tools/faces/**", "docs/faces/face.schema.json", "m5-stick-s3/tools/face_shots/**"]
+  push:
+    branches: [main]
+    paths: ["faces/**", "tools/faces/**", "docs/faces/face.schema.json", ".github/workflows/faces.yml"]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.event_name == 'pull_request'
+    runs-on: macos-15          # the same renderer build as on a dev Mac (deterministic: no clock, no randomness)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0       # the base commit, for the changed packages and their old versions
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Changed packages
+        id: changed
+        run: |
+          pkgs=$(python3 tools/faces/pr_check.py changed --base "${{ github.event.pull_request.base.sha }}" | tr '\n' ' ')
+          echo "packages=$pkgs" >> "$GITHUB_OUTPUT"
+          echo "changed: ${pkgs:-none}"
+      - name: Validate every package (ids unique, nothing retired reused)
+        run: python3 tools/faces/build_catalog.py --out "$RUNNER_TEMP/site/faces"
+      - name: Versions raised
+        if: steps.changed.outputs.packages != ''
+        run: python3 tools/faces/pr_check.py versions --base "${{ github.event.pull_request.base.sha }}" ${{ steps.changed.outputs.packages }}
+      - uses: actions/cache@v4
+        if: steps.changed.outputs.packages != ''
+        with:
+          path: |
+            ~/.platformio/packages
+            ~/.platformio/platforms
+            m5-stick-s3/.pio/libdeps
+          key: pio-${{ runner.os }}-${{ hashFiles('m5-stick-s3/platformio.ini', 'xiao-esp32-c3/platformio.ini') }}
+      - name: PlatformIO libraries (M5GFX, ArduinoJson) for the renderer
+        if: steps.changed.outputs.packages != ''
+        run: |
+          python -m pip install platformio
+          cp m5-stick-s3/secrets.example.ini m5-stick-s3/secrets.ini
+          cd m5-stick-s3 && pio pkg install -e sticks3
+      - name: Render, and compare with the committed previews
+        if: steps.changed.outputs.packages != ''
+        run: |
+          status=0
+          for pkg in ${{ steps.changed.outputs.packages }}; do
+            echo "::group::$pkg"
+            keep="$RUNNER_TEMP/committed/$pkg"
+            mkdir -p "$keep" && cp "$pkg"/previews/*.png "$keep"/ 2>/dev/null || true
+            make -C m5-stick-s3/tools/face_shots pkg PKG="$GITHUB_WORKSPACE/$pkg" PREVIEWS=1 PYTHON=python3
+            python3 tools/faces/pr_check.py previews "$keep" "$pkg/previews" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.changed.outputs.packages != ''
+        with:
+          name: face-contact-sheets
+          path: m5-stick-s3/tools/face_shots/out/pkg/
+          if-no-files-found: ignore
+
+  build:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0       # each face's "updated" date comes from git log
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install cryptography (for the signature)
+        run: python -m pip install cryptography
+      - name: Build the catalog
+        run: python tools/faces/build_catalog.py --out site/faces --base https://ashish-kumar-noon.github.io/stickybot/faces/
+      - name: Sign it
+        env:
+          FACES_SIGNING_KEY: ${{ secrets.FACES_SIGNING_KEY }}
+        run: python tools/faces/sign_catalog.py sign site/faces/catalog.json
+      - name: Check the signature with the agent's built-in keys
+        run: python tools/faces/sign_catalog.py verify site/faces/catalog.json
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}faces/catalog.json
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

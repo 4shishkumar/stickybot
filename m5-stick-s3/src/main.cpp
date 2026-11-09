@@ -29,6 +29,8 @@
 #include "hid.h"
 #include "ui.h"
 #include "menu.h"
+#include "faces/pkg/install.h"
+#include "faces/pkg/package.h"
 #include "web.h"
 #include "battery.h"
 #include "protocol.h"
@@ -43,6 +45,9 @@
 #include "events.h"
 #include "ota.h"
 #include "faces/faces.h"
+#include "air.h"
+#include "games/games.h"
+#include "ir/ir.h"
 #include <HijelHID_BLEKeyboard.h>  // KEY_MOD_* constants
 
 constexpr uint32_t CPU_MHZ           = 80;
@@ -62,7 +67,7 @@ constexpr uint16_t COLOR_OK   = 0x03E0;
 constexpr uint16_t COLOR_WARN = 0xC300;
 constexpr uint16_t COLOR_DIM  = 0x2104;
 
-enum class Mode { STATUS, MENU, WEB };
+enum class Mode { STATUS, MENU, WEB, GAME };  // GAME: the games (games/games.h) own the screen and buttons
 
 static Mode       mode = Mode::STATUS;
 static bool       agentTalking = false;
@@ -162,6 +167,13 @@ static ui::Dash readDash() {
   d.claudeMsg = buddy::lastMessage();
   d.clock = buddy::clock();
   d.ampm = buddy::ampm();
+  d.clock24 = settings::clock24();
+  clockfmt::Local lt;
+  if (buddy::localTime(lt)) {
+    d.wday = lt.wday;
+    d.mday = lt.mday;
+    d.mon = lt.mon;
+  }
   d.date = buddy::date();
   d.longDate = buddy::longDate();
   d.minute = buddy::minuteOfDay();
@@ -204,6 +216,8 @@ static void render() {
       break;
     case Mode::MENU:
       ui::drawMenu(menu::view());
+      break;
+    case Mode::GAME:  // the games draw themselves
       break;
     case Mode::WEB: {
       String lines[8];
@@ -379,7 +393,10 @@ static const char* otaBusy() {
   if (buddy::hasPrompt()) return "approval";
   if (hid::pairingCode()) return "pairing";
   if (mode == Mode::MENU) return "menu";
+  if (mode == Mode::GAME) return "game";
   if (web::busy()) return "wifi-update";
+  if (faces::pkg::install::receiving()) return "faces";  // a face package is arriving (one transfer at a time)
+  if (air::active()) return "remote";  // the air mouse / presenter / media remote (air.h)
   return nullptr;
 }
 
@@ -400,6 +417,13 @@ static bool otaLoop() {
     ignoreAUntilRelease = M5.BtnA.isPressed();
     swallowB = swallowB || M5.BtnB.isPressed();
     dirty = true;
+  }
+  // A face package arriving: a toast over Home (faces/pkg/install.cpp), B cancels it
+  faces::pkg::install::loop();
+  faces::pkg::loop();
+  if (faces::pkg::install::receiving() && mode == Mode::STATUS && ui::awake() && M5.BtnB.wasPressed()) {
+    faces::pkg::install::cancelByUser();
+    swallowB = true;  // that press isn't an Enter
   }
   String notice;
   if (ota::takeNotice(notice)) showMessage(notice.c_str(), "Nothing changed on the stick", COLOR_WARN, 3000);
@@ -429,6 +453,12 @@ static void onMenu(menu::Action a) {
     case menu::Action::POWER_OFF:
       powerOff();
       break;
+    case menu::Action::AIR:  // air mouse / presenter / media remote (air.h)
+      ui::setBrightness(settings::brightnessPct());  // undo a brightness preview
+      air::request(menu::remoteMode() == 1 ? air::Mode::MOUSE : menu::remoteMode() == 2 ? air::Mode::PRESENTER
+                                                                                       : air::Mode::MEDIA);
+      mode = Mode::STATUS;
+      break;
     case menu::Action::VOLUME:  // takes effect (and plays a preview) right away
       settings::saveSoundVolume(menu::draft().volume);
       sound::play(sound::Cue::TEST);
@@ -455,6 +485,7 @@ static void onMenu(menu::Action a) {
       settings::saveMotion(d.lift, d.faceDown, d.shake);
       settings::saveAutoRotate(d.autoRotate);
       settings::saveLandscape(d.landscape);
+      settings::saveClock24(d.clock24);
       settings::saveDevMode(d.devMode);
       settings::saveSoundOn(d.sound);
       settings::saveSoundVolume(d.volume);
@@ -487,6 +518,16 @@ static void onMenu(menu::Action a) {
     case menu::Action::CANCEL:
       ui::setBrightness(settings::brightnessPct());  // undo preview
       mode = Mode::STATUS;
+      break;
+    case menu::Action::GAMES:  // leaves the menu like Cancel
+      ui::setBrightness(settings::brightnessPct());
+      games::open(shownScreen.flipped, dockSide());
+      mode = Mode::GAME;
+      break;
+    case menu::Action::REMOTE:  // the IR remote screen: the menu's drafts are dropped
+      ui::setBrightness(settings::brightnessPct());
+      mode = Mode::STATUS;
+      ir::screenOpen();
       break;
   }
   dirty = true;
@@ -647,6 +688,7 @@ void setup() {
   Serial.begin(115200);
 
   settings::begin();
+  air::begin();
   faces::begin();
   faces::select(settings::face());
   ui::begin();
@@ -663,6 +705,8 @@ void setup() {
   lastInput = millis();
   status = readStatus();
   ota::setBusyCheck(otaBusy);
+  faces::pkg::install::setBusyCheck(otaBusy);
+  ir::begin();
   ota::bootCheck();  // last: it may start the loop watchdog until a new firmware is confirmed
   Log.printf("ready %s fw %s — combo %s%s. Type 'help' for commands.\n", hid::name().c_str(),
                 FW_VERSION, comboToString(settings::combo()).c_str(), fromStandby ? " (woke from standby)" : "");
@@ -677,6 +721,7 @@ void loop() {
   netlog::loop();
   mic::loop();
   sound::loop();
+  ir::loop();
   pollSerial();
   if (otaLoop()) {
     delay(2);  // the update screen: no other screens, buttons or standby meanwhile
@@ -796,6 +841,31 @@ void loop() {
     Log.printf("motion: %s\n", NAMES[(int)mev]);
   }
 
+  // A remote mode (air mouse / presenter / media, air.h) owns the buttons, the motion and
+  // the screen; only a pairing request still shows (below, A accepts).
+  {
+    static bool airWas = false;
+    if (air::active() && !hid::pairingCode()) {
+      if (comboDown) comboRelease();
+      if (keyUpAt) comboUp();
+      airWas = true;
+      if (air::loop()) {
+        delay(1);
+        return;
+      }
+    }
+    if (airWas && !air::active()) {  // ended: back to Home; the buttons still down don't count
+      airWas = false;
+      ignoreAUntilRelease = A.isPressed();
+      swallowB = B.isPressed();
+      aDown = aUp = bDown = bSingle = bDouble = bTriple = bHold = false;
+      lastInput = millis();
+      page = ui::Page::HOME;
+      lastFrame = 0;
+      dirty = true;
+    }
+  }
+
   // Escape: on an agent screen, a click of B (or a shake) dismisses it and cancels
   // the request; back to Home. That click doesn't send Enter.
   if (mode == Mode::STATUS && agentShowUntil && millis() < agentShowUntil && !agentTalking &&
@@ -831,7 +901,9 @@ void loop() {
   {
     orientation::Screen sc =
         orientation::choose(motion::facing(), settings::autoRotate(), settings::landscape(), settings::flipped());
-    if (sc != shownScreen) {
+    if (sc != shownScreen && mode == Mode::GAME) {
+      shownScreen = sc;  // a game keeps its own orientation; this one applies when it closes
+    } else if (sc != shownScreen) {
       if (sc.flipped && !shownScreen.flipped && sc.side == 0) faces::toy(world::Kick::UPSIDE_DOWN);  // turned over
       shownScreen = sc;
       ui::setOrientation(sc.flipped, sc.side);
@@ -995,7 +1067,24 @@ void loop() {
     }
   }
 
-  if (mev == motion::Event::SHAKE && settings::shakeEscapes() && mode != Mode::MENU && hid::connected()) {
+  // The IR remote screen (menu: Remote) or a learn started from the Mac: it owns the screen and buttons
+  if (mode == Mode::STATUS && !comboDown && !agentTalking && ir::screenActive()) {
+    float ax, ay, az;
+    motion::accel(ax, ay, az);
+    if (ir::screenLoop({aDown, aUp, A.isPressed(), bSingle, bDouble, bTriple, bHold, ax})) {
+      if (aDown || bDown) lastInput = millis();
+      delay(10);
+      return;
+    }
+    ui::setOrientation(shownScreen.flipped, shownScreen.side);
+    ignoreAUntilRelease = A.isPressed();
+    swallowB = B.isPressed();
+    page = ui::Page::HOME;
+    dirty = true;
+  }
+
+  if (mev == motion::Event::SHAKE && settings::shakeEscapes() && mode != Mode::MENU && mode != Mode::GAME &&
+      hid::connected()) {
     hid::tapEscape();
     Log.println("-> Escape (shake)");
   }
@@ -1036,7 +1125,7 @@ void loop() {
           menu::open({settings::combo(), hid::slot(), settings::standbyMin(), settings::brightnessPct(),
                       settings::enterDelayMs(),
                       settings::liftWakes(), settings::faceDownSleeps(), settings::shakeEscapes(),
-                      settings::autoRotate(), settings::landscape(), settings::devMode(), settings::soundOn(), settings::soundVolume(),
+                      settings::autoRotate(), settings::landscape(), settings::clock24(), settings::devMode(), settings::soundOn(), settings::soundVolume(),
                       settings::wirelessMic(), (uint8_t)max(0, faces::find(settings::face()))},
                      hid::state() == hid::Bt::OFF);
           mode = Mode::MENU;
@@ -1063,6 +1152,30 @@ void loop() {
       }
       if (mode == Mode::MENU && menu::timedOut()) onMenu(menu::Action::CANCEL);
       break;
+
+    case Mode::GAME: {
+      games::Input in{};
+      in.aDown = A.wasPressed();
+      in.aUp = A.wasReleased();
+      in.aHeld = A.isPressed();
+      in.aChangedAt = A.lastChange();
+      in.bClick = B.wasClicked();
+      in.bHold = B.wasHold();
+      in.bHeld = B.isPressed();
+      float az;
+      motion::accel(in.ax, in.ay, az);
+      if (!games::loop(in)) {  // closed: back to Home, as the stick is held
+        mode = Mode::STATUS;
+        ignoreAUntilRelease = A.isPressed();
+        ignoreBUntilRelease = B.isPressed();
+        page = ui::Page::HOME;
+        ui::setOrientation(shownScreen.flipped, shownScreen.side);
+        lastInput = millis();
+        dirty = true;
+      }
+      delay(2);  // (a short pause: the games pace their own frames)
+      return;
+    }
   }
 
   // Dock: on USB power and untouched for a while, the stick becomes a desk clock.

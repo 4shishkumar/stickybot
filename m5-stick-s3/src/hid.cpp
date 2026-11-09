@@ -4,6 +4,7 @@
 #include "config.h"
 #include "settings.h"
 #include "buddy.h"
+#include <Preferences.h>
 
 namespace hid {
 
@@ -18,6 +19,17 @@ constexpr uint16_t APPLE_VID = 0x05AC, APPLE_PID = 0x0267;  // Apple, Magic Keyb
 
 constexpr uint32_t CONFIRM_TIMEOUT_MS = 30000;
 constexpr uint32_t TAP_FN_MS = 30;  // a Fn-only tap: how long it's held
+// The HID report map's version: raised whenever it changes (2 = 2.5.0, the mouse). On the
+// first boot with a new one the stick tells bonded Macs to read its services again
+// (Service Changed), see begin().
+constexpr uint8_t HID_MAP_VERSION = 2;
+static bool          mapChanged_ = false;
+static volatile bool mouseSubscribed = false;
+
+class MouseSubscribe : public NimBLECharacteristicCallbacks {
+  void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo&, uint16_t sub) override { mouseSubscribed = sub != 0; }
+};
+
 static NimBLEConnInfo*   pendingConn = nullptr;
 static volatile uint32_t pendingCode = 0;
 static uint32_t          pendingSince = 0;
@@ -35,6 +47,7 @@ class ConfirmCallbacks : public HijelHID_Internal::KBServerCallbacks {
   }
   void onDisconnect(NimBLEServer* s, NimBLEConnInfo& info, int reason) override {
     pendingCode = 0;
+    mouseSubscribed = false;
     KBServerCallbacks::onDisconnect(s, info, reason);
   }
 };
@@ -106,6 +119,24 @@ void begin(uint8_t slot) {
     settings::bondResetDone();
   }
   buddy::attach();  // link for the Mac agent + Claude Code hook
+  static MouseSubscribe mouseSub;
+  if (kb->mouseInput()) kb->mouseInput()->setCallbacks(&mouseSub);
+  // A new report map (2.5.0 added the mouse): every boot already re-registers the services
+  // after buddy::attach(), which queues a Service Changed indication for each bonded Mac
+  // (sent when it reconnects); say it once more on purpose the first time, so a Mac
+  // re-reads the services and the new map instead of using its cached copy.
+  {
+    Preferences p;
+    if (p.begin("hid", false)) {
+      if (p.getUChar("map", 0) != HID_MAP_VERSION) {
+        mapChanged_ = true;
+        NimBLEDevice::getServer()->sendServiceChangedIndication();
+        p.putUChar("map", HID_MAP_VERSION);
+        Log.printf("HID report map v%u (mouse added): Service Changed queued for the paired Macs\n", HID_MAP_VERSION);
+      }
+      p.end();
+    }
+  }
   applyAddress();
 }
 
@@ -171,6 +202,24 @@ void tapEscape() { kb->tap(KEY_ESCAPE, 0); }
 void typeText(const String& s) { kb->print(s.c_str()); }
 
 void setBattery(uint8_t percent) { kb->setBatteryLevel(percent); }
+
+static int8_t clamp8(int v) { return v > 127 ? 127 : v < -127 ? -127 : v; }
+
+bool mouseMove(int dx, int dy, int wheel, int pan) {
+  if (!kb || !kb->isPaired()) return false;
+  return kb->mouseMove(clamp8(dx), clamp8(dy), clamp8(wheel), clamp8(pan));
+}
+
+void mouseButtons(uint8_t mask) {
+  if (kb && kb->isPaired()) kb->mouseButtons(mask);
+}
+
+void media(uint16_t usage) {
+  if (kb && kb->isPaired()) kb->tap(usage);
+}
+
+bool mouseKnown() { return mouseSubscribed; }
+bool mapChanged() { return mapChanged_; }
 
 void disconnect() {
   if (off_) return;

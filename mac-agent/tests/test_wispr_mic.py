@@ -218,6 +218,81 @@ def test_open_failure_is_reported(no_real_audio):
     assert "device busy" in m.error and m.dev is None
 
 
+# --- tap mode: which output (stick_mic_device.choose_tap_output picks it) ----------------------
+
+BUDS = {"name": "OnePlus Buds 3", "max_output_channels": 2, "default_samplerate": 44100.0, "default": True}
+SPEAKERS = {"name": "MacBook Pro Speakers", "max_output_channels": 2, "default_samplerate": 48000.0}
+TO_SPEAKERS = {"uid": "BuiltInSpeaker", "name": "MacBook Pro Speakers", "redirected": True,
+               "why": "default output is Bluetooth (OnePlus Buds 3): playing into MacBook Pro Speakers"}
+
+
+def tap_mic(output):
+    m = WisprMic()
+    m.set_carrier("tap", gate=lambda: True, output=output)
+    m.set_enabled(True)
+    return m
+
+
+def test_tap_with_a_bluetooth_default_plays_into_the_built_in_speakers(no_real_audio, caplog):
+    no_real_audio.devices = [BUDS, SPEAKERS]
+    m = tap_mic(lambda: TO_SPEAKERS)
+    with caplog.at_level("INFO", logger="wispr"):
+        assert m.start(16000)
+    assert no_real_audio.streams[0].kw["device"] == 1 and m.dev["name"] == "MacBook Pro Speakers"
+    assert "wireless mic: default output is Bluetooth (OnePlus Buds 3): playing into MacBook Pro Speakers" \
+        in caplog.text
+
+
+def test_tap_with_a_built_in_default_is_unchanged(no_real_audio):
+    no_real_audio.devices = [BUDS | {"default": False}, SPEAKERS | {"default": True}]
+    pick = {"uid": "BuiltInSpeaker", "name": "MacBook Pro Speakers", "redirected": False, "why": ""}
+    m = tap_mic(lambda: pick)
+    assert m.start(16000) and no_real_audio.streams[0].kw["device"] == 1
+    no_real_audio.devices = [BUDS, SPEAKERS]  # no pick at all (no mic device): PortAudio's default, as before
+    m2 = tap_mic(None)
+    assert m2.start(16000) and no_real_audio.streams[-1].kw["device"] == 0
+
+
+def test_tap_with_no_other_output_keeps_the_default_and_says_why(no_real_audio, caplog):
+    no_real_audio.devices = [BUDS]
+    keep = {"uid": "Buds-UID", "name": "OnePlus Buds 3", "redirected": False,
+            "why": "default output is Bluetooth (OnePlus Buds 3) and there's no other wired output: playing into it "
+                   "anyway (it may lag or fail)"}
+    m = tap_mic(lambda: keep)
+    with caplog.at_level("WARNING", logger="wispr"):
+        assert m.start(16000)
+    assert m.dev["name"] == "OnePlus Buds 3" and "no other wired output" in caplog.text
+
+
+def test_tap_output_portaudio_doesnt_list_falls_back_to_the_default(no_real_audio, caplog):
+    no_real_audio.devices = [BUDS]
+    m = tap_mic(lambda: TO_SPEAKERS)
+    with caplog.at_level("WARNING", logger="wispr"):
+        assert m.start(16000)
+    assert m.dev["name"] == "OnePlus Buds 3" and "doesn't list MacBook Pro Speakers" in caplog.text
+    m.stop()
+    m.release()
+    assert m.device() is m.dev  # not looked up again every time while nothing changed
+
+
+def test_tap_output_follows_the_default_between_holds(no_real_audio):
+    no_real_audio.devices = [BUDS | {"default": False}, SPEAKERS | {"default": True}]
+    pick = {"v": {"uid": "BuiltInSpeaker", "name": "MacBook Pro Speakers", "redirected": False, "why": ""}}
+    m = tap_mic(lambda: pick["v"])
+    assert m.start(16000) and m.dev["name"] == "MacBook Pro Speakers"
+    m.stop()
+    m.release()
+    pick["v"] = TO_SPEAKERS  # the Buds became the default: the speakers, now on purpose
+    no_real_audio.devices = [BUDS, SPEAKERS]
+    assert m.start(16000) and m.dev["name"] == "MacBook Pro Speakers" and m._wanted == "MacBook Pro Speakers"
+
+
+def test_find_device_prefers_the_exact_name(no_real_audio):
+    no_real_audio.devices = [{"name": "MacBook Pro Speakers (2)", "max_output_channels": 2},
+                             {"name": "MacBook Pro Speakers", "max_output_channels": 2}]
+    assert wispr_mic.find_device(no_real_audio, "MacBook Pro Speakers")["index"] == 1
+
+
 # --- the agent ------------------------------------------------------------------------------
 
 @pytest.fixture

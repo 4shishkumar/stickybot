@@ -17,6 +17,7 @@ from . import (
     feed,
     github,
     home,
+    ir,
     link,
     pet,
     stt,
@@ -153,6 +154,13 @@ class Agent:
                                             emit=self.emit_soon, removed=lambda: self.wispr.release())
         if self.wispr.enabled:
             self._apply_carrier()
+        # The IR remote (ir.py): learned buttons on the stick, voice commands, the brain's tools
+        self.ir = ir.IR(self)
+        ir.ensure_voice_commands(self.cfg, self._save_cfg)
+
+    def _save_cfg(self, changes):
+        self.cfg.update(changes)
+        config.save(self.cfg)
 
     # --- the carrier: the Apple audio tap or BlackHole ------------------------------
 
@@ -173,8 +181,10 @@ class Agent:
         old = self.mic_dev.mode
         if carrier:
             self.mic_dev.mode = carrier
-        gate = (lambda: self.mic_dev.tap_live) if carrier == mic_device.TAP else None
-        self.wispr.set_carrier(carrier, why, gate)
+        tap = carrier == mic_device.TAP
+        gate = (lambda: self.mic_dev.tap_live) if tap else None
+        # tap mode: play into the output the tapped device is clocked by (built-in when the default is Bluetooth)
+        self.wispr.set_carrier(carrier, why, gate, output=self.mic_dev.output_for_tap if tap else None)
         if carrier and carrier != old and self.mic_dev.present and self.loop is not None:
             asyncio.ensure_future(self.holds.drop(f"now carried by {mic_device.CARRIER_TITLES[carrier]}"))
         return carrier
@@ -364,6 +374,9 @@ class Agent:
         if msg.get("src") == "agent" and msg.get("evt") == "event_shown":
             self.notifier.acked(msg.get("id"))
             return
+        if msg.get("src") == "agent" and msg.get("evt") == "game":  # a game finished on the stick (2.5.0)
+            self._on_game(msg)
+            return
         if msg.get("src") == "agent" and msg.get("evt") == "sounds":
             self.sounds = msg.get("sounds")
             if self._sounds_seen:
@@ -402,6 +415,23 @@ class Agent:
             self.set_state("ready" if self.link_state == "connected" else self.link_state)
         elif msg.get("cmd") == "permission" and msg.get("id") in self.prompts:
             self._decide(msg["id"], msg.get("decision"), "stick")
+
+    def _on_game(self, msg):
+        """{"evt":"game","id","score","best","new_best"}: a little XP (capped a day, pet.py) and the
+        dashboard's Games card."""
+        gid, score = msg.get("id"), msg.get("score")
+        xp = self.pet.game(gid, score, msg.get("best"), msg.get("new_best") is True)
+        if gid not in pet.GAMES:
+            log.info("game event for an unknown game %r: ignored", gid)
+            return
+        log.info("game %s: %s%s, +%d XP", gid, score, " (new best)" if msg.get("new_best") is True else "", xp)
+        self.emit("game", id=gid, score=score, best=msg.get("best"), new_best=msg.get("new_best") is True, xp=xp)
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:  # no event loop (called directly, in tests)
+            return
+        if xp:
+            asyncio.ensure_future(self.push_world(only_changed=True))  # the faces show the XP
 
     def _on_audio(self, frame):
         if self.wispr.active:
@@ -501,6 +531,15 @@ class Agent:
                 return
             text = rest
         hit = commands.match(text)
+        if hit and "ir" in hit[0]:  # an IR remote button (ir.py): sent by the stick
+            cmd = hit[0]
+            ok, result = await self.ir.voice(cmd["ir"])
+            self.stats["quick"] += 1
+            self.emit("reply", text=result, via="quick", ms=int((time.time() - started) * 1000))
+            await self.tell_stick("done" if ok else "error", text, result)
+            self._history({**entry, "via": "quick", "command": cmd.get("name"), "reply": result})
+            self.set_state("ready")
+            return
         if hit:
             cmd, slots = hit
             result = await asyncio.get_running_loop().run_in_executor(None, commands.run, cmd, slots)

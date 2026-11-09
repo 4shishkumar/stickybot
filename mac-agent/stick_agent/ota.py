@@ -117,10 +117,23 @@ def check_versions(new, current, force=False):
     return None
 
 
-class Sender:
-    """Sends one image. `link` needs .connected, async .send(dict), async .ota_write(bytes)
-    and .ota_max_write(); stick messages are fed in with on_message(msg) (register it
-    as a listener). emit(event) gets {"line"} / {"progress","stage"} events."""
+class Transfer:
+    """Sends one file over the OTA characteristic with the stick's flow control: a `begin`
+    message, packets [offset u32 LE][bytes] at most `window` bytes past the last ack, resends
+    after a gap or a silent window, `end`, then "done". Firmware (Sender, below) and face
+    packages (faces.Sender) both use it; they differ in the message family (KIND: the key the
+    agent sends and the stick's "evt"), the begin message, the stick's error words and the
+    exception classes.
+
+    `link` needs .connected, async .send(dict), async .ota_write(bytes) and .ota_max_write();
+    stick messages are fed in with on_message(msg) (register it as a listener). emit(event)
+    gets {"line"} / {"progress","stage"} events."""
+
+    KIND = "ota"
+    Error = OtaError
+    Cancelled = OtaCancelled
+    WORDS = {"no_answer": "the stick didn't answer", "stalled": "the stick stopped answering",
+             "unconfirmed": "the stick didn't confirm the file", "failed": "the transfer failed"}
 
     def __init__(self, link, emit=None, clock=time.monotonic):
         self.link = link
@@ -130,13 +143,22 @@ class Sender:
         self.cancelled = asyncio.Event()
         self.stats = {}
         self._pct = -1
+        self.done = None  # the stick's "done" message, after run()
 
     def on_message(self, msg):
-        if msg.get("src") == "agent" and msg.get("evt") == "ota":
+        if msg.get("src") == "agent" and msg.get("evt") == self.KIND:
             self.inbox.put_nowait(msg)
 
     def cancel(self):
         self.cancelled.set()
+
+    def begin_message(self, img, force):
+        """What goes under KIND to start (or resume) the transfer."""
+        raise NotImplementedError
+
+    def reason(self, msg):
+        """The stick's refusal / error message in words."""
+        raise NotImplementedError
 
     def _progress(self, offset, size):
         pct = min(100, offset * 100 // max(1, size))
@@ -145,7 +167,7 @@ class Sender:
             self.emit({"progress": pct, "stage": "send"})
 
     async def _reply(self, states, timeout):
-        """The next ota message whose state is in `states` (others — late acks — are skipped)."""
+        """The next message whose state is in `states` (others — late acks — are skipped)."""
         deadline = self.clock() + timeout
         while True:
             left = deadline - self.clock()
@@ -162,14 +184,13 @@ class Sender:
         deadline = self.clock() + timeout
         while not self.link.connected:
             if self.cancelled.is_set():
-                raise OtaCancelled("cancelled")
+                raise self.Cancelled("cancelled")
             if self.clock() > deadline:
-                raise OtaError("lost the stick (Bluetooth) and it didn't come back")
+                raise self.Error("lost the stick (Bluetooth) and it didn't come back")
             await asyncio.sleep(0.2)
 
     async def _begin(self, img, force):
-        msg = {"src": "agent", "ota": {"begin": {"size": img["size"], "sha256": img["sha256"],
-                                                 "version": img["version"], "compressed": False, "force": force}}}
+        msg = {"src": "agent", self.KIND: self.begin_message(img, force)}
         for _ in range(3):
             if not await self.link.send(msg):
                 await self._wait_link(RECONNECT_S)
@@ -178,25 +199,27 @@ class Sender:
             if r is None:
                 continue
             if r["state"] != "ready":
-                raise OtaError(reason(r))
+                raise self.Error(self.reason(r))
             return r
-        raise OtaError("the stick didn't answer the update request (firmware older than 1.8.0?)")
+        raise self.Error(self.WORDS["no_answer"])
 
     async def _abort(self):
         if self.link.connected:
-            await self.link.send({"src": "agent", "ota": {"cancel": 1}})
+            await self.link.send({"src": "agent", self.KIND: {"cancel": 1}})
             await self._reply({"cancelled"}, REPLY_S)
 
     async def run(self, img, force=False):
-        """Sends img (from bundled_app()) and waits for "done". Returns stats; raises OtaError."""
+        """Sends img ({"data", "size", "sha256", ...}) and waits for "done". Returns stats, with
+        the stick's "done" message as stats["done"]; raises self.Error / self.Cancelled."""
         size, data = img["size"], img["data"]
         t0 = self.clock()
         sent_bytes = resends = reconnects = 0
+        done = None
         try:
             self.emit({"progress": 0, "stage": "send"})
             while True:  # one pass per connection (a dropped link resumes with a new begin)
                 if self.cancelled.is_set():
-                    raise OtaCancelled("cancelled")
+                    raise self.Cancelled("cancelled")
                 r = await self._begin(img, force)
                 acked = sent = int(r.get("offset") or 0)
                 window = int(r.get("window") or 16384)
@@ -212,7 +235,7 @@ class Sender:
                 while acked < size:
                     if self.cancelled.is_set():
                         await self._abort()
-                        raise OtaCancelled("cancelled")
+                        raise self.Cancelled("cancelled")
                     # fill the window
                     while sent < size and sent - acked < window and self.inbox.empty():
                         pkt = struct.pack("<I", sent) + data[sent:sent + chunk]
@@ -238,7 +261,7 @@ class Sender:
                             sent = acked
                             waited_from = self.clock()
                         if self.clock() - last_progress > STALL_S:
-                            raise OtaError("the stick stopped answering during the update")
+                            raise self.Error(self.WORDS["stalled"])
                         continue
                     st = msg.get("state")
                     if st == "ack":
@@ -255,9 +278,9 @@ class Sender:
                                 rewound = (off, self.clock())
                         sent = max(sent, acked)
                     elif st == "cancelled":
-                        raise OtaCancelled("cancelled on the stick" if msg.get("by") == "stick" else "cancelled")
+                        raise self.Cancelled("cancelled on the stick" if msg.get("by") == "stick" else "cancelled")
                     elif st == "error":
-                        raise OtaError(reason(msg))
+                        raise self.Error(self.reason(msg))
                 if dropped:
                     reconnects += 1
                     self.emit({"line": f"Bluetooth dropped at {acked * 100 // size}% — "
@@ -267,7 +290,7 @@ class Sender:
                 # everything acknowledged: the stick checks the hash and commits
                 self.emit({"progress": 100, "stage": "send"})
                 self.emit({"progress": 0, "stage": "verify"})
-                if not await self.link.send({"src": "agent", "ota": {"end": 1}}):
+                if not await self.link.send({"src": "agent", self.KIND: {"end": 1}}):
                     reconnects += 1
                     await self._wait_link(RECONNECT_S)
                     continue
@@ -277,28 +300,45 @@ class Sender:
                         reconnects += 1
                         await self._wait_link(RECONNECT_S)
                         continue
-                    raise OtaError("the stick didn't confirm the image")
+                    raise self.Error(self.WORDS["unconfirmed"])
                 if r["state"] == "error" and r.get("error") == "incomplete":
                     continue  # it's missing bytes after all: begin again resumes there
                 if r["state"] == "cancelled":
-                    raise OtaCancelled("cancelled on the stick")
+                    raise self.Cancelled("cancelled on the stick")
                 if r["state"] == "error":
-                    raise OtaError(reason(r))
+                    raise self.Error(self.reason(r))
+                done = r
                 self.emit({"progress": 100, "stage": "verify"})
                 break
-        except OtaError:
+        except self.Error:
             raise
         except Exception as e:  # noqa: BLE001 — Bluetooth errors
-            raise OtaError(f"update failed: {e}") from e
+            raise self.Error(f"{self.WORDS['failed']}: {e}") from e
         secs = max(1e-6, self.clock() - t0)
         self.stats = {"bytes": size, "seconds": round(secs, 1), "kbps": round(size / 1024 / secs, 1),
                       "resent": resends, "reconnects": reconnects, "sent": sent_bytes}
-        log.info("ota: %d KB in %.1f s = %.1f KB/s (%d bytes resent, %d reconnects)", size // 1024, secs,
+        self.done = done
+        log.info("%s: %d bytes in %.1f s = %.1f KB/s (%d bytes resent, %d reconnects)", self.KIND, size, secs,
                  size / 1024 / secs, resends, reconnects)
         self.emit({"line": f"sent {size // 1024} KB in {secs:.0f} s ({size / 1024 / secs:.1f} KB/s"
                            f"{f', {resends // 1024} KB resent' if resends >= 1024 else ''}"
                            f"{f', {reconnects} reconnects' if reconnects else ''}) — the stick verified it"})
         return self.stats
+
+
+class Sender(Transfer):
+    """Sends one firmware image (from bundled_app()): PROTOCOL.md, "Firmware update over Bluetooth"."""
+
+    WORDS = {"no_answer": "the stick didn't answer the update request (firmware older than 1.8.0?)",
+             "stalled": "the stick stopped answering during the update",
+             "unconfirmed": "the stick didn't confirm the image", "failed": "update failed"}
+
+    def begin_message(self, img, force):
+        return {"begin": {"size": img["size"], "sha256": img["sha256"], "version": img["version"],
+                          "compressed": False, "force": force}}
+
+    def reason(self, msg):
+        return reason(msg)
 
 
 async def update(agent, query_state, emit=None, force=False, sender=None, reboot_s=REBOOT_S):

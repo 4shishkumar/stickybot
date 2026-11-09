@@ -210,6 +210,33 @@ a stick, `make -C tools/face_shots` draws every demo step with the firmware's ow
 code into `tools/face_shots/out/` (PNGs and contact sheets; `SCALE=3` for big pixels);
 `make -C tools/face_shots previews` remakes the dashboard's pictures.
 
+### Games (firmware 2.5.0)
+
+Menu (triple-press B) → **Games**: a picker with each game's best score (A next, B play,
+hold B back to Home). Every game works the same way: a title card (A starts), **B or hold B
+pauses** (Resume / Restart / Quit: A next, B pick), game over (A again, B the picker). The
+bests are kept on the stick (`@games` lists them); with sounds on there are little effects
+at the menu's volume. StickyBot is the hero where it fits.
+
+| Game | Play | Score |
+|---|---|---|
+| **Stack** | A drops the sliding block; what hangs over is cut off. Within 3 px is *perfect* (+2), three perfects in a row widen it again | blocks (+ perfect bonus) |
+| **Flappy** | tap A to flap StickyBot through the pipes | pipes passed |
+| **Dino** (landscape) | A jumps, hold A to jump higher; drones fly at head height: stay down; it speeds up | distance |
+| **Reaction** | press A when the screen turns green; three rounds; a press too soon ends it | average ms (lower is better) |
+| **Maze** | tilt to roll the ball to the glowing exit; each level is bigger and gives 15 s back | levels cleared |
+| **Balance** (landscape) | the wind tips the beam more and more: tilt against it, keep the ball in the green middle | 10 a second in the middle |
+| **Catch** | tilt to move StickyBot's basket: coins +1, stars +3; a bomb caught or a coin missed costs a heart | coins and stars |
+
+The tilt games calibrate "flat" during a 2 s countdown, so you can play holding the stick
+at any comfortable angle. Each finished game tells the Mac app, which gives StickyBot a
+little XP (at most 10 a day from games; PROTOCOL.md, *Games*). An approval or a question
+from Claude still takes the screen (the game pauses). While the games are open the CPU runs
+at 160 MHz instead of 80. `make -C tools/face_shots games` draws every game screen on the
+Mac (and prints each game's frame cost); the rules are in `src/logic/games*` (tested by
+`test_games`), the drawing in `src/games/draw.cpp`, the session in `src/games/games.cpp`, and
+`src/games/duo.h` is the (not yet built) hook for two sticks over ESP-NOW.
+
 - While you hold button A, the screen turns purple: **Listening...**
 - The screen turns off after 20 s idle. Button A still works with the screen
   off (it sends the combo and wakes the screen). Triple-press B to wake it
@@ -218,6 +245,34 @@ code into `tools/face_shots/out/` (PNGs and contact sheets; `SCALE=3` for big pi
   appear in the Bluetooth menu like other keyboards.
 
 ---
+
+### Air mouse, presenter, media remote (firmware 2.5.0)
+
+Menu (triple-press B) → the last three items (*Air mouse*, *Presenter*, *Media remote*), the
+dashboard's Stick page (*Mouse & presenter*) or serial `mode mouse|presenter|media|home`. Hold **A + B** together for a second
+to go back to Home.
+
+| Mode | Buttons | Motion |
+|---|---|---|
+| Air mouse | A = left button (hold + move = drag), B = right click, A+B tap = pause | turn to point; hold B and tilt to scroll |
+| Presenter | A = next slide, B = previous, double B = black screen, hold B = restart the timer, A+B tap = pause the timer | hold A = laser pointer |
+| Media | A = play / pause, B = mute | twist = volume, flick right / left = next / previous track |
+
+The pointer follows the world, not the stick: turning around gravity moves it sideways and
+tipping moves it up and down, held like a remote, upright or sideways. Set down, it stops at
+once and re-learns the gyro's drift; untouched for 5 minutes the mode ends. Settings (pointer
+speed, invert, scroll speed / direction, talk length, arrow or page keys) live on the stick
+(`@air`, PROTOCOL.md). Screens: `make -C tools/face_shots air`.
+
+**After updating from 2.4 or older:** the stick added a mouse to its Bluetooth keyboard, and
+tells the Mac its services changed. If the air mouse screen says *Pair again once*, or the
+pointer doesn't move: Mac → System Settings → Bluetooth → the stick → (i) → Forget This
+Device, then Connect again and accept the code on the stick.
+
+**Tuning on a real stick** (the defaults are from the maths, not a hand): the pointer gain
+and acceleration (`gainFor`, `accelFactor`), dead zone and smoothing are in
+`src/logic/air_motion.cpp`; the stillness thresholds in `air_motion.h`; serial `imulog`
+prints the raw gyro to check the axes and signs.
 
 ## 6. Changing the combo — three ways, no reflashing
 
@@ -354,6 +409,8 @@ make build     # the stick firmware still builds with the same logic
 | `test_city` | StickyWorld's city: the same buildings from a seed, towers in place, squeeze then scroll to fit |
 | `test_sky` | the sky by time of day and weather, sun and moon arcs |
 | `test_school` | Aquarium: fish per session (swim in, grow, leap out), the full tank, tilt drift, the damped spring |
+| `test_air` | the air mouse: the gyro to pointer mapping in any orientation, dead zone / smoothing / acceleration / sensitivity / invert, stillness and the gyro bias, tilt-scroll, the media knob (twist, flick), the remote buttons (click, hold, double, A+B), the talk timer |
+| `test_games` | the games: the list and bests, the tilt (calibration, dead zone, smoothing, rotations), Stack's cuts and perfects, Flappy / Dino / Balance / Catch played by autopilots, Reaction's timing and false starts, the mazes (perfect, reachable, the same from a seed) and the ball never passing a wall |
 | `test_clockface` | the Words face's time in words (fives, "just after" / "nearly", midnight / noon, the hour rolling over), the Analog face's hands, words stacked to fit |
 
 Hardware-facing code (screens, Bluetooth, audio I/O) isn't covered by these;
@@ -377,6 +434,7 @@ m5-stick-s3/
     ├── ui.*           screen drawing, screen sleep (ui_draw.h: the kit the faces share)
     ├── faces/         Home faces: registry + world (faces.*), classic, stickyworld, aquarium
     │                  (each with its Dark variant), bigtime, words, analog, dashboard, space, lava, demo
+    ├── games/         the games (2.5.0): games.* the session, draw.* the screens, duo.h two-stick hook
     ├── menu.*         on-device settings menu
     ├── web.*          Wi-Fi + settings page server
     └── web_page.h     the settings page (HTML/JS)

@@ -87,7 +87,7 @@ static const Step CLOCKS[] = {
 };
 
 static State    st;
-static int      order[16], nOrder = 0, pos = -1, step = -1;
+static int      order[32], nOrder = 0, pos = -1, step = -1;
 static uint32_t stepAt = 0;
 static bool     on = false;
 
@@ -96,6 +96,7 @@ static const Step* script(int& n) {
   static const char* const QUIET[] = {"classic", "bigtime", "words", "analog"};
   bool quiet = false;
   for (const char* q : QUIET) quiet = quiet || !strcmp(at(order[pos]).id(), q);
+  quiet = quiet || at(order[pos]).clockOnly();  // a static face package
   n = quiet ? sizeof CLOCKS / sizeof CLOCKS[0] : sizeof SCRIPT / sizeof SCRIPT[0];
   return quiet ? CLOCKS : SCRIPT;
 }
@@ -179,7 +180,17 @@ bool demoFrame(const ui::Dash& base, ui::Dash& d, int& side, String& caption) {
   clockfmt::Local t{st.minute / 60, st.minute % 60, 2, 20, 9};
   d.clock = clockfmt::time12(t).c_str();
   d.ampm = clockfmt::ampm(t).c_str();
-  if (!d.date.length()) d.date = "Tue 20 Oct";
+  if (base.clock24) {  // the demo follows the 12 / 24-hour setting too
+    d.clock = clockfmt::time24(t).c_str();
+    d.ampm = "";
+  }
+  if (!d.date.length()) {  // the agent hasn't sent the date: the made-up one (Tue 20 Oct)
+    d.date = "Tue 20 Oct";
+    d.longDate = clockfmt::longDate(t).c_str();
+    d.wday = t.wday;
+    d.mday = t.mday;
+    d.mon = t.mon;
+  }
   d.wxValid = true;
   d.wxIcon = st.wx;
   d.wxDay = st.minute >= 6 * 60 && st.minute < 19 * 60;

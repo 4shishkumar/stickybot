@@ -49,6 +49,15 @@ void test_twelve_hour_edges() {
   TEST_ASSERT_EQUAL_STRING("11:59", clockfmt::time12(t).c_str());
 }
 
+void test_twenty_four_hour() {
+  clockfmt::Local t = {0, 5, 0, 1, 0};
+  TEST_ASSERT_EQUAL_STRING("0:05", clockfmt::time24(t).c_str());
+  t.hour = 15;
+  TEST_ASSERT_EQUAL_STRING("15:05", clockfmt::time24(t).c_str());
+  t.hour = 23; t.min = 59;
+  TEST_ASSERT_EQUAL_STRING("23:59", clockfmt::time24(t).c_str());
+}
+
 void test_night_window() {
   TEST_ASSERT_TRUE(clockfmt::isNight(22));
   TEST_ASSERT_TRUE(clockfmt::isNight(23));
@@ -65,6 +74,7 @@ int main() {
   RUN_TEST(test_utc_and_offset);
   RUN_TEST(test_offset_crosses_midnight);
   RUN_TEST(test_twelve_hour_edges);
+  RUN_TEST(test_twenty_four_hour);
   RUN_TEST(test_night_window);
   return UNITY_END();
 }

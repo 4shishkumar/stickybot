@@ -12,6 +12,88 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- **Face packages, the design.** A format for Home faces made of
+  data (a manifest + small pixel-art images) that anyone can publish and the dashboard will
+  install over Bluetooth without reflashing: `docs/faces/` (format, guidelines, catalog,
+  plan, JSON Schema), a validator / compiler / catalog builder in `tools/faces/`, a
+  reference renderer in face_shots (`make -C m5-stick-s3/tools/face_shots pkg PKG=…`) and
+  three examples in `faces/examples/`.
+- **The stick draws face packages (firmware 2.4.0).** Faces made of data can be installed on
+  the stick over Bluetooth (up to 12, 64 KB each, kept in its flash) and picked like any face
+  in its menu, with `@face id=…`, or played as a demo. The stick checks every face it gets as
+  if it came from a stranger: a face that doesn't load is never half-drawn (Classic shows
+  instead and the stick says why), a face that is too slow drops to a calmer frame rate, and
+  one that crashes the stick twice in a row is set aside until it's installed again. A small
+  toast over Home shows the install ("Installing Cat Nap 60 %"); B cancels it.
+  (PROTOCOL.md, *Face packages over Bluetooth*.)
+- **A 24-hour clock (firmware 2.4.0).** A setting in the stick's menu (**Clock**) and on the
+  dashboard's Stick page: every face's clock, the dock clock and the demos show 15:05
+  instead of 3:05 PM.
+- **More faces, in the dashboard (stick firmware 2.4.0+).** The Stick page's *More faces*:
+  the faces added to the stick (Use, Update, Remove, or "didn't load on your stick"), *Get
+  more faces* from the catalog (previews, filters for minimal / fun / utility and official /
+  community, install progress, errors in words) and *Install from file…* for people making
+  faces. The app fetches the catalog from GitHub Pages and keeps a copy for offline
+  browsing, checks its ed25519 signature and every face file (size, checksum, contents,
+  the stick's firmware) before sending it over Bluetooth. A stick older than 2.4.0 is asked
+  to update first. CI checks face pull requests (validation, re-rendered previews, version
+  raised) and publishes the signed catalog.
+- **Air mouse, presenter and media remote (firmware 2.5.0).** The stick is now a mouse too
+  (Bluetooth keyboard + media keys + mouse). Three modes, from the stick's menu (the last
+  items), the dashboard's Stick page (*Mouse & presenter*) or `@mode`:
+  - **Air mouse**: turn the stick to point (gyro, follows how you hold it: like a remote,
+    upright or sideways). A = left button (hold to drag), B = right click, hold B and tilt
+    to scroll, A+B together pauses. Set down, it stops at once and re-learns the gyro's
+    drift; untouched for 5 minutes it goes back to Home.
+  - **Presenter**: A = next slide, B = previous, hold A = laser pointer (the mouse pointer
+    moves while held), double-press B = black screen. A big talk timer (starts on the first
+    click; orange near the target, red past it), the battery. Keynote, PowerPoint, Google
+    Slides (arrow keys, or Page Down / Up).
+  - **Media remote**: twist like a knob for volume, flick right / left for the next / previous
+    track, A = play / pause, B = mute.
+  - Hold A and B together for a second to go back to Home. Pointer speed, invert, scroll
+    speed and direction, the talk length and the slide keys are on the dashboard and in
+    `@air` (PROTOCOL.md).
+  - **Updating from an older firmware:** the Mac learns about the new mouse when the stick
+    reconnects (the stick tells it its services changed). If the air mouse says *Pair again
+    once* (or the pointer doesn't move), forget the stick in the Mac's Bluetooth settings and
+    connect it again, once. The keyboard, the password key and the combos work as before.
+- **Games on the stick (firmware 2.5.0).** A **Games** entry in the stick's menu with seven
+  little games and their best scores: **Stack**, **Flappy** and **Dino** (StickyBot as the
+  hero), **Reaction** with button A; **Maze** (a new maze every level), **Balance** and
+  **Catch** by tilting the stick (it calibrates "flat" when a game starts). The same pause
+  (B: Resume / Restart / Quit) and game over in every game, little sound effects (off with
+  the stick's sounds, at its volume). Each game played gives StickyBot a little XP (+1, +3
+  for a new best, at most 10 a day from games), and the dashboard's Stick page has a Games
+  card with the bests (`@games`; PROTOCOL.md, *Games*).
+- **The stick is an IR remote (firmware 2.5.0).** It learns the buttons of your TV, air
+  conditioner or soundbar (menu → **Remote** → *+ Learn*, or the dashboard: press the button
+  twice; air conditioners once) and keeps them in its flash, up to 16 remotes of 48 buttons.
+  NEC (and extended), Samsung, LG, Sony 12/15/20, RC5, RC6 and Panasonic/Kaseikyo are
+  recognised; anything else (air conditioners' long state frames) is kept as raw timings.
+  The Remote screen sends them (A, hold to repeat; favourites first). Receiving and sending
+  use the ESP32's RMT peripheral (our own encoders/decoders with native tests: IRremoteESP8266's
+  release is written for the core-2 timer API, and neither it nor Arduino-IRremote receives with RMT). `@ir list|send|learn|
+  rm|rename|fav|diag` (PROTOCOL.md, *IR remote*); `@ir diag` checks the IR pins (G46 / G42).
+- **Remote, in the dashboard.** A new page: the remotes on the stick (send, star, rename,
+  delete), learning with live status, built-in codes for Samsung, LG, Sony and Philips TVs
+  that work without learning, import / export as JSON.
+- **"Turn off the TV".** Quick commands can press a remote button (`"ir": {"dev": "tv",
+  "btn": "power"}`); new phrases for TV power, volume and mute are added to your commands.
+  The brain gets `ir_list()` / `ir_send()` stick tools, so "set the AC to 24" picks the learned
+  button by its name.
+
+### Fixed
+- **The wireless Wispr mic failed or lagged with Bluetooth headphones as the Mac's output**
+  (AirPods, OnePlus Buds…): with the Apple audio tap, the app played the stick into the
+  default output and clocked the mic device by it; a Bluetooth one could fail to open
+  ("Internal PortAudio error"), never run, or bring the audio in ~1.1 s late, so Wispr
+  missed the start or got nothing. When the default output is Bluetooth, the app now uses
+  the built-in speakers instead (another wired output on a Mac without them), and the
+  inaudible tap check goes the same way. Nothing is heard: the tap mutes it there just the
+  same. The log says which output is used and why.
+
 ## [2.2.0] - 2026-11-09
 
 ### Added

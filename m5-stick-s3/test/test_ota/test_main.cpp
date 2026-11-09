@@ -2,6 +2,7 @@
 // gaps, resume, sha / size checks, cancel, refusals) and the packet queue.
 #include <unity.h>
 #include <string.h>
+#include <algorithm>
 #include <string>
 #include <vector>
 #include "logic/ota_rx.h"
@@ -476,6 +477,79 @@ void test_packet_ring() {
   TEST_ASSERT_FALSE(q.push(a, 0));
 }
 
+// --- A plain file (a face package: faces/pkg/install.cpp) --------------------------------
+
+struct ResumingSink : FakeSink {
+  uint32_t have = 0;  // bytes an earlier session left in the part file
+  bool open(uint32_t n) override {
+    std::vector<uint8_t> kept(flash.begin(), flash.begin() + std::min<size_t>(have, flash.size()));
+    bool r = FakeSink::open(n);
+    flash = kept;
+    return r;
+  }
+  uint32_t resumeFrom() override { return have; }
+};
+
+void test_file_kind_takes_any_bytes() {
+  FakeSink sink;
+  Receiver rx(sink, Receiver::Kind::FILE);
+  std::vector<uint8_t> d(5000, 0x42);  // no app image header
+  std::string sha = shaHex(d);
+  otarx::Begin b;
+  b.size = d.size();
+  b.sha256 = sha.c_str();
+  b.version = "1.0.0";  // (a face's own version: no downgrade / same checks)
+  otarx::Conditions c;
+  c.partitionSize = 64 * 1024;
+  c.batteryPct = 5;     // no battery minimum for a file
+  c.running = "2.4.0";
+  TEST_ASSERT_EQUAL(Kind::READY, rx.begin(b, c, 0).kind);
+  TEST_ASSERT_EQUAL(Kind::ACK, rx.data(0, d.data(), d.size(), 1).kind);
+  TEST_ASSERT_EQUAL(Kind::DONE, rx.end(2).kind);
+  TEST_ASSERT_EQUAL(1, sink.commits);
+}
+
+void test_file_refusals() {
+  otarx::Begin b;
+  std::string sha(64, 'a');
+  b.sha256 = sha.c_str();
+  b.size = 100;
+  otarx::Conditions c;
+  c.partitionSize = 64 * 1024;
+  TEST_ASSERT_EQUAL(Error::NONE, otarx::refuseFile(b, c));
+  b.size = 64 * 1024 + 1;
+  TEST_ASSERT_EQUAL(Error::SIZE, otarx::refuseFile(b, c));
+  b.size = 0;
+  TEST_ASSERT_EQUAL(Error::SIZE, otarx::refuseFile(b, c));
+  b.size = 100;
+  c.busy = "menu";
+  TEST_ASSERT_EQUAL(Error::BUSY, otarx::refuseFile(b, c));
+  c.busy = nullptr;
+  b.sha256 = "xyz";
+  TEST_ASSERT_EQUAL(Error::SHA, otarx::refuseFile(b, c));
+}
+
+void test_file_resumes_from_the_sink() {
+  ResumingSink sink;
+  Receiver rx(sink, Receiver::Kind::FILE);
+  std::vector<uint8_t> d(9000);
+  for (size_t i = 0; i < d.size(); i++) d[i] = (uint8_t)(i * 13);
+  std::string sha = shaHex(d);
+  sink.flash.assign(d.begin(), d.begin() + 4096);  // left by a session before a restart
+  sink.have = 4096;
+  otarx::Begin b;
+  b.size = d.size();
+  b.sha256 = sha.c_str();
+  otarx::Conditions c;
+  c.partitionSize = 64 * 1024;
+  Reply r = rx.begin(b, c, 0);
+  TEST_ASSERT_EQUAL(Kind::READY, r.kind);
+  TEST_ASSERT_EQUAL(4096, r.offset);
+  TEST_ASSERT_TRUE(r.resumed);
+  rx.data(4096, d.data() + 4096, d.size() - 4096, 1);
+  TEST_ASSERT_EQUAL(Kind::DONE, rx.end(2).kind);
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_versions);
@@ -503,5 +577,8 @@ int main() {
   RUN_TEST(test_flash_failures);
   RUN_TEST(test_packet_header);
   RUN_TEST(test_packet_ring);
+  RUN_TEST(test_file_kind_takes_any_bytes);
+  RUN_TEST(test_file_refusals);
+  RUN_TEST(test_file_resumes_from_the_sink);
   return UNITY_END();
 }

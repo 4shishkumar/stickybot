@@ -18,8 +18,11 @@ from . import (
     commands,
     components_api,
     config,
+    faces,
+    faces_api,
     firmware_api,
     install_flow,
+    ir_api,
     link,
     mcp_server,
     mcp_setup,
@@ -128,7 +131,7 @@ def make_app(agent):
     async def put_config(request):
         body = await request.json()
         allowed = {k: v for k, v in body.items() if k in config.DEFAULT_CONFIG}
-        bad = brain_api.valid_config(allowed)
+        bad = brain_api.valid_config(allowed) or faces.valid_config(allowed)
         if bad:
             return web.json_response({"error": bad}, status=400)
         agent.update_config(allowed)
@@ -301,11 +304,13 @@ def make_app(agent):
     app = web.Application(middlewares=[guard])
     app.router.add_static("/static/", STATIC, show_index=False)
     app.add_routes(firmware_api.routes(agent))
+    app.add_routes(faces_api.routes(agent))  # after firmware_api (stick_api)
     app.add_routes(components_api.routes(agent))
     app.add_routes(install_flow.routes(agent))  # the setup page (#install); after firmware_api (stick_api)
     app.add_routes(mcp_server.routes(agent))
     app.add_routes(updates.routes(agent))
     app.add_routes(brain_api.routes(agent))
+    app.add_routes(ir_api.routes(agent))  # the IR remote (Remote page)
     app.add_routes([
         web.get("/api/mcp", mcp_status), web.post("/api/mcp/terminal/{action:install|uninstall}", mcp_terminal),
         web.post("/api/mcp/answer", mcp_answer),

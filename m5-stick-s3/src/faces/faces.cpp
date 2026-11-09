@@ -1,6 +1,7 @@
 #include "faces.h"
 #include <Preferences.h>
 #include "common.h"
+#include "pkg/package.h"
 #include "../netlog.h"
 
 namespace faces {
@@ -20,15 +21,18 @@ static Face* const* list(int& n) {
   return L;
 }
 
-int count() {
+int builtinCount() {
   int n;
   list(n);
   return n;
 }
 
+int count() { return builtinCount() + pkg::count(); }
+
 Face& at(int i) {
   int n;
   Face* const* l = list(n);
+  if (i >= n && i - n < pkg::count()) return pkg::at(i - n);
   return *l[constrain(i, 0, n - 1)];
 }
 
@@ -39,6 +43,7 @@ int find(const String& id) {
 }
 
 static int active_ = 0, demoFace_ = -1;
+static String activeId_ = "classic";  // what was picked (a package face may not be installed yet)
 
 Face& active() { return at(active_); }
 
@@ -47,11 +52,17 @@ void select(const String& id) {
   int next = i < 0 ? 0 : i;
   if (next != active_) at(next).reset();
   active_ = next;
+  activeId_ = id;
+}
+
+void refresh() {
+  const int i = find(activeId_);
+  active_ = i < 0 ? 0 : i;
 }
 
 String json() {
   String j = "[";
-  for (int i = 0; i < count(); i++) {
+  for (int i = 0; i < builtinCount(); i++) {
     Face& f = at(i);
     j += String(i ? "," : "") + "{\"id\":\"" + f.id() + "\",\"title\":\"" + f.title() + "\",\"about\":\"" + f.about() +
          "\"}";
@@ -63,9 +74,15 @@ String json() {
 
 static Face& shown() { return demoFace_ >= 0 ? at(demoFace_) : active(); }
 
-void drawHome(const ui::Dash& d, bool wide) { shown().draw(d, wide, millis()); }
+void drawHome(const ui::Dash& d, bool wide) {
+  shown().draw(d, wide, millis());
+  pkg::drawOverlay(wide);  // a face being installed: its toast
+}
 
-uint32_t frameMs(bool onBattery, uint32_t idleMs) { return shown().frameMs(onBattery, idleMs); }
+uint32_t frameMs(bool onBattery, uint32_t idleMs) {
+  const uint32_t face = shown().frameMs(onBattery, idleMs), toast = pkg::overlayFrameMs();
+  return !face ? toast : !toast ? face : min(face, toast);
+}
 
 // The same reaction twice in a row (the event and the world update both say "merged"):
 // once. Toys can repeat sooner.
@@ -127,6 +144,7 @@ static bool sameKept(const world::Snapshot& a, const world::Snapshot& b) {
 }
 
 void begin() {
+  pkg::begin();  // the installed face packages (before the saved face is selected)
   store.begin("faces", false);
   if (store.getUChar("v", 0) == CACHE_VERSION && store.getBytesLength("world") == sizeof(world::Snapshot)) {
     store.getBytes("world", &live_, sizeof live_);
