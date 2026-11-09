@@ -56,6 +56,7 @@ pub const PORTED: &[&str] = &[
     "POST /api/new-chat",
     "GET /api/firmware",
     "POST /api/firmware/ota",
+    "POST /api/firmware/flash",
     "GET /api/firmware/jobs/{id}",
     "POST /api/firmware/jobs/{id}/cancel",
     "POST /api/wireless-mic/show",
@@ -74,7 +75,6 @@ pub const PORTED: &[&str] = &[
 /// The Python agent's endpoints that aren't here yet, by the phase that brings them.
 pub const NOT_PORTED: &[(&str, &str)] = &[
     ("GET /api/pet", "faces / pet (the Stick page's Face card hides the pet line)"),
-    ("POST /api/firmware/flash", "firmware over USB (esptool)"),
     ("GET /api/onboarding", "setup wizard progress (the wizard keeps it in the browser meanwhile)"),
     ("POST /api/onboarding", "setup wizard progress"),
     ("GET /api/install", "setup page (#install)"),
@@ -123,6 +123,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/clips/play", post(clip_play))
         .route("/api/firmware", get(firmware_info))
         .route("/api/firmware/ota", post(ota_update))
+        .route("/api/firmware/flash", post(usb_flash))
         .route("/api/firmware/jobs/{id}", get(job_events))
         .route("/api/firmware/jobs/{id}/cancel", post(job_cancel))
         .route("/api/wireless-mic/show", post(wireless_mic_show))
@@ -558,6 +559,24 @@ async fn firmware_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
 }
 
 /// Starts a firmware update over Bluetooth: `{"force"}` -> `{"job"}`.
+/// Flashes the stick on USB with esptool: `{"port", "backup"}` -> `{"job"}` (firmware_api.py `flash`).
+async fn usb_flash(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    let b = body_obj(&body);
+    let port = b.get("port").and_then(Value::as_str).unwrap_or("").to_string();
+    let backup = b.get("backup").and_then(Value::as_bool).unwrap_or(false);
+    let st2 = st.clone();
+    let r = tokio::task::spawn_blocking(move || st2.usb.backend().ports())
+        .await
+        .map(|ports| ports.iter().any(|p| p.port == port));
+    if !matches!(r, Ok(true)) {
+        return err(StatusCode::BAD_REQUEST, &format!("{port} isn't an Espressif USB device (not a stick) — refusing"));
+    }
+    match crate::flasher::start(&st, &port, backup) {
+        Ok(job) => axum::Json(json!({"job": job})).into_response(),
+        Err((code, e)) => err(StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_REQUEST), &e),
+    }
+}
+
 async fn ota_update(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
     let force = body_obj(&body).get("force").and_then(Value::as_bool).unwrap_or(false);
     let t = st.ota_timings.lock().unwrap().clone();
@@ -796,7 +815,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), w.wait_for(|s| *s == LinkState::Paused)).await.unwrap().unwrap();
         let (s, v, _) = call(&app, req("GET", "/api/pet", None, None)).await;
         assert_eq!((s, v["missing"].as_bool()), (StatusCode::NOT_FOUND, Some(true)));
-        let (s, _, _) = call(&app, req("POST", "/api/firmware/flash", Some(json!({})), tok)).await;
+        let (s, _, _) = call(&app, req("POST", "/api/onboarding", Some(json!({})), tok)).await;
         assert_eq!(s, StatusCode::NOT_FOUND);
         let (_, v, _) = call(&app, req("GET", "/api/rust", None, None)).await;
         assert!(v["ported"].as_array().unwrap().iter().any(|e| e == "POST /api/stick/proto"));
@@ -1151,6 +1170,46 @@ mod tests {
         usb.ports.lock().unwrap().clear();
         let (_, v, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@state"})), tok)).await;
         assert_eq!((v["via"].as_str(), v["error"].as_str()), (Some("ble"), Some("the stick didn't answer")));
+    }
+
+    #[tokio::test]
+    async fn usb_flash_runs_esptool_as_a_job() {
+        let (app, st, _) = app("flash", false).await;
+        let usb = crate::usb::FakeUsb::stick("/dev/cu.usbmodem3", "2.1.0");
+        st.usb.set_backend(usb.clone());
+        let tool = Arc::new(crate::flasher::tests::FakeEsptool::default());
+        st.set_esptool(tool.clone());
+        *st.flash_timings.lock().unwrap() = crate::flasher::FlashTimings {
+            settle: Duration::ZERO,
+            poll: Duration::from_millis(1),
+            bootloader: Duration::from_millis(100),
+        };
+        let tok = Some(st.token.as_str());
+        let (s, v, _) = call(&app, req("POST", "/api/firmware/flash", Some(json!({"port": "/dev/cu.other"})), tok)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+        let (s, v, _) = call(&app, req("POST", "/api/firmware/flash", Some(json!({"port": "/dev/cu.usbmodem3"})), tok)).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        assert!(v["error"].as_str().unwrap().contains("no firmware"));
+        // a bundle on this Mac
+        let d = st.paths.home.join("firmware/local");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("app.bin"), vec![0xE9u8; 64]).unwrap();
+        std::fs::write(d.join("manifest.json"), json!({"version": "2.3.0", "parts": [{"file": "app.bin", "offset": "0x10000", "size": 64}]}).to_string()).unwrap();
+        let (s, v, _) = call(&app, req("POST", "/api/firmware/flash", Some(json!({"port": "/dev/cu.usbmodem3"})), tok)).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let job = st.jobs.get(v["job"].as_str().unwrap()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !job.is_done() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let evs = job.events_from(0);
+        assert_eq!(evs.last().unwrap()["ok"], true, "{evs:?}");
+        assert_eq!(tool.runs.lock().unwrap().len(), 1); // no backup asked
+        assert_eq!(*usb.touches.lock().unwrap(), vec!["/dev/cu.usbmodem3".to_string()]);
+        assert!(!st.usb.is_flashing());
     }
 
     #[tokio::test]

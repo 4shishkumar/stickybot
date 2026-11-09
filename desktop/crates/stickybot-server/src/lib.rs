@@ -11,6 +11,7 @@ pub mod clips;
 pub mod commands;
 pub mod config;
 pub mod firmware;
+pub mod flasher;
 pub mod hub;
 pub mod logs;
 pub mod migrate;
@@ -98,6 +99,10 @@ pub struct AppState {
     /// the stick on USB: `@…` lines, the list with versions, flashing (`usb.rs`, `flasher.rs`).
     /// With the fake stick there's no USB at all (tests never open a real port).
     pub usb: usb::UsbSticks,
+    /// runs esptool for USB flashing (tests swap it: they never run the real one)
+    esptool: Mutex<Arc<dyn flasher::Esptool>>,
+    /// how long a USB flash waits for the bootloader (tests shorten it)
+    pub flash_timings: Mutex<flasher::FlashTimings>,
     /// the Python app's folder (read-only; see `migrate.rs`)
     pub import_from: Option<PathBuf>,
     me: OnceLock<Weak<AppState>>,
@@ -148,6 +153,8 @@ impl AppState {
             } else {
                 usb::UsbSticks::default()
             },
+            esptool: Mutex::new(Arc::new(flasher::SystemEsptool)),
+            flash_timings: Mutex::new(flasher::FlashTimings::default()),
             import_from: opts.import_from.clone(),
             me: OnceLock::new(),
         });
@@ -163,6 +170,14 @@ impl AppState {
     }
 
     /// Firmware bundles on this Mac, best first (`~/.stickybot-rs/firmware`, `$STICKYBOT_RS_FIRMWARE`).
+    pub fn esptool(&self) -> Arc<dyn flasher::Esptool> {
+        self.esptool.lock().unwrap().clone()
+    }
+
+    pub fn set_esptool(&self, t: Arc<dyn flasher::Esptool>) {
+        *self.esptool.lock().unwrap() = t;
+    }
+
     pub fn firmware(&self) -> Vec<Value> {
         let extra = std::env::var_os("STICKYBOT_RS_FIRMWARE").map(std::path::PathBuf::from);
         firmware::bundles(&firmware::firmware_root(&self.paths.home), extra.as_deref())
