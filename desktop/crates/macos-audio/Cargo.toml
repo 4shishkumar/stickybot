@@ -6,6 +6,11 @@ license.workspace = true
 publish.workspace = true
 description = "StickyBot's wireless-mic virtual microphone (Core Audio process tap + aggregate device), from Rust"
 
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+
 # Everything that touches Core Audio is macOS-only; the naming / description / level code is plain Rust
 # and builds (and tests) anywhere.
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -13,9 +18,9 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSArray", "NSValue", "NSUUID", "NSObject", "NSProcessInfo"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFBase", "CFString", "CFNumber", "CFDictionary", "CFArray"] }
 objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "objc2", "objc2-foundation", "objc2-core-audio-types", "AudioHardware"] }
+cpal = "0.18"
 
 [dev-dependencies]
-cpal = "0.18"
 hound = "3.5"
 ctrlc = "3.5"
 

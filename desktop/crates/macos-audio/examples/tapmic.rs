@@ -278,6 +278,7 @@ mod app {
             println!("  {:>4}  {:<40}  {}", d.id, d.name, d.uid);
         }
         println!("default output: {}", hal::default_output_uid().unwrap_or_default());
+        println!("tap output (clock + playback): {}", hal::tap_output_uid().unwrap_or_default());
         println!("process taps:");
         for t in hal::taps() {
             println!("  {:>4}  {:<40}  {}", t.id, t.name, t.uuid);
@@ -371,7 +372,7 @@ mod app {
     {
         let host = cpal::default_host();
         let input = find_input(&host, &m.names.uid)?;
-        let icfg = input.default_input_config().map_err(|e| format!("device input config: {e}"))?;
+        let icfg = macos_audio::system::input_config(&input, &m.names.uid)?;
         if icfg.sample_format() != cpal::SampleFormat::F32 {
             return Err(format!("device input is {:?}, expected f32", icfg.sample_format()));
         }
@@ -392,11 +393,9 @@ mod app {
             )
             .map_err(|e| format!("can't open the device input: {e}"))?;
 
-        let output = host.default_output_device().ok_or("no default output device")?;
-        let out_uid = output.id().map(|i| i.id().to_string()).unwrap_or_default();
-        if out_uid != m.out_uid {
-            return Err(format!("the default output changed ({} -> {out_uid}): not playing", m.out_uid));
-        }
+        // the tap's output (the default output, or the built-in one when the default is Bluetooth)
+        let output = macos_audio::system::find_output(&host, &m.out_uid)
+            .ok_or_else(|| format!("the output {} is gone: not playing", m.out_uid))?;
         let ocfg = output.default_output_config().map_err(|e| format!("output config: {e}"))?;
         if ocfg.sample_format() != cpal::SampleFormat::F32 {
             return Err(format!("output is {:?}, expected f32", ocfg.sample_format()));

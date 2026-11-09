@@ -178,6 +178,20 @@ What to check:
 Ctrl-C at any point silences the output first and then removes the device. If a run is
 killed hard, `./target/debug/examples/tapmic --cleanup` removes what it left behind.
 
+## Later: the port, and Bluetooth output (Nov 2026)
+
+The real port is in `src/{device,player,jitter,carrier,system}.rs` and `stickybot-server/src/wmic.rs`
+(README, *Wireless Wispr mic*). Running it with Bluetooth earbuds as the default output showed:
+
+- cpal's `default_input_config()` of the tapped aggregate said 48 kHz while the aggregate ran at
+  44.1 kHz (the earbuds' rate), so opening its input failed ("Sample rate 48000 Hz is not
+  supported"). `system::input_config()` picks the config at the HAL's nominal rate.
+- An aggregate clocked by the Bluetooth output **never runs its input** (0 callbacks in 1.5 s), and
+  audio played into the earbuds reached a speaker-clocked tap only after ~1.1 s.
+- Clocked by and played into the built-in speakers (while the earbuds stay the default output) it
+  works: the probe heard at -83 dBFS after 21 ms. `hal::tap_output_uid()` picks that device when the
+  default output is Bluetooth; `tapmic` uses it too.
+
 ## Not verified / remaining risks
 
 - **The loud path (`--speech`, `--tone`) was compiled but never run by the agent**, by

@@ -3,8 +3,14 @@
 
 /// The fallback name: no stick picked yet, or its name has nothing usable.
 pub const NAME: &str = "stickybot-bt-mic";
-/// The running agent's aggregate UID. The spike never uses it (see [`SPIKE_UID`]).
+/// The Python agent's aggregate UID. The Rust app never uses it: the Python agent destroys every
+/// aggregate with this UID as "left over", and the Rust app's cleanup must never touch the agent's.
 pub const UID: &str = "com.stickkey.wireless-mic";
+/// The Rust app's aggregate UID. The *name* is the same as the Python agent's ("<stick>-bt-mic"),
+/// because Wispr Flow ranks microphones by name: users keep their Wispr settings.
+pub const RUST_UID: &str = "com.stickkey.rust-wireless-mic";
+/// The fixed name before agent 1.8.1.
+pub const OLD_NAME: &str = "stick-mic-bluetooth";
 /// A tap's name = the aggregate's UID + this (how stale ones are found).
 pub const TAP_SUFFIX: &str = ".tap";
 /// The probe's device: UID + this, name + "-check" (never the real one).
@@ -40,6 +46,20 @@ pub fn name_for(stick_name: &str) -> String {
     if s.is_empty() { NAME.to_string() } else { format!("{s}-bt-mic") }
 }
 
+/// A saved `wispr_mic_name` that is an older automatic name ("stick-mic-bluetooth",
+/// "<slug>-mic-bluetooth", agent 1.8.1-1.8.6): it means "automatic", so the mic follows the
+/// stick's name. Anything else was typed in and wins.
+pub fn is_auto_name(name: &str) -> bool {
+    let name = name.trim();
+    if name == OLD_NAME {
+        return true;
+    }
+    // [a-z0-9]+(-[a-z0-9]+)*-mic-bluetooth
+    let Some(stem) = name.strip_suffix("-mic-bluetooth") else { return false };
+    !stem.is_empty()
+        && stem.split('-').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()))
+}
+
 /// The names of one device + its tap, and of the probe's check device + its tap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Names {
@@ -50,6 +70,11 @@ pub struct Names {
 impl Names {
     pub fn new(name: impl Into<String>, uid: impl Into<String>) -> Self {
         Self { name: name.into(), uid: uid.into() }
+    }
+
+    /// The Rust app's device for this stick: the Python app's name, the Rust UID.
+    pub fn rust(name: impl Into<String>) -> Self {
+        Self::new(name, RUST_UID)
     }
 
     /// The spike's device ("spike-rust-mic", "com.stickkey.spike-rust-mic").
@@ -108,6 +133,41 @@ mod tests {
         assert_eq!(c.name, "stickybot-bt-mic-check");
         assert_eq!(c.uid, "com.stickkey.wireless-mic.check");
         assert_eq!(c.tap_name(), "com.stickkey.wireless-mic.check.tap");
+    }
+
+    /// test_stick_mic_device.py `test_names_follow_the_stick`
+    #[test]
+    fn names_follow_the_stick() {
+        assert_eq!(slug("  stick-key "), "stick-key");
+        assert_eq!(slug("Ana's  key!"), "ana-s-key");
+        assert_eq!(name_for("StickyBot"), "stickybot-bt-mic"); // a default-named stick
+        assert_eq!(name_for("stick-key"), "stick-key-bt-mic");
+        assert_eq!(name_for("!!"), "stickybot-bt-mic"); // no stick picked yet
+    }
+
+    #[test]
+    fn old_automatic_names_mean_automatic() {
+        for saved in
+            ["stick-mic-bluetooth", "arbaaz-sticks3-mic-bluetooth", "stick-key-mic-bluetooth", "  desk-mic-bluetooth "]
+        {
+            assert!(is_auto_name(saved), "{saved}");
+        }
+        for typed in ["my mic", "Desk Mic-bluetooth", "stickybot-bt-mic", "wispr mic bluetooth", "", "-mic-bluetooth"] {
+            assert!(!is_auto_name(typed), "{typed}");
+        }
+    }
+
+    #[test]
+    fn rust_app_never_owns_the_python_agents_objects() {
+        let python = Names::new(NAME, UID);
+        let rust = Names::rust(NAME);
+        assert_eq!(rust.name, python.name); // same name: Wispr's ranking finds it
+        for u in rust.owned_device_uids() {
+            assert!(!python.owned_device_uids().contains(&u));
+        }
+        for t in rust.owned_tap_names() {
+            assert!(!python.owned_tap_names().contains(&t));
+        }
     }
 
     #[test]

@@ -2272,10 +2272,13 @@ dependencies = [
  "cpal",
  "ctrlc",
  "hound",
+ "log",
  "objc2",
  "objc2-core-audio",
  "objc2-core-foundation",
  "objc2-foundation",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3818,12 +3821,14 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bzip2 0.6.1",
+ "cpal",
  "env_logger",
  "futures-util",
  "getrandom 0.3.4",
  "hound",
  "http-body-util",
  "log",
+ "macos-audio",
  "regex",
  "rust-embed",
  "serde",

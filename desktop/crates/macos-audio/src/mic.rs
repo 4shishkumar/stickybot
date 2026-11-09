@@ -15,7 +15,7 @@ use crate::plist::aggregate_description;
 use crate::tap::{self, Tap};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Live {
+pub(crate) enum Live {
     Device(Id),
     Tap(Id),
 }
@@ -26,12 +26,12 @@ fn live() -> std::sync::MutexGuard<'static, Vec<Live>> {
     LIVE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn record(x: Live) {
+pub(crate) fn record(x: Live) {
     live().push(x);
 }
 
 /// Takes `x` out of the registry; true if it was there (so the caller is the one to destroy it).
-fn claim(x: Live) -> bool {
+pub(crate) fn claim(x: Live) -> bool {
     let mut l = live();
     match l.iter().position(|y| *y == x) {
         Some(i) => {
@@ -86,7 +86,7 @@ impl TapMic {
         let t0 = Instant::now();
         let pid = std::process::id() as i32;
         let process = hal::process_object(pid).ok_or("macOS has no audio process object for this process")?;
-        let out_uid = hal::default_output_uid().ok_or("there's no default output device")?;
+        let out_uid = hal::tap_output_uid().ok_or("there's no default output device")?;
         let tap = tap::create_process_tap(&names.tap_name(), process)?;
         record(Live::Tap(tap.id));
         let desc = aggregate_description(&names.name, &names.uid, &out_uid, Some(&tap.uuid));
