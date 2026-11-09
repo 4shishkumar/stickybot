@@ -233,6 +233,28 @@ before/after.
   -H "X-Stick-Token: $(cat ~/.stickybot-rs/token)" -d '{"tool":"Bash","hint":"ls","wait":30}'`
   simulates it) → A on the stick answers `{"decision":"allow"}`, B `deny`.
 
+### Parity round 2 checks with the real stick (steps 1-3 above first)
+
+- **Clip speed**: Sounds → play glass_001, bong_001, click_001: the log's `clip …: X s of audio sent
+  in Y s` must have Y < X (Python: 0.28 s in 0.19 s). If not, the same line says where it went
+  (`lock`, `start ack`, `frames` / `slowest`, `end ack`).
+- **Stick tools**: ask Claude (hold B) "notify me on the stick that tests passed" → a toast;
+  "ask me on the stick whether to deploy" → A / B answers; in a terminal after Settings → *Stick
+  tools* → install: `claude` → "use the stick to show progress 3 of 10" → the home card.
+  `stick_status` reports the battery.
+- **Speech**: Settings → *Read replies aloud* on → hold B, ask a short question → the stick speaks
+  it sentence by sentence while the screen fills; hold B again mid-sentence → it stops. Voice →
+  Test.
+- **One-shot mode**: Settings → Claude Code runs *once per request* → ask twice within 10 min →
+  the second `claude -p` has `--resume` (log).
+- **Home screen**: the card rotates (your answer, sessions, the feed), weather on the stick, an
+  event from Events → Test, a GitHub PR change becomes an event, the pet's face data (`/api/pet`).
+- **USB**: plug the stick in, pause Bluetooth → Stick page loads over USB (`via: "usb"`); Firmware →
+  USB flashing with a backup (the stick on the desk, not mid-task).
+- **Login item**: Settings → *Start at login* on → System Settings → Login Items lists it; log out
+  and in.
+- **Switch-over**: follow [SWITCHOVER.md](SWITCHOVER.md) once you're ready to retire the Python app.
+
 ### Wireless Wispr mic checks with the real stick (steps 1-3 above first)
 
 The Python agent, paused, has no device; its own device (UID `com.stickkey.wireless-mic`) and this
