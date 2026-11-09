@@ -1274,6 +1274,12 @@ mod tests {
         let (s, v, _) = call(&app, req("POST", "/api/update/agent", Some(json!({})), tok)).await;
         assert_eq!(s, StatusCode::CONFLICT);
         assert!(v["error"].as_str().unwrap().contains("doesn't update itself"));
+        // one toast on the stick per release
+        let ev = crate::updates::notify(&st).await.expect("toasted");
+        assert_eq!((ev["title"].as_str(), ev["kind"].as_str()), (Some("Update firmware 9.9.0 ready"), Some("update")));
+        assert!(crate::updates::notify(&st).await.is_none());
+        let saved = std::fs::read_to_string(st.paths.home.join("updates.json")).unwrap();
+        assert!(saved.contains("\"notified\""), "{saved}");
     }
 
     #[tokio::test]

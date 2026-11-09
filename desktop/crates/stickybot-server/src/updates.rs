@@ -39,6 +39,8 @@ struct State {
     /// a release summary + "firmware" (its firmware version)
     latest: Option<Value>,
     stick_fw: Option<String>,
+    /// release tags already toasted on the stick
+    notified: Vec<String>,
 }
 
 pub struct Updates {
@@ -57,6 +59,11 @@ impl Updates {
         if let Some(v) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
             s.checked_at = v.get("checked_at").and_then(Value::as_f64).unwrap_or(0.0);
             s.latest = v.get("latest").filter(|l| l.is_object()).cloned();
+            s.notified = v
+                .get("notified")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                .unwrap_or_default();
         }
         let repo = releases::repo();
         let r2 = repo.clone();
@@ -76,7 +83,8 @@ impl Updates {
 
     fn save(&self) {
         let s = self.s.lock().unwrap();
-        let v = json!({"checked_at": s.checked_at, "latest": s.latest});
+        let keep = s.notified.len().saturating_sub(20);
+        let v = json!({"checked_at": s.checked_at, "latest": s.latest, "notified": s.notified[keep..]});
         if let Err(e) = std::fs::write(&self.path, serde_json::to_string_pretty(&v).unwrap_or_default()) {
             log::warn!("couldn't save {}: {e}", self.path.display());
         }
@@ -203,6 +211,7 @@ pub fn spawn(st: Arc<crate::AppState>) {
                 st.updates.check(&cfg).await;
                 emit(&st);
             }
+            notify(&st).await;
             drop(st);
             tokio::time::sleep(TICK).await;
         }
@@ -213,6 +222,29 @@ pub fn spawn(st: Arc<crate::AppState>) {
 pub async fn refresh_stick(st: &crate::AppState) {
     let c = crate::firmware::connected(&st.link).await;
     st.updates.set_stick_fw(c.get("version").and_then(Value::as_str).map(str::to_string));
+}
+
+/// One "nice" toast on the stick per release (updates.py `notify`), once the stick is there and
+/// it isn't quiet hours; also when the kind is off it isn't tried again.
+pub async fn notify(st: &crate::AppState) -> Option<Value> {
+    let cfg = st.cfg.lock().unwrap().clone();
+    let s = st.updates.status(&cfg, false);
+    let tag = s["latest"]["tag"].as_str()?.to_string();
+    if s["available"] != true || st.updates.s.lock().unwrap().notified.contains(&tag) {
+        return None;
+    }
+    if !st.link.connected() || crate::events::quiet_now(&cfg) {
+        return None; // later: the next tick tries again
+    }
+    let name = if s["agent_update"] == true {
+        tag.clone()
+    } else {
+        format!("firmware {}", s["latest"]["firmware"].as_str().unwrap_or(""))
+    };
+    let ev = crate::events::notify(st, "update", &format!("Update {name} ready"), "see the dashboard", None, None, "").await;
+    st.updates.s.lock().unwrap().notified.push(tag);
+    st.updates.save();
+    ev
 }
 
 /// The `update` event for the banner.
