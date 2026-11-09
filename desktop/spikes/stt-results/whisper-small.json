@@ -1,0 +1,170 @@
+{
+ "engine": "whisper.cpp small.en q5_1 (Rust, Metal)",
+ "first_s": 0.151355625,
+ "load_s": 0.195766958,
+ "model": "ggml-small.en-q5_1.bin",
+ "model_bytes": 190098681,
+ "results": [
+  {
+   "audio_s": 2.443,
+   "id": "01",
+   "text": "Open the pull request for the login fix.",
+   "warm_s": [
+    0.132333584,
+    0.132211166,
+    0.132432375,
+    0.132000375,
+    0.135587875
+   ]
+  },
+  {
+   "audio_s": 1.4883125,
+   "id": "02",
+   "text": "What's the weather tomorrow?",
+   "warm_s": [
+    0.126625459,
+    0.124903375,
+    0.124660625,
+    0.124454958,
+    0.125790125
+   ]
+  },
+  {
+   "audio_s": 2.173,
+   "id": "03",
+   "text": "run the tests and tell me what failed",
+   "warm_s": [
+    0.134358584,
+    0.130201875,
+    0.129740917,
+    0.1298105,
+    0.129685125
+   ]
+  },
+  {
+   "audio_s": 2.772875,
+   "id": "04",
+   "text": "Push the branch to GitHub and open a draft PR.",
+   "warm_s": [
+    0.137711208,
+    0.137187167,
+    0.137187791,
+    0.139638167,
+    0.137595375
+   ]
+  },
+  {
+   "audio_s": 2.7716875,
+   "id": "05",
+   "text": "Ask Claude to refactor the Tori window code.",
+   "warm_s": [
+    0.13700625,
+    0.137041125,
+    0.137273208,
+    0.137032208,
+    0.137559125
+   ]
+  },
+  {
+   "audio_s": 2.326,
+   "id": "06",
+   "text": "Set a timer for 25 minutes.",
+   "warm_s": [
+    0.127534417,
+    0.127221208,
+    0.126833583,
+    0.12765725,
+    0.1274035
+   ]
+  },
+  {
+   "audio_s": 3.143375,
+   "id": "07",
+   "text": "Rename the function passConfigToLoadSettings.",
+   "warm_s": [
+    0.134953875,
+    0.134508541,
+    0.134733916,
+    0.134717334,
+    0.134726208
+   ]
+  },
+  {
+   "audio_s": 2.8644375,
+   "id": "08",
+   "text": "How many open issues are assigned to me on GitHub?",
+   "warm_s": [
+    0.136412917,
+    0.136458875,
+    0.136312875,
+    0.136231292,
+    0.136427
+   ]
+  },
+  {
+   "audio_s": 3.114375,
+   "id": "09",
+   "text": "Revert the last three commits on main and rerun the build.",
+   "warm_s": [
+    0.1434205,
+    0.14322875,
+    0.14335475,
+    0.143557333,
+    0.144104833
+   ]
+  },
+  {
+   "audio_s": 3.4135,
+   "id": "10",
+   "text": "Remind me to call Sarah at 4.30 tomorrow afternoon.",
+   "warm_s": [
+    0.141904583,
+    0.143809334,
+    0.142195292,
+    0.14195325,
+    0.142831542
+   ]
+  },
+  {
+   "audio_s": 4.409375,
+   "id": "11",
+   "text": "Bump the version to 2,1,0 and update the change log.",
+   "warm_s": [
+    0.150216542,
+    0.14995875,
+    0.14949875,
+    0.149595458,
+    0.149466583
+   ]
+  },
+  {
+   "audio_s": 3.4510625,
+   "id": "12",
+   "text": "Summarize the build log and fix the first error in the Rust code.",
+   "warm_s": [
+    0.148930666,
+    0.149724333,
+    0.149248917,
+    0.149112833,
+    0.149349833
+   ]
+  },
+  {
+   "audio_s": 2.336375,
+   "id": "13",
+   "text": "Run the tests and tell me what failed.",
+   "warm_s": [
+    0.132177291,
+    0.132280375,
+    0.13202425,
+    0.134009792,
+    0.132713958
+   ]
+  }
+ ],
+ "mem": {
+  "max_rss_mb": 368,
+  "peak_footprint_mb": 401
+ },
+ "process_wall_s": 9.75
+}

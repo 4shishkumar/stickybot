@@ -1,0 +1,170 @@
+{
+ "engine": "sherpa-onnx Parakeet (Rust, CPU 4 thr)",
+ "first_s": 0.160558,
+ "load_s": 0.541895917,
+ "model": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+ "model_bytes": 670478772,
+ "results": [
+  {
+   "audio_s": 2.443,
+   "id": "01",
+   "text": "Open the pull request for the login fix.",
+   "warm_s": [
+    0.160102334,
+    0.158124917,
+    0.157497958,
+    0.158214958,
+    0.157629875
+   ]
+  },
+  {
+   "audio_s": 1.4883125,
+   "id": "02",
+   "text": "What's the weather tomorrow?",
+   "warm_s": [
+    0.105578167,
+    0.105206583,
+    0.109518041,
+    0.104956667,
+    0.105086708
+   ]
+  },
+  {
+   "audio_s": 2.173,
+   "id": "03",
+   "text": "Run the tests and tell me what failed.",
+   "warm_s": [
+    0.138242583,
+    0.138855666,
+    0.13803425,
+    0.137711042,
+    0.13864475
+   ]
+  },
+  {
+   "audio_s": 2.772875,
+   "id": "04",
+   "text": "Push the branch to GitHub and open a draft PR.",
+   "warm_s": [
+    0.180122792,
+    0.178561709,
+    0.178531167,
+    0.180104792,
+    0.178795042
+   ]
+  },
+  {
+   "audio_s": 2.7716875,
+   "id": "05",
+   "text": "Ask Claude to refactor the Tory window code.",
+   "warm_s": [
+    0.177945625,
+    0.180830375,
+    0.178880041,
+    0.17895425,
+    0.179723667
+   ]
+  },
+  {
+   "audio_s": 2.326,
+   "id": "06",
+   "text": "Set a timer for 25 minutes.",
+   "warm_s": [
+    0.149599,
+    0.14927425,
+    0.149777167,
+    0.149492875,
+    0.150319708
+   ]
+  },
+  {
+   "audio_s": 3.143375,
+   "id": "07",
+   "text": "Rename the function parse config to load settings.",
+   "warm_s": [
+    0.192694708,
+    0.191295041,
+    0.191363958,
+    0.191486,
+    0.191076167
+   ]
+  },
+  {
+   "audio_s": 2.8644375,
+   "id": "08",
+   "text": "How many open issues are assigned to me on GitHub?",
+   "warm_s": [
+    0.175160459,
+    0.174554,
+    0.1750805,
+    0.174882833,
+    0.175558292
+   ]
+  },
+  {
+   "audio_s": 3.114375,
+   "id": "09",
+   "text": "Revert the last three commits on main and rerun the build.",
+   "warm_s": [
+    0.196139333,
+    0.195956916,
+    0.195028583,
+    0.195985916,
+    0.195280917
+   ]
+  },
+  {
+   "audio_s": 3.4135,
+   "id": "10",
+   "text": "Remind me to call Sarah at 430 tomorrow afternoon.",
+   "warm_s": [
+    0.2165405,
+    0.215674625,
+    0.215234958,
+    0.215903375,
+    0.21642625
+   ]
+  },
+  {
+   "audio_s": 4.409375,
+   "id": "11",
+   "text": "Bump the version to 2.10 and update the change log.",
+   "warm_s": [
+    0.265531333,
+    0.264362,
+    0.265055291,
+    0.265475167,
+    0.265518125
+   ]
+  },
+  {
+   "audio_s": 3.4510625,
+   "id": "12",
+   "text": "Summarize the build log and fix the first error in the Rust code.",
+   "warm_s": [
+    0.211715542,
+    0.212218458,
+    0.213131958,
+    0.212498417,
+    0.212576333
+   ]
+  },
+  {
+   "audio_s": 2.336375,
+   "id": "13",
+   "text": "Run the tests and tell me what failed.",
+   "warm_s": [
+    0.149595084,
+    0.151858791,
+    0.150326458,
+    0.150556834,
+    0.150124792
+   ]
+  }
+ ],
+ "mem": {
+  "max_rss_mb": 1134,
+  "peak_footprint_mb": 1120
+ },
+ "process_wall_s": 12.86
+}

@@ -1,0 +1,170 @@
+{
+ "engine": "FluidAudio Parakeet v3 (Swift via Rust, CoreML, ANE)",
+ "first_s": 0.063396666,
+ "load_s": 0.164934084,
+ "model": "fluidaudio",
+ "model_bytes": 483257242,
+ "results": [
+  {
+   "audio_s": 2.443,
+   "id": "01",
+   "text": "Open the pull request for the login fix.",
+   "warm_s": [
+    0.041971042,
+    0.0368475,
+    0.037380541,
+    0.035072334,
+    0.033457791
+   ]
+  },
+  {
+   "audio_s": 1.4883125,
+   "id": "02",
+   "text": "What's the weather tomorrow?",
+   "warm_s": [
+    0.033221958,
+    0.031909125,
+    0.031956667,
+    0.032050625,
+    0.031779084
+   ]
+  },
+  {
+   "audio_s": 2.173,
+   "id": "03",
+   "text": "Run the tests and tell me what failed.",
+   "warm_s": [
+    0.033453166,
+    0.03283625,
+    0.032971583,
+    0.032892166,
+    0.032399542
+   ]
+  },
+  {
+   "audio_s": 2.772875,
+   "id": "04",
+   "text": "Push the branch to GitHub and open a draft PR.",
+   "warm_s": [
+    0.038937708,
+    0.036351417,
+    0.035587041,
+    0.035474667,
+    0.036013166
+   ]
+  },
+  {
+   "audio_s": 2.7716875,
+   "id": "05",
+   "text": "Ask Claude to refactor the Tory window code.",
+   "warm_s": [
+    0.036561833,
+    0.035182958,
+    0.035172708,
+    0.034973833,
+    0.034512167
+   ]
+  },
+  {
+   "audio_s": 2.326,
+   "id": "06",
+   "text": "Set a timer for 25 minutes.",
+   "warm_s": [
+    0.03512675,
+    0.032327708,
+    0.031860709,
+    0.0319835,
+    0.031934708
+   ]
+  },
+  {
+   "audio_s": 3.143375,
+   "id": "07",
+   "text": "Rename the function parse config to load settings.",
+   "warm_s": [
+    0.037590459,
+    0.034793,
+    0.034337541,
+    0.034446875,
+    0.034703209
+   ]
+  },
+  {
+   "audio_s": 2.8644375,
+   "id": "08",
+   "text": "How many open issues are assigned to me on GitHub?",
+   "warm_s": [
+    0.0387065,
+    0.036095625,
+    0.035901583,
+    0.035501334,
+    0.036106333
+   ]
+  },
+  {
+   "audio_s": 3.114375,
+   "id": "09",
+   "text": "Revert the last three commits on main and rerun the build.",
+   "warm_s": [
+    0.036604458,
+    0.035250709,
+    0.036329292,
+    0.03670175,
+    0.03655
+   ]
+  },
+  {
+   "audio_s": 3.4135,
+   "id": "10",
+   "text": "Remind me to call Sarah at four thirty tomorrow afternoon.",
+   "warm_s": [
+    0.041431875,
+    0.037845875,
+    0.037826625,
+    0.037391417,
+    0.0374485
+   ]
+  },
+  {
+   "audio_s": 4.409375,
+   "id": "11",
+   "text": "Bump the version to 2, 1, 0 and update the change log.",
+   "warm_s": [
+    0.039946958,
+    0.037211417,
+    0.03680925,
+    0.037322792,
+    0.036966042
+   ]
+  },
+  {
+   "audio_s": 3.4510625,
+   "id": "12",
+   "text": "Summarize the build log and fix the first error in the Rust code.",
+   "warm_s": [
+    0.037397333,
+    0.037014708,
+    0.03692925,
+    0.036728833,
+    0.036726
+   ]
+  },
+  {
+   "audio_s": 2.336375,
+   "id": "13",
+   "text": "Run the tests and tell me what failed.",
+   "warm_s": [
+    0.032609416,
+    0.033079583,
+    0.032916959,
+    0.033035,
+    0.032758167
+   ]
+  }
+ ],
+ "mem": {
+  "max_rss_mb": 86,
+  "peak_footprint_mb": 47
+ },
+ "process_wall_s": 2.55
+}

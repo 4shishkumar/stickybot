@@ -1,0 +1,5 @@
+/target
+/target-*
+/crates/stt/swift/FluidBridge/.build
+/spikes/stt-testset/wav
+/crates/stickybot-app/gen

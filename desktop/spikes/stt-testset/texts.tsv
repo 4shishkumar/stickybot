@@ -1,0 +1,14 @@
+# id	voice	noise_snr_db (- = clean)	reference text
+01	Samantha	-	Open the pull request for the login fix.
+02	Daniel	-	What's the weather tomorrow?
+03	Karen	-	Run the tests and tell me what failed.
+04	Samantha	-	Push the branch to GitHub and open a draft PR.
+05	Daniel	-	Ask Claude to refactor the Tauri window code.
+06	Karen	-	Set a timer for 25 minutes.
+07	Rishi	-	Rename the function parse config to load settings.
+08	Samantha	-	How many open issues are assigned to me on GitHub?
+09	Daniel	-	Revert the last 3 commits on main and rerun the build.
+10	Karen	-	Remind me to call Sarah at 4:30 tomorrow afternoon.
+11	Rishi	-	Bump the version to 2.1.0 and update the changelog.
+12	Samantha	-	Summarize the build log and fix the first error in the Rust code.
+13	Daniel	12	Run the tests and tell me what failed.

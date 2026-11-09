@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = ["crates/macos-audio", "crates/stt"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+publish = false
+
+[profile.release]
+strip = "none"  # rust-objcopy SIGABRTs on this macOS (27.2) when stripping debuginfo; harmless, just noisy
