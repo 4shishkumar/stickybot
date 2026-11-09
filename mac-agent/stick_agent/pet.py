@@ -9,6 +9,9 @@ Rules (the stick has the same ones in m5-stick-s3/src/logic/pet.cpp):
   Level    1 at 0 XP; level n -> n+1 needs 10 + 10 * n XP (20, 30, 40...)
   Streak   days in a row with at least one merged PR or finished Claude task
   Unlocks  hat at a 5-day streak (best ever), sunglasses at 10 green builds, crown at 100 PRs
+  Games    (stick firmware 2.5.0) a finished game with points +1, a new best +3, at most 10 XP a
+           day from games (one merged PR's worth: playing can't outrun real work, and a level
+           from level 2 on needs 30+ XP); they don't count for the streak
   City     a building per merged PR (drawn from `seed`), a tower per release (`towers`:
            how many buildings stood when it came)
 
@@ -27,6 +30,11 @@ from . import config
 log = logging.getLogger("pet")
 
 XP_MERGE, XP_GREEN, XP_CLAUDE, XP_RELEASE = 10, 3, 2, 25
+XP_GAME, XP_GAME_BEST, GAME_XP_DAY_CAP = 1, 3, 10
+GAMES = {"stack": "Stack", "flappy": "Flappy", "dino": "Dino", "reaction": "Reaction",  # firmware 2.5.0
+         "maze": "Maze", "balance": "Balance", "catch": "Catch"}
+LOWER_IS_BETTER = {"reaction"}  # milliseconds
+MAX_SCORE = 10_000_000
 HAT, SHADES, CROWN = 1, 2, 4
 MAX_TOWERS = 8
 MAX_SESSIONS = 6
@@ -120,6 +128,34 @@ class Pet:
         self.s["towers"] = (self.s["towers"] + [self.s["merged"]])[-MAX_TOWERS:]
         self.save()
 
+    def game(self, gid, score, best=None, new_best=False, day=None):
+        """A game finished on the stick ({"evt":"game"}). Returns the XP it earned (0..3): +1 with
+        points, +3 for a new best, at most GAME_XP_DAY_CAP a day. Junk is ignored (0)."""
+        if gid not in GAMES or isinstance(score, bool) or not isinstance(score, int) or not 0 <= score <= MAX_SCORE:
+            return 0
+        day = today() if day is None else day
+        g = self.s.setdefault("games", {})
+        if g.get("day") != day:
+            g["day"], g["xp"] = day, 0
+        plays, bests = g.setdefault("plays", {}), g.setdefault("best", {})
+        plays[gid] = int(plays.get(gid, 0)) + 1
+        if isinstance(best, int) and not isinstance(best, bool) and 0 < best <= MAX_SCORE:
+            bests[gid] = best  # the stick keeps the bests (NVS); this is the last it told us
+        xp = 0
+        if score > 0:
+            xp = min(XP_GAME_BEST if new_best is True else XP_GAME, max(0, GAME_XP_DAY_CAP - g["xp"]))
+        g["xp"] += xp
+        self.s["xp"] += xp
+        self.save()
+        return xp
+
+    def games(self, day=None):
+        """For the dashboard: {"xpToday", "cap", "best": {id: n}, "plays": {id: n}}."""
+        day = today() if day is None else day
+        g = self.s.get("games") or {}
+        return {"xpToday": g.get("xp", 0) if g.get("day") == day else 0, "cap": GAME_XP_DAY_CAP,
+                "best": dict(g.get("best") or {}), "plays": dict(g.get("plays") or {})}
+
     # --- what the stick and the dashboard see -------------------------------------
 
     def streak(self, day=None):
@@ -132,7 +168,8 @@ class Pet:
         return {"level": level, "xp": self.s["xp"], "into": into, "need": need, "streak": self.streak(),
                 "best": self.s["streak"]["best"], "merged": self.s["merged"], "mergedToday": self._today()["merged"],
                 "greens": self.s["greens"], "claude": self.s["claude"], "releases": self.s["releases"],
-                "acc": accessories(self.s["streak"]["best"], self.s["greens"], self.s["merged"])}
+                "acc": accessories(self.s["streak"]["best"], self.s["greens"], self.s["merged"]),
+                "games": self.games()}
 
     def pet_json(self):
         return {"xp": self.s["xp"], "streak": self.streak(),

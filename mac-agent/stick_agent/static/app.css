@@ -270,6 +270,11 @@ select { padding-right: 26px; }
 .face img { border-radius: 6px; background: #111316; }
 .face img.tall { width: 68px; height: 120px; }
 .face img.wide { width: 108px; height: 61px; }
+.games { display: grid; gap: 4px; }
+.game-row { display: grid; grid-template-columns: 1fr auto auto; grid-template-areas: "t b p" "k b p"; column-gap: 12px;
+  align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line, rgba(127,127,127,.15)); }
+.game-row b { grid-area: t; } .game-row .dim { grid-area: k; } .game-row .faint { grid-area: p; min-width: 64px; text-align: right; }
+.game-best { grid-area: b; font-variant-numeric: tabular-nums; font-weight: 600; }
 .pet-facts { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
 /* Stick page: face packages (firmware 2.4.0+) — installed list, the catalog, filters, install progress */
 .market { display: flex; flex-direction: column; gap: 12px; }

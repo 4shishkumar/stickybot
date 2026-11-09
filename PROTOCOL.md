@@ -92,6 +92,7 @@ and can be ignored.
 | `face` | `id=<face>` or `demo=<face\|all>` | StickS3 2.1.0+: the Home face (saved; state: `face`, and `faces`: `[{"id","title","about"}]`), or play a face's demo on the stick (A or B ends it). 2.4.0+: an installed face package's id works too |
 | `faces` | `page=<n>` or `rm=<id\|all>` | StickS3 2.4.0+: the installed face packages, 6 a page, or remove them (see section 5, *Face packages over Bluetooth*; state: `pkgFaces`) |
 | `clock24` | `on=0\|1` | StickS3 2.4.0+: the time as 24-hour ("15:05") on every face, the dock clock and the demos (state: `clock24`) |
+| `games` | | StickS3 2.5.0+: the games and their best scores (kept on the stick, NVS): `{"ok":true,"games":[{"id":"stack","title":"Stack","best":23,"tilt":false,"low":false},…]}` — `best` 0 = not played yet; `low`: lower is better (Reaction, milliseconds). See section 5, *Games* |
 
 Responses that end in a restart include `"restarting":true`.
 
@@ -323,6 +324,25 @@ session's `progress()` / `pin_home()` changes it (at most every 0.5 s); boards s
   sessions) in NVS, so the faces draw before the agent connects. It compares each new one with the last to react
   (a PR merged → StickyBot eats a snack, a session gone → its fish leaps out); the first one after a restart isn't news.
 
+**Games** (StickS3 2.5.0+; the menu's *Games*):
+
+| Direction | Message |
+|---|---|
+| board → Mac | `{"src":"agent","evt":"game","id":"stack","score":12,"best":15,"new_best":false}` at the end of each game (also one quit or restarted from the pause menu with points), when the agent is linked |
+
+- `id`: `stack`, `flappy`, `dino`, `reaction`, `maze`, `balance`, `catch` (`@games` lists them).
+- `score`: the game's score (Reaction: the average of three rounds in ms, lower is better; `0` = a false
+  start). `best`: the stick's best after this game (it keeps the bests in NVS; the agent only remembers the
+  last it heard, for the dashboard). `new_best`: this game set it.
+- The agent gives StickyBot a little XP: +1 for a game with points, +3 for a new best, **at most 10 XP a
+  day from games** (`pet.py`: `GAME_XP_DAY_CAP`), so playing can't outrun real work (a merged PR is +10;
+  a level from level 2 on needs 30+). Games don't count for the streak. The new XP reaches the faces in
+  the next `world`.
+- Sent once, not acknowledged: a game finished while the agent isn't linked earns nothing (the best still
+  counts on the stick and shows in `@games`).
+- While a game is on, approvals and questions still take the screen (the game pauses), events wait until
+  the games close, and a firmware update or a face package is refused with `"why":"game"`.
+
 ### Firmware update over Bluetooth (StickS3 1.8.0+)
 
 The agent can update the stick over this link — no USB cable, no Wi-Fi. Only the
@@ -352,7 +372,7 @@ Older firmware has neither, and no `…0006…` characteristic: update it over U
 | Mac → board | `{"ota":{"status":1}}` → `{"evt":"ota","state":"status","receiving":…,"offset":…,"size":…,"pending":…}` |
 | board → Mac | `{"evt":"ota","state":"confirmed","fw":"1.8.1"}` — after a reboot into a new image, once it has confirmed itself (see Rollback) |
 
-Refusal / error codes: `busy` (+ `why`: `dictation`, `talk`, `approval`, `pairing`, `menu`, `wifi-update`),
+Refusal / error codes: `busy` (+ `why`: `dictation`, `talk`, `approval`, `pairing`, `menu`, `wifi-update`, `game` (2.5.0)),
 `battery` (below 30 % and not on USB power; unknown counts as low), `pending` (the running image isn't
 confirmed yet), `unsupported` (`compressed:true` — not implemented, send the raw image), `size` (0, bigger
 than the slot, or data past the end), `sha` (not 64 hex digits, or the image read back from flash doesn't
@@ -416,7 +436,7 @@ stick reads). Older firmware has no `pkgFaces`: don't send `faces` messages or `
 | Mac → board | `{"faces":{"rm":"catnap"}}` → `{"evt":"faces","state":"removed","id":"catnap","n":1}`; `"rm":"all"` removes every one (`"id":"all","n":<how many>`); a face that isn't installed → `{"evt":"faces","state":"error","error":"notfound","id":"catnap"}` (the OTA code `not_started` keeps its underscore) |
 | Mac → board | `@face id=catnap` (unchanged): make it the Home face |
 
-Refusals (`put`): `busy` (+ `why`: `dictation`, `talk`, `approval`, `pairing`, `menu`, `wifi-update`, as
+Refusals (`put`): `busy` (+ `why`: `dictation`, `talk`, `approval`, `pairing`, `menu`, `wifi-update`, `game` (2.5.0), as
 for firmware), `ota` (a firmware update is running), `size` (0 or more than 64 KB), `full` (12 faces
 installed, or not enough room; + `why`), `id` (not `^[a-z][a-z0-9]{2,11}$`, or a built-in face's or a
 reserved id), `sha` (not 64 hex digits). There is no battery minimum.
