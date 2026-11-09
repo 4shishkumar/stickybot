@@ -63,6 +63,10 @@ pub const PORTED: &[&str] = &[
     "POST /api/wireless-mic/check",
     "GET /api/import",
     "POST /api/import",
+    "GET /api/login-item",
+    "PUT /api/login-item",
+    "GET /api/switch-over",
+    "POST /api/switch-over",
     "GET /static-rs/*",
     "POST /mcp",
     "GET /api/mcp",
@@ -129,6 +133,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/wireless-mic/show", post(wireless_mic_show))
         .route("/api/wireless-mic/check", post(wireless_mic_check))
         .route("/api/import", get(import_info).post(import_run))
+        .route("/api/login-item", get(login_item).put(set_login_item))
+        .route("/api/switch-over", get(switch_info).post(switch_run))
         .route("/mcp", post(mcp_post).get(mcp_405).delete(mcp_405))
         .route("/api/mcp", get(mcp_status))
         .route("/api/mcp/terminal/{action}", post(mcp_terminal))
@@ -283,6 +289,64 @@ async fn voice_test(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<
     let text = b.get("text").and_then(Value::as_str).filter(|t| !t.is_empty());
     crate::speak::speak(&st, text.unwrap_or("It's 28 degrees in Bangalore with light rain."), false, true);
     axum::Json(json!({"ok": true}))
+}
+
+fn python_port() -> u16 {
+    std::env::var("STICKYBOT_RS_PYTHON_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(crate::switch::PORT)
+}
+
+/// The switch-over (switch.rs): done?, this app's port, the Python app still running?
+async fn switch_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    let switched = crate::switch::switched(&st.paths.home);
+    let python = !switched && crate::switch::listening(python_port()).await;
+    axum::Json(json!({"switched": switched, "port": st.port, "python_running": python,
+                      "restart_needed": switched != (st.port == crate::switch::PORT)}))
+}
+
+/// `{"confirm": true}`: take the Python app's place from the next start; `{"undo": true}`: back.
+async fn switch_run(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    let b = body_obj(&body);
+    if b.get("undo") == Some(&json!(true)) {
+        return match crate::switch::undo(&st.paths) {
+            Ok(()) => axum::Json(json!({"ok": true, "restart_needed": true})).into_response(),
+            Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+        };
+    }
+    if b.get("confirm") != Some(&json!(true)) {
+        return err(StatusCode::BAD_REQUEST, "needs {\"confirm\": true}");
+    }
+    let Some(from) = st.import_from.clone() else {
+        return err(StatusCode::NOT_FOUND, "no StickyBot (Python) folder to take over from");
+    };
+    match crate::switch::switch_over(&st.paths, &from, python_port()).await {
+        Ok(()) => {
+            log::info!("switched over: port {} and the Python app's token from the next start", crate::switch::PORT);
+            axum::Json(json!({"ok": true, "restart_needed": true})).into_response()
+        }
+        Err(e) => err(StatusCode::CONFLICT, &e),
+    }
+}
+
+/// Start at login: `{"available", "state": "on|off|needs_approval|unavailable", "on", "detail"}`.
+async fn login_item(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    let item = st.login_item.lock().unwrap().clone();
+    axum::Json(item.state().to_json())
+}
+
+/// `{"on": bool}` registers / unregisters the menu bar app as a login item.
+async fn set_login_item(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    let Some(on) = body_obj(&body).get("on").and_then(Value::as_bool) else {
+        return err(StatusCode::BAD_REQUEST, "needs {\"on\": true | false}");
+    };
+    let item = st.login_item.lock().unwrap().clone();
+    match tokio::task::spawn_blocking(move || item.set(on)).await {
+        Ok(Ok(s)) => {
+            log::info!("start at login: {:?}", s);
+            axum::Json(s.to_json()).into_response()
+        }
+        Ok(Err(e)) => err(StatusCode::CONFLICT, &e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
 }
 
 /// Is there a Python app to import from, and the last import.
@@ -1354,6 +1418,32 @@ mod tests {
         assert_eq!(v, json!(["12:00:00 x: line 398", "12:00:00 x: line 399"]));
         let (_, v, _) = call(&app, req("GET", "/api/logs", None, None)).await;
         assert_eq!(v.as_array().unwrap().len(), 300);
+    }
+
+    #[tokio::test]
+    async fn start_at_login() {
+        let (app, st, _) = app("login", false).await;
+        let tok = Some(st.token.as_str());
+        let (_, v, _) = call(&app, req("GET", "/api/login-item", None, None)).await;
+        assert_eq!((v["available"].as_bool(), v["state"].as_str()), (Some(false), Some("unavailable")));
+        let (s, _, _) = call(&app, req("PUT", "/api/login-item", Some(json!({"on": true})), tok)).await;
+        assert_eq!(s, StatusCode::CONFLICT); // the headless binary has none
+        *st.login_item.lock().unwrap() = Arc::new(crate::login::FakeLoginItem::default());
+        let (s, _, _) = call(&app, req("PUT", "/api/login-item", Some(json!({})), tok)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let (s, v, _) = call(&app, req("PUT", "/api/login-item", Some(json!({"on": true})), tok)).await;
+        assert_eq!((s, v["state"].as_str(), v["on"].as_bool()), (StatusCode::OK, Some("on"), Some(true)));
+        let (_, v, _) = call(&app, req("GET", "/api/login-item", None, None)).await;
+        assert_eq!(v["state"], "on");
+        assert_eq!(crate::login::LoginState::from_status(2).to_json()["state"], "needs_approval");
+        // the switch-over needs a confirm and a Python folder (taking over is unit-tested in switch.rs)
+        let (s, _, _) = call(&app, req("POST", "/api/switch-over", Some(json!({})), tok)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let (s, _, _) = call(&app, req("POST", "/api/switch-over", Some(json!({"confirm": true})), tok)).await;
+        assert_eq!(s, StatusCode::NOT_FOUND); // tests have no import_from
+        let (s, v, _) = call(&app, req("POST", "/api/switch-over", Some(json!({"undo": true})), tok)).await;
+        assert_eq!((s, v["ok"].as_bool()), (StatusCode::OK, Some(true)));
+        assert!(!crate::switch::switched(&st.paths.home));
     }
 
     #[tokio::test]

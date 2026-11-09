@@ -18,11 +18,13 @@ pub mod home;
 pub mod hub;
 pub mod mcp;
 pub mod flasher;
+pub mod login;
 pub mod logs;
 pub mod migrate;
 pub mod net;
 pub mod pet;
 pub mod python_agent;
+pub mod switch;
 pub mod speak;
 pub mod speech;
 pub mod talk;
@@ -63,6 +65,9 @@ impl Options {
     /// From `STICKYBOT_RS_PORT`, `STICKYBOT_RS_HOME`, `STICKYBOT_RS_FAKE_STICK=1`.
     pub fn from_env() -> Self {
         let mut o = Self::default();
+        if switch::switched(&o.home) {
+            o.port = switch::PORT; // switched over: the Python app's place (see switch.rs)
+        }
         if let Some(p) = std::env::var("STICKYBOT_RS_PORT").ok().and_then(|p| p.parse().ok()) {
             o.port = p;
         }
@@ -124,6 +129,8 @@ pub struct AppState {
     pub claude_runner: Mutex<mcp::ClaudeRunner>,
     /// when a button was last pressed on the stick (`hub::now()` seconds)
     last_input: Mutex<Option<f64>>,
+    /// start at login (the menu bar app sets the real one)
+    pub login_item: Mutex<Arc<dyn login::LoginItem>>,
     me: OnceLock<Weak<AppState>>,
 }
 
@@ -196,6 +203,7 @@ impl AppState {
             mcp: mcp::McpState::default(),
             claude_runner: Mutex::new(mcp::system_claude_runner()),
             last_input: Mutex::new(None),
+            login_item: Mutex::new(Arc::new(login::NoLoginItem)),
             me: OnceLock::new(),
         });
         let _ = st.me.set(Arc::downgrade(&st));
@@ -474,7 +482,10 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     if std::env::var("STICKYBOT_RS_NO_STT").as_deref() != Ok("1") {
         state.spawn_speech();
     }
-    if !state.fake && std::env::var("STICKYBOT_RS_ALLOW_SHARED").as_deref() != Ok("1") {
+    if !state.fake
+        && !switch::switched(&state.paths.home)
+        && std::env::var("STICKYBOT_RS_ALLOW_SHARED").as_deref() != Ok("1")
+    {
         let port =
             std::env::var("STICKYBOT_RS_PYTHON_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(python_agent::PORT);
         state.link.set_gate(Arc::new(move || Box::pin(python_agent::check(port))));

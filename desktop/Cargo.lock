@@ -3853,6 +3853,8 @@ name = "stickybot-app"
 version = "0.1.0"
 dependencies = [
  "log",
+ "objc2",
+ "objc2-foundation",
  "stick-link",
  "stickybot-server",
  "tauri",

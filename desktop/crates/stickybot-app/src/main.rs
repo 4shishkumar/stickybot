@@ -12,6 +12,8 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
+mod login;
+
 const WINDOW: &str = "dashboard";
 
 fn label(state: LinkState, stick: Option<&str>, reason: Option<&str>) -> String {
@@ -67,6 +69,7 @@ fn main() {
 
             let running = tauri::async_runtime::block_on(stickybot_server::start(opts.clone()))?;
             let state = running.state.clone();
+            *state.login_item.lock().unwrap() = Arc::new(login::AppLoginItem);
             app.manage(state.clone());
 
             let status = MenuItem::with_id(app, "status", "Starting…", false, None::<&str>)?;
