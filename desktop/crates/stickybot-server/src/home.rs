@@ -227,10 +227,20 @@ pub fn home_card(st: &AppState) -> Value {
     c
 }
 
+/// The hooks' session list. The Claude Code hooks the Python installer registered write it into
+/// the Python app's folder (`claude_hooks.py`); after the switch-over (switch.rs) this app reads it
+/// there (read-only), else its own folder's.
+fn sessions_file(st: &AppState) -> std::path::PathBuf {
+    match &st.import_from {
+        Some(py) if crate::switch::switched(&st.paths.home) => py.join("claude_sessions.json"),
+        _ => st.paths.home.join("claude_sessions.json"),
+    }
+}
+
 /// The faces' data (pet.py `world`): PR counts, CI, Claude sessions, what waits, the pet.
 pub fn world(st: &AppState) -> Value {
     let gh = st.home.gh_state.lock().unwrap().clone();
-    let sessions: Vec<Value> = crate::pet::running_sessions(&st.paths.home.join("claude_sessions.json"), crate::hub::now())
+    let sessions: Vec<Value> = crate::pet::running_sessions(&sessions_file(st), crate::hub::now())
         .into_iter()
         .map(|mut s| {
             s["p"] = json!(stick_text(s["p"].as_str().unwrap_or("")));
