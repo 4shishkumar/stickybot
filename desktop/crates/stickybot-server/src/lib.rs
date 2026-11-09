@@ -10,14 +10,21 @@ pub mod brain;
 pub mod clips;
 pub mod commands;
 pub mod config;
+pub mod events;
+pub mod feed;
 pub mod firmware;
+pub mod github;
+pub mod home;
 pub mod hub;
 pub mod mcp;
 pub mod migrate;
+pub mod net;
+pub mod pet;
 pub mod python_agent;
 pub mod speak;
 pub mod speech;
 pub mod talk;
+pub mod weather;
 pub mod wmic;
 
 use serde_json::{Map, Value, json};
@@ -91,6 +98,8 @@ pub struct AppState {
     pub ota_timings: Mutex<firmware::UpdateTimings>,
     /// the wireless Wispr mic (the "<stick>-bt-mic" device and the stick's audio played into it)
     pub wmic: wmic::WirelessMic,
+    /// the home card, weather, feed, events, GitHub watcher, pet (home.rs)
+    pub home: home::Home,
     /// the Python app's folder (read-only; see `migrate.rs`)
     pub import_from: Option<PathBuf>,
     /// reading replies aloud
@@ -116,6 +125,22 @@ impl AppState {
             log::warn!("{}: {e}", commands.path.display());
         }
         let started = hub::now();
+        // the fake stick (tests, demos): no network, no gh, no processes counted
+        let home = if fake {
+            home::Home::new(
+                &paths.home,
+                Arc::new(net::FakeHttp::default()),
+                Arc::new(github::FakeGh::default()),
+                Arc::new(|| 0),
+            )
+        } else {
+            home::Home::new(
+                &paths.home,
+                Arc::new(net::Ureq::default()),
+                Arc::new(github::GhCli),
+                Arc::new(home::claude_sessions),
+            )
+        };
         let st = Arc::new(Self {
             link: Link::new(backend),
             cfg: Mutex::new(cfg),
@@ -142,6 +167,7 @@ impl AppState {
             approvals: approvals::Approvals::default(),
             ota_timings: Mutex::new(firmware::UpdateTimings::default()),
             wmic: wmic::WirelessMic::new(),
+            home,
             import_from: opts.import_from.clone(),
             speaker: speak::Speaker::default(),
             mcp: mcp::McpState::default(),
@@ -300,8 +326,8 @@ impl AppState {
             "asks": self.approvals.asks(),
             "mcp": cfg.get("mcp_server").cloned().unwrap_or(json!(true)),
             "model": cfg.get("model").cloned().unwrap_or(Value::Null),
-            "weather": null,
-            "github": null,
+            "weather": self.home.weather.lock().unwrap().now.clone(),
+            "github": self.home.github_status(),
             "stick_approvals": cfg.get("stick_approvals").cloned().unwrap_or(json!(true)),
             "wireless_mic": wireless_mic,
             "update": {},
@@ -327,6 +353,7 @@ impl AppState {
         match &r {
             Ok(r) => {
                 log::info!("imported from {}: {}", from.display(), r.imported.join("; "));
+                self.home.reload(&self.paths.home);
                 if !r.skipped.is_empty() {
                     log::info!("not imported: {}", r.skipped.join("; "));
                 }
@@ -365,6 +392,7 @@ impl AppState {
         }
         if let Some(st) = self.me.get().and_then(Weak::upgrade) {
             wmic::config_changed(&st, &changed_keys);
+            home::config_changed(&st, &changed_keys);
         }
         self.hub.emit("config", json!({"config": snapshot}));
         Ok(snapshot)
@@ -403,6 +431,7 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     spawn_link_watcher(state.clone());
     talk::spawn(state.clone());
     wmic::spawn(state.clone());
+    home::spawn(state.clone());
     tokio::spawn(wmic::startup(state.clone())); // left-overs of a crashed run, then the tap check
     if std::env::var("STICKYBOT_RS_NO_STT").as_deref() != Ok("1") {
         state.spawn_speech();

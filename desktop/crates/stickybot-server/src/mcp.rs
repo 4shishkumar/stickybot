@@ -48,6 +48,11 @@ const UNSUPPORTED_VERSION: i64 = -32022;
 pub const ALERT_GAP: Duration = Duration::from_secs(1);
 pub const ALERT_PER_MIN: usize = 20;
 pub const SSE_KEEPALIVE: Duration = Duration::from_secs(15);
+/// progress / pin_home: the card goes to the stick at most this often.
+pub const CARD_PUSH_GAP: Duration = Duration::from_millis(500);
+/// A progress line stays this long after its last update, or this long once done == total.
+pub const PROGRESS_S: f64 = 600.0;
+pub const PROGRESS_DONE_S: f64 = 120.0;
 pub const NOT_CONNECTED: &str = "stick not connected";
 
 /// The tools that only give feedback (pre-allowed); `open_url`, `open_app`, `quick_command` change
@@ -358,32 +363,6 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// "HH:MM" -> minutes.
-fn minutes(s: &str) -> Option<u32> {
-    let (h, m) = s.split_once(':')?;
-    Some(h.trim().parse::<u32>().ok()? * 60 + m.trim().parse::<u32>().ok()?)
-}
-
-/// events.py `quiet_now`: inside the quiet hours (may wrap midnight).
-pub fn quiet_now(cfg: &Map<String, Value>, now_min: u32) -> bool {
-    let q = cfg.get("quiet_hours").cloned().unwrap_or(Value::Null);
-    if q["on"] != true {
-        return false;
-    }
-    let (Some(start), Some(end)) =
-        (minutes(q["from"].as_str().unwrap_or("19:00")), minutes(q["to"].as_str().unwrap_or("09:00")))
-    else {
-        return false;
-    };
-    if start <= end { start <= now_min && now_min < end } else { now_min >= start || now_min < end }
-}
-
-fn local_minutes() -> u32 {
-    use chrono::Timelike;
-    let t = chrono::Local::now();
-    t.hour() * 60 + t.minute()
-}
-
 /// The tools' shared state (in [`AppState`]).
 pub struct McpState {
     pub alerts: Mutex<RateLimit>,
@@ -391,7 +370,9 @@ pub struct McpState {
     pub last_call: Mutex<Value>,
     /// legacy clients cancel with `notifications/cancelled`: (caller, request id) -> the call
     inflight: Mutex<HashMap<(String, String), tokio::task::AbortHandle>>,
-    events: Mutex<u64>,
+    /// the last home-card push, and a later one already planned
+    card_at: Mutex<f64>,
+    card_later: std::sync::atomic::AtomicBool,
 }
 
 impl Default for McpState {
@@ -401,7 +382,8 @@ impl Default for McpState {
             calls: Mutex::new(0),
             last_call: Mutex::new(Value::Null),
             inflight: Mutex::new(HashMap::new()),
-            events: Mutex::new(0),
+            card_at: Mutex::new(f64::MIN),
+            card_later: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -515,14 +497,41 @@ async fn run_tool(st: &Arc<AppState>, name: &str, a: &Map<String, Value>, who: &
             }
             Ok((answer.clone(), Some(json!({"answer": answer}))))
         }
-        "progress" | "pin_home" => Err("the home card isn't in the Rust app yet".into()),
+        "progress" => {
+            let (done, total) = (a.get("done").and_then(Value::as_u64), a.get("total").and_then(Value::as_u64));
+            if let (Some(d), Some(t)) = (done, total)
+                && d > t
+            {
+                return Err("done can't be more than total".into());
+            }
+            let head = match (done, total) {
+                (Some(d), Some(t)) => format!("{who}: {d}/{t} ({}%)", d * 100 / t),
+                (Some(d), None) => format!("{who}: {d} done"),
+                _ => format!("{who}: working"),
+            };
+            let finished = matches!((done, total), (Some(d), Some(t)) if d >= t);
+            let secs = if finished { PROGRESS_DONE_S } else { PROGRESS_S };
+            card(st, "progress", &head, stick_text(&s("text")).trim(), secs).await;
+            Ok(("shown on the home screen".into(), None))
+        }
+        "pin_home" => {
+            let text = stick_text(&s("text")).trim().to_string();
+            if text.is_empty() {
+                let had = crate::home::clear(st, "pin");
+                crate::home::push_home(st).await;
+                return Ok((if had { "pin removed" } else { "nothing was pinned" }.into(), None));
+            }
+            let mins = a.get("minutes").and_then(Value::as_u64).unwrap_or(30);
+            card(st, "pin", &format!("Pinned · {who}"), &text, mins as f64 * 60.0).await;
+            Ok((format!("pinned for {mins} min"), None))
+        }
         "speak" => {
             let text = s("text").split_whitespace().collect::<Vec<_>>().join(" ");
             if text.is_empty() {
                 return Err("nothing to say".into());
             }
             let cfg = st.cfg.lock().unwrap().clone();
-            if quiet_now(&cfg, local_minutes()) {
+            if crate::events::quiet_now(&cfg) {
                 return Ok(("quiet hours: not spoken".into(), None));
             }
             let why = st.mcp.alerts.lock().unwrap().take(mono());
@@ -601,24 +610,38 @@ async fn event(st: &Arc<AppState>, level: &str, text: &str, who: &str, sound: bo
     }
     let (title, rest) = split_title(&stick_text(text), 40);
     let sub = if rest.is_empty() { format!("from {who}") } else { rest };
-    let quiet = quiet_now(&cfg, local_minutes());
-    let n = {
-        let mut e = st.mcp.events.lock().unwrap();
-        *e += 1;
-        *e
+    let ev = crate::events::notify(st, "claude_tool", &title, &sub, Some("claude"), Some(level), if sound { "" } else { "off" })
+        .await
+        .ok_or_else(|| NOT_CONNECTED.to_string())?;
+    let quiet = ev["sound"] == "off" && sound;
+    Ok(format!("shown{}", if quiet { " (quiet hours: no sound)" } else { "" }))
+}
+
+/// progress / pin_home: the home card's slot, pushed to the stick at most every 0.5 s (the newest
+/// line a little later, coalesced; the rest rides on the next hello).
+async fn card(st: &Arc<AppState>, slot: &str, a: &str, b: &str, secs: f64) {
+    crate::home::put(st, slot, a, b, secs);
+    let now = mono();
+    let push_now = {
+        let mut at = st.mcp.card_at.lock().unwrap();
+        if now - *at >= CARD_PUSH_GAP.as_secs_f64() {
+            *at = now;
+            true
+        } else {
+            false
+        }
     };
-    let ev = json!({"id": format!("m{n}"), "level": level, "title": stick_text(&title).chars().take(40).collect::<String>(),
-                    "sub": stick_text(&sub).chars().take(90).collect::<String>(), "icon": "claude",
-                    "sound": if quiet || !sound { "off" } else { "" }, "kind": "claude_tool"});
-    if !st.link.send(&json!({"src": "agent", "event": ev})).await {
-        return Err(NOT_CONNECTED.into());
+    if push_now {
+        crate::home::push_home(st).await;
+    } else if !st.mcp.card_later.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        let st = st.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(CARD_PUSH_GAP).await;
+            st.mcp.card_later.store(false, std::sync::atomic::Ordering::Relaxed);
+            *st.mcp.card_at.lock().unwrap() = mono();
+            crate::home::push_home(&st).await;
+        });
     }
-    let mut shown = ev.clone();
-    shown["ev_kind"] = json!("claude_tool");
-    shown["sent"] = json!(true);
-    shown["quiet"] = json!(quiet);
-    st.hub.emit("event", shown);
-    Ok(format!("shown{}", if quiet && sound { " (quiet hours: no sound)" } else { "" }))
 }
 
 /// The stick's status (core.py `stick_report`): `{"cmd":"status"}` -> `{"ack":"status","data"}`.
@@ -1154,10 +1177,6 @@ mod tests {
         assert_eq!(caller(&h), "Claude Code");
         h.insert("x-stick-client", "voice".parse().unwrap());
         assert_eq!(caller(&h), "Agent");
-        let cfg =
-            |on: bool| json!({"quiet_hours": {"on": on, "from": "22:00", "to": "07:00"}}).as_object().unwrap().clone();
-        assert!(quiet_now(&cfg(true), 23 * 60) && quiet_now(&cfg(true), 60) && !quiet_now(&cfg(true), 12 * 60));
-        assert!(!quiet_now(&cfg(false), 23 * 60));
     }
 
     #[test]
@@ -1384,6 +1403,36 @@ mod tests {
         let (text, err, _) = c.call("notify", json!({"text": "hi"}), &[]).await;
         assert!(err && text.contains("turned notifications from Claude sessions off"));
         assert_eq!(*c.t.st.mcp.calls.lock().unwrap(), 8);
+    }
+
+    #[tokio::test]
+    async fn progress_and_pin_on_the_home_card() {
+        let mut c = C::new("mcp-card").await;
+        let homes = |c: &C| c.sent().into_iter().filter_map(|m| m.get("home").cloned()).collect::<Vec<_>>();
+        let (_, err, _) =
+            c.call("progress", json!({"text": "Running tests", "done": 40, "total": 120}), &[("x-stick-cwd", "/x/web")]).await;
+        assert!(!err);
+        assert_eq!(homes(&c).last().unwrap(), &json!({"k": "claude", "a": "web: 40/120 (33%)", "b": "Running tests"}));
+        let (text, err, _) = c.call("progress", json!({"text": "x", "done": 5, "total": 2}), &[]).await;
+        assert!(err && text.contains("more than total"));
+        tokio::time::sleep(CARD_PUSH_GAP).await;
+        let (text, _, _) = c.call("pin_home", json!({"text": "PR #123 waiting", "minutes": 5}), &[]).await;
+        assert_eq!(text, "pinned for 5 min");
+        let card = crate::home::home_card(&c.t.st);
+        assert_eq!((card["a"].as_str(), card["b"].as_str()), (Some("Pinned · Claude Code"), Some("PR #123 waiting")));
+        let (text, _, _) = c.call("pin_home", json!({"text": ""}), &[]).await;
+        assert_eq!(text, "pin removed");
+        assert_eq!(crate::home::home_card(&c.t.st)["b"], "Running tests"); // the progress line is back
+        // pushes are coalesced: one now, the newest a little later
+        tokio::time::sleep(CARD_PUSH_GAP).await;
+        let before = homes(&c).len();
+        for i in 0..5 {
+            c.call("progress", json!({"text": format!("step {i}"), "done": i, "total": 10}), &[]).await;
+        }
+        assert_eq!(homes(&c).len(), before + 1);
+        tokio::time::sleep(CARD_PUSH_GAP + Duration::from_millis(200)).await;
+        assert_eq!(homes(&c).len(), before + 2);
+        assert_eq!(homes(&c).last().unwrap()["b"], "step 4");
     }
 
     #[tokio::test]
