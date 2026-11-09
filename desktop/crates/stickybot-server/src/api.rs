@@ -452,11 +452,15 @@ async fn clip_play(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<V
         Err(e) => return axum::Json(json!({"ok": false, "error": e.to_string()})),
     };
     let t = std::time::Instant::now();
-    let ok = st.link.send_audio(&crate::clips::packets(&pcm)).await;
+    let pkts = crate::clips::packets(&pcm);
+    let times = st.link.send_audio_timed(&pkts).await;
+    let ok = times.is_some();
     log::info!(
-        "clip {pack}/{name}: {:.2}s of audio sent in {:.2}s",
+        "clip {pack}/{name}: {:.2}s of audio sent in {:.2}s ({} packets; {})",
         pcm.len() as f64 / crate::clips::RATE as f64,
-        t.elapsed().as_secs_f64()
+        t.elapsed().as_secs_f64(),
+        pkts.len(),
+        times.map(|t| t.to_string()).unwrap_or_else(|| "failed".into())
     );
     axum::Json(json!({"ok": ok, "error": if ok { Value::Null } else { json!("stick not connected") }}))
 }

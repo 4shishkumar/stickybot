@@ -13,13 +13,14 @@ pub mod adpcm;
 pub mod fake;
 mod link;
 pub mod ota;
+pub mod pacing;
 pub mod proto;
 pub mod transport;
 
 #[cfg(target_os = "macos")]
 pub mod corebt;
 
-pub use link::{FromStick, Gate, Link, LinkState, NOT_FOUND_REASON, Options};
+pub use link::{FromStick, Gate, Link, LinkState, NOT_FOUND_REASON, Options, SendTimes};
 pub use transport::{BleError, Char, Connection, Connector, Found, Incoming, Target};
 
 use std::time::Duration;

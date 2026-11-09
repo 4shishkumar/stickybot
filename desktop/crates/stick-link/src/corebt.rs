@@ -11,6 +11,7 @@
 //! The central manager is only made when it's first needed (a scan, or a stick to connect to),
 //! because making it is what asks macOS for the Bluetooth permission.
 
+use crate::pacing;
 use crate::proto::{AUDIO, AUDIO_IN, NUS, OTA_DATA, RX, TX};
 use crate::transport::{BleError, Char, Connection, Connector, Found, Incoming, Target};
 use dispatch2::{DispatchQueue, DispatchRetained};
@@ -33,9 +34,6 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const STEP_TIMEOUT: Duration = Duration::from_secs(10);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const POWER_TIMEOUT: Duration = Duration::from_secs(5);
-/// A write without response waits this long for room in CoreBluetooth's queue, then goes anyway
-/// (link.py waited ~2 s too; the clip / OTA protocols cope with a lost packet).
-const ROOM_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A CoreBluetooth object that crosses threads. SAFETY: we only *message* these objects on the
 /// manager's serial queue (`on_queue`); moving the pointer and retain/release are thread-safe.
@@ -525,41 +523,33 @@ impl CbConn {
         }
     }
 
-    /// Waits for `canSendWriteWithoutResponse` (woken by `peripheralIsReadyToSendWriteWithoutResponse:`),
-    /// then queues the packet. Checking and writing happen in one block on the Bluetooth queue, so
-    /// the room can't go away in between.
+    /// Waits for `canSendWriteWithoutResponse` (woken by `peripheralIsReadyToSendWriteWithoutResponse:`
+    /// *or* every [`pacing::POLL`]: the callback alone came late and made clips slower than
+    /// link.py, see `pacing.rs`), then queues the packet. Checking and writing happen in one block
+    /// on the Bluetooth queue, so the room can't go away in between.
     async fn write_without_response(&self, c: Obj<CBCharacteristic>, data: Vec<u8>) -> Result<(), BleError> {
         let ready = {
             let routes = self.bt.inner.shared.routes.lock().unwrap();
             routes.get(&self.id).map(|r| r.ready.clone()).ok_or_else(|| BleError::new("disconnected"))?
         };
-        let deadline = tokio::time::Instant::now() + ROOM_TIMEOUT;
-        loop {
-            let notified = ready.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable(); // before the check: a wake-up in between isn't lost
-            let late = tokio::time::Instant::now() >= deadline;
+        let data = Obj(NSData::with_bytes(&data));
+        pacing::wait_and_send(&ready, Some(pacing::POLL), pacing::ROOM_TIMEOUT, |late| {
             let (p, c2, d) = (self.p.clone(), c.clone(), data.clone());
             let wrote = self.bt.on_queue(move || unsafe {
                 if late || p.get().canSendWriteWithoutResponse() {
-                    p.get().writeValue_forCharacteristic_type(
-                        &NSData::with_bytes(&d),
-                        c2.get(),
-                        CBCharacteristicWriteType::WithoutResponse,
-                    );
+                    p.get().writeValue_forCharacteristic_type(d.get(), c2.get(), CBCharacteristicWriteType::WithoutResponse);
                     true
                 } else {
                     false
                 }
             });
-            if wrote {
-                return Ok(());
-            }
-            if !self.bt.inner.shared.routes.lock().unwrap().contains_key(&self.id) {
+            if !wrote && !self.bt.inner.shared.routes.lock().unwrap().contains_key(&self.id) {
                 return Err(BleError::new("disconnected"));
             }
-            let _ = tokio::time::timeout_at(deadline, notified).await;
-        }
+            Ok(wrote)
+        })
+        .await
+        .map(|_| ())
     }
 }
 

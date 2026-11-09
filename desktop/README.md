@@ -113,10 +113,17 @@ its *Pick your stick* step scans and saves the stick to **this** app's config.
 | **Wireless Wispr mic** | Hold A away from USB: the stick streams its mic (`prepare` → ADPCM → `stop`); this app makes the **`<stick>-bt-mic`** device (the Python app's name, `stick_mic_device.py`'s slug rules, so Wispr's ranking finds it; UID **`com.stickkey.rust-wireless-mic`**, never the Python agent's `com.stickkey.wireless-mic`), waits `wispr_switch_ms` (250) after creating it, answers `ready`, plays the frames (in order by seq, a lost one = 20 ms of silence, resampled, ~80 ms jitter buffer) into the carrier, keeps the device `wispr_tail_ms` (800) after `stop` (≤ 4 s more while Wispr still reads it), then removes it. `wmic` / `wready` in the hello. Carrier as `wireless_mic_carrier` (`auto`: the tap once its inaudible -80 dBFS check passed, else BlackHole 2ch; `tap`; `blackhole`). The stick on USB (`evt: usb`): no device, `ready` with `"device": false` (Wispr uses the stick's USB mic). `POST /api/wireless-mic/show` `{secs}`, `POST /api/wireless-mic/check`, `status.wireless_mic`, `wispr_mic` / `stick_mic` events. Cleanup of *our UID only* at start, on quit (Tauri `Exit`, headless Ctrl-C) and on disconnect / USB / off / rename. |
 | **Firmware over Bluetooth** | `GET /api/firmware` (bundle + connected stick; `usb` always empty), `POST /api/firmware/ota` `{force}`, `GET /api/firmware/jobs/{id}` (SSE), `POST /api/firmware/jobs/{id}/cancel`. Bundles in `~/.stickybot-rs/firmware/<version>|local/` or `$STICKYBOT_RS_FIRMWARE`. `ota.py`'s checks (support, pending, versions / force, manifest SHA-256), windowed transfer, resume, then waits for the stick to come back with the new version (confirmed / rolled back). |
 
-**Write-without-response pacing** (`corebt.rs`): before each packet on AUDIO_IN / OTA_DATA,
-`canSendWriteWithoutResponse` is checked and the packet queued in one block on the Bluetooth
-queue; with no room, it waits for `peripheralIsReadyToSendWriteWithoutResponse:` (2 s at most,
-then sends anyway, like link.py; the protocols cope with a lost packet).
+**Write-without-response pacing** (`pacing.rs`, used by `corebt.rs`): before each packet on
+AUDIO_IN / OTA_DATA, `canSendWriteWithoutResponse` is checked and the packet queued in one block on
+the Bluetooth queue; with no room, it waits for `peripheralIsReadyToSendWriteWithoutResponse:`
+**or 2 ms**, whichever comes first, and checks again (2 s at most, then sends anyway, like link.py;
+the protocols cope with a lost packet). Waiting for the callback alone made clips slower than real
+time on the real stick (glass_001: 0.29 s of audio in 0.44 s; link.py, which polls the flag every
+5 ms: 0.19 s): the callback comes later than the flag (or not at all). `pacing::Radio` models
+CoreBluetooth's queue and the radio for the fake stick (`FakeStick::set_radio`);
+`a_clip_goes_out_faster_than_real_time` sends 0.29 s / 1 s / 3 s clips through it. The log line
+`clip …: X s of audio sent in Y s (N packets; lock …, start ack …, frames …, end ack …)` shows
+where the time goes on the real stick.
 
 ### Not done in the link yet
 

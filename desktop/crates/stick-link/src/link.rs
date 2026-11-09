@@ -62,6 +62,35 @@ type HelloExtra = Box<dyn Fn() -> Map<String, Value> + Send + Sync>;
 /// Asked before every connect: `Some(why)` = not now (e.g. another app holds the stick).
 pub type Gate = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Option<String>> + Send>> + Send + Sync>;
 
+/// Where a clip's send time went ([`Link::send_audio_timed`]), for the log line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SendTimes {
+    /// waiting for another write (a hello, a reply) to finish
+    pub lock: Duration,
+    /// the start packet, acknowledged
+    pub first_ack: Duration,
+    /// all frames (writes without response: the time is waiting for room)
+    pub frames: Duration,
+    pub slowest_frame: Duration,
+    /// the end packet, acknowledged (after every frame has gone out)
+    pub last_ack: Duration,
+}
+
+impl std::fmt::Display for SendTimes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+        write!(
+            f,
+            "lock {:.0} ms, start ack {:.0} ms, frames {:.0} ms (slowest {:.0}), end ack {:.0} ms",
+            ms(self.lock),
+            ms(self.first_ack),
+            ms(self.frames),
+            ms(self.slowest_frame),
+            ms(self.last_ack)
+        )
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Control {
     target: Option<Target>,
@@ -257,23 +286,38 @@ impl<C: Connector> Link<C> {
     /// last with response (the stick acknowledges start and end), the frames without, each one
     /// waiting for room in CoreBluetooth's queue. False if not connected or a write failed.
     pub async fn send_audio(&self, pkts: &[Vec<u8>]) -> bool {
-        let Some(conn) = self.inner.current.lock().unwrap().clone() else {
-            return false;
-        };
+        self.send_audio_timed(pkts).await.is_some()
+    }
+
+    /// [`Link::send_audio`], with where the time went (`None`: not sent).
+    pub async fn send_audio_timed(&self, pkts: &[Vec<u8>]) -> Option<SendTimes> {
+        let conn = self.inner.current.lock().unwrap().clone()?;
+        let t0 = tokio::time::Instant::now();
         let _guard = self.inner.write_lock.lock().await;
+        let mut times = SendTimes { lock: t0.elapsed(), ..SendTimes::default() };
         for (i, p) in pkts.iter().enumerate() {
             let response = i == 0 || i + 1 == pkts.len();
+            let t = tokio::time::Instant::now();
             let r = if response {
                 write_retrying(&*conn, Char::AudioIn, p).await
             } else {
                 conn.write(Char::AudioIn, p.clone(), false).await
             };
+            let took = t.elapsed();
+            match (i, response) {
+                (0, _) => times.first_ack = took,
+                (_, true) => times.last_ack = took,
+                _ => {
+                    times.frames += took;
+                    times.slowest_frame = times.slowest_frame.max(took);
+                }
+            }
             if let Err(e) = r {
                 log::warn!("audio send failed: {e}");
-                return false;
+                return None;
             }
         }
-        true
+        Some(times)
     }
 
     /// One firmware packet on OTA_DATA, without response, after waiting for room (link.py
@@ -685,6 +729,33 @@ mod tests {
         fake.set_old_firmware(true);
         assert!(!link.has(Char::AudioIn));
         assert!(!link.send_audio(&pkts).await);
+    }
+
+    /// The real-stick check: glass_001 (0.29 s of audio, 15 frames) went out in 0.44 s, slower
+    /// than real time; link.py does it in ~0.19 s. Over a macOS-like radio model (15 ms events,
+    /// 4 packets each, 8 in CoreBluetooth's queue, "ready to send" only once it drained) the clip
+    /// must go out well under its own length.
+    #[tokio::test(start_paused = true)]
+    async fn a_clip_goes_out_faster_than_real_time() {
+        let fake = FakeStick::new();
+        let link = connected(&fake, quiet()).await;
+        fake.set_radio(Some(crate::pacing::Radio::mac()));
+        for (samples, frames) in [(4640usize, 15usize), (16000, 50), (48000, 150)] {
+            let pcm: Vec<i16> = (0..samples).map(|i| ((i as f64 / 7.0).sin() * 8000.0) as i16).collect();
+            let mut pkts = vec![vec![0u8, 0, 0, 0, 0, 0x80, 0x3e]];
+            pkts.extend(crate::adpcm::encode(&pcm, 320).into_iter().map(|f| [vec![1u8], f].concat()));
+            pkts.push(vec![2]);
+            assert_eq!(pkts.len(), frames + 2);
+            let t = tokio::time::Instant::now();
+            let times = link.send_audio_timed(&pkts).await.expect("sent");
+            let took = t.elapsed().as_secs_f64();
+            let audio = samples as f64 / 16000.0;
+            // 2 acks (~3 events each) + the frames at 4 per 15 ms
+            let radio = 0.015 * (6.0 + (frames as f64 / 4.0).ceil());
+            assert!(took <= radio + 0.02, "{samples}: {took:.3}s, radio limit {radio:.3}s ({times})");
+            assert!(took < audio * 0.6, "{samples}: {took:.3}s for {audio:.2}s of audio ({times})");
+            assert_eq!(fake.clips().last().unwrap(), &pkts);
+        }
     }
 
     #[tokio::test(start_paused = true)]

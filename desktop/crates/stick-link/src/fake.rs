@@ -48,6 +48,10 @@ struct State {
     wispr_ready: Vec<(std::time::Instant, Value)>,
     /// the last `wmic` the agent sent (in a hello or on its own)
     wmic: Option<bool>,
+    /// a model of CoreBluetooth's write-without-response queue and the radio (timing tests);
+    /// `None`: every write is instant
+    radio: Option<crate::pacing::RadioQueue>,
+    radio_ready: Arc<tokio::sync::Notify>,
     pub ota: Ota,
     tx: Option<mpsc::UnboundedSender<Incoming>>,
     decoder: LineDecoder,
@@ -241,6 +245,48 @@ impl FakeStick {
         hold.streamed = t0.elapsed();
         hold
     }
+    /// Writes to AUDIO_IN / OTA_DATA take radio time like CoreBluetooth's queue (see
+    /// [`crate::pacing::Radio`]): without response they wait for room, with response for the
+    /// queue to drain and the stick's answer. `None`: instant (the default).
+    pub fn set_radio(&self, radio: Option<crate::pacing::Radio>) {
+        self.with(|s| s.radio = radio.map(crate::pacing::RadioQueue::new));
+    }
+
+    /// Paces one write through the radio model, if there is one.
+    async fn radio_write(&self, response: bool) {
+        if response {
+            let Some(at) = self.with(|s| s.radio.as_ref().map(|q| q.ack_at())) else { return };
+            tokio::time::sleep_until(at).await;
+            return;
+        }
+        let ready = self.with(|s| s.radio.is_some().then(|| s.radio_ready.clone()));
+        let Some(ready) = ready else { return };
+        let _ = crate::pacing::wait_and_send(&ready, Some(crate::pacing::POLL), crate::pacing::ROOM_TIMEOUT, |late| {
+            let pushed = self.with(|s| {
+                let q = s.radio.as_mut()?;
+                if !late && !q.can_send() {
+                    return Some(None);
+                }
+                Some(Some(q.push().1))
+            });
+            match pushed {
+                None => Ok(true), // the model was turned off meanwhile
+                Some(None) => Ok(false),
+                Some(Some(ready_at)) => {
+                    if let Some(at) = ready_at {
+                        let ready = ready.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep_until(at).await;
+                            ready.notify_waiters();
+                        });
+                    }
+                    Ok(true)
+                }
+            }
+        })
+        .await;
+    }
+
     pub fn notify_audio(&self, frame: &[u8]) {
         self.with(|s| {
             if let Some(tx) = &s.tx {
@@ -741,7 +787,10 @@ impl Connection for FakeConn {
     async fn write(&self, ch: Char, data: Vec<u8>, response: bool) -> Result<(), BleError> {
         match ch {
             Char::Rx => self.stick.on_write(data),
-            _ => self.stick.on_char_write(ch, data, response),
+            _ => {
+                self.stick.radio_write(response).await;
+                self.stick.on_char_write(ch, data, response)
+            }
         }
     }
     fn has(&self, ch: Char) -> bool {
