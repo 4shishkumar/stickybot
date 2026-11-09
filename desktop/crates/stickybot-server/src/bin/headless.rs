@@ -7,6 +7,12 @@ use stickybot_server::{Options, start};
 
 #[tokio::main]
 async fn main() {
+    // Claude Code's hooks (`--hook permission|prompt|stop`, see hooks.rs): answer and exit
+    if std::env::args().nth(1).as_deref() == Some("--hook") {
+        let kind = std::env::args().nth(2).unwrap_or_default();
+        let code = tokio::task::spawn_blocking(move || stickybot_server::hooks::main(&kind)).await.unwrap_or(0);
+        std::process::exit(code);
+    }
     let mut opts = Options::from_env();
     stickybot_server::logs::init(&opts.home.join("app.log")); // stderr + app.log + the Logs page
     let mut args = std::env::args().skip(1);
