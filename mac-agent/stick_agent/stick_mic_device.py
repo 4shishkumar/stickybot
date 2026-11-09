@@ -12,9 +12,13 @@ stick's audio into its input is one of two "carriers":
 
 - "tap" (macOS 14.2+, no driver): a Core Audio *process tap* of the agent's own
   audio output, in the aggregate's tap list, with the default output device as
-  its (clock) sub-device. wispr_mic.py plays the stick into the default output;
+  its (clock) sub-device. wispr_mic.py plays the stick into that output;
   the tap mutes all of this process's sound and hands it to the aggregate's
-  input instead. Needs the "System Audio Recording" permission: until it's
+  input instead. When the default output is Bluetooth (AirPods, earbuds) the
+  built-in speakers are used instead (choose_tap_output()): an aggregate clocked
+  by a Bluetooth output may never run, audio played into one reaches the tap
+  ~1.1 s late, and opening one can fail. The tap mutes the speakers just the same.
+  Needs the "System Audio Recording" permission: until it's
   granted a tap is silent AND doesn't mute, so the stick would play out of the
   speakers. So the tap is only used after probe() proved it works (an inaudible
   -80 dBFS tone through a test-named device), and wispr_mic.py only lets audio
@@ -141,6 +145,7 @@ class _Addr(ctypes.Structure):
 SYSTEM = 1                 # kAudioObjectSystemObject
 GLOBAL = _fcc("glob")
 INPUT = _fcc("inpt")
+OUTPUT = _fcc("outp")
 UTF8 = 0x08000100          # kCFStringEncodingUTF8
 CF_SINT32 = 3              # kCFNumberSInt32Type
 # kAudioAggregateDevice*Key / kAudioSubDeviceUIDKey (AudioHardware.h)
@@ -383,6 +388,17 @@ class CoreAudioDevices:
         dev = self._u32(SYSTEM, "dOut")
         return self._string(dev, "uid ") if dev else ""
 
+    def transport_type(self, dev):
+        """kAudioDevicePropertyTransportType as its four characters ("bltn", "blue", "blea", "usb ", ...),
+        or "" when the device doesn't say."""
+        t = self._u32(dev, "tran")
+        return struct.pack(">I", t).decode("latin-1") if t else ""
+
+    def has_output(self, dev):
+        """The device has output streams (kAudioDevicePropertyStreams, output scope)."""
+        b = self._get(dev, "stm#", OUTPUT)
+        return bool(b) and len(b) >= 4
+
     def create_tap(self, name, process):
         """-> (OSStatus, tap id, tap UUID string). A public, muting, stereo-mixdown tap of one process.
         (A private tap gives a public aggregate no input channels.)"""
@@ -505,7 +521,45 @@ class CoreAudioDevices:
                 "ms": round((time.monotonic() - t0) * 1000, 1)}
 
 
-PROBE_S = 1.5        # the tap check: at most this long for the tone to come through
+BLUETOOTH_TRANSPORTS = ("blue", "blea")  # kAudioDeviceTransportTypeBluetooth / BluetoothLE
+BUILT_IN_TRANSPORT = "bltn"               # kAudioDeviceTransportTypeBuiltIn
+# never the fallback for a Bluetooth default: Bluetooth, aggregates (ours too), virtual drivers, AirPlay
+NOT_A_TAP_OUTPUT = BLUETOOTH_TRANSPORTS + ("grup", "virt", "airp")
+
+
+def choose_tap_output(ca):
+    """The output the tapped aggregate is clocked by and wispr_mic.py plays into (muted by the tap):
+    the default output, unless it's Bluetooth — then the built-in speakers (else another wired
+    output, else the Bluetooth one anyway). An aggregate clocked by a Bluetooth output may never run,
+    audio played into one reaches the tap ~1.1 s late (the headphones' start-up), and opening one can
+    fail; through the built-in speakers it takes ~20 ms, and the tap mutes them just the same.
+    -> {"uid", "name", "redirected": not the default, "why": "" or what was done and why}, or None
+    when there's no default output."""
+    out_uid = ca.default_output_uid()
+    if not out_uid:
+        return None
+    devices = ca.devices()
+    default = next(((d, name) for d, name, uid in devices if uid == out_uid), (None, out_uid))
+    pick = {"uid": out_uid, "name": default[1], "redirected": False, "why": ""}
+    if default[0] is None or not hasattr(ca, "transport_type"):
+        return pick
+    if ca.transport_type(default[0]) not in BLUETOOTH_TRANSPORTS:
+        return pick  # the usual path: the default output, as always
+    outs = [(d, name, uid, ca.transport_type(d)) for d, name, uid in devices
+            if uid != out_uid and ca.has_output(d)]
+    bt = f"default output is Bluetooth ({default[1]})"
+    built_in = next((o for o in outs if o[3] == BUILT_IN_TRANSPORT), None)
+    if built_in:
+        return {"uid": built_in[2], "name": built_in[1], "redirected": True,
+                "why": f"{bt}: playing into {built_in[1]}"}
+    wired = next((o for o in outs if o[3] and o[3] not in NOT_A_TAP_OUTPUT), None)
+    if wired:
+        return {"uid": wired[2], "name": wired[1], "redirected": True,
+                "why": f"{bt} and there are no built-in speakers: playing into {wired[1]}"}
+    return {**pick, "why": f"{bt} and there's no other wired output: playing into it anyway (it may lag or fail)"}
+
+
+PROBE_S = 1.5       # the tap check: at most this long for the tone to come through
 PROBE_AMP = 1e-4     # -80 dBFS: inaudible even if the tap doesn't mute it
 
 
@@ -530,6 +584,7 @@ class StickMicDevice:
         self.error = ""
         self.create_ms = self.destroy_ms = None  # the last ones
         self.check = {"state": None, "detail": "", "at": None}  # the last probe() (tap mode)
+        self.tap_output = None    # choose_tap_output()'s last pick (tap mode)
         self._lock = threading.Lock()
 
     @property
@@ -601,14 +656,36 @@ class StickMicDevice:
         log.info("stick mic: %s created in %.1f ms (id %d, on %s)", self.name, self.create_ms, dev, what)
         return "created"
 
+    def _pick_output(self, ca):
+        """choose_tap_output(), logged when the pick changes."""
+        pick = choose_tap_output(ca)
+        if pick != self.tap_output:
+            if pick and pick["why"]:
+                (log.info if pick["redirected"] else log.warning)("stick mic: %s", pick["why"])
+            elif pick and self.tap_output and self.tap_output["why"]:
+                log.info("stick mic: default output is %s again: playing into it", pick["name"])
+            self.tap_output = pick
+        return pick
+
+    def output_for_tap(self):
+        """For wispr_mic.py: the output to play into in tap mode, the one the tapped device is clocked
+        by -> choose_tap_output()'s pick, or None (none, or CoreAudio failed: the default output).
+        Only reads CoreAudio, so it doesn't wait for the lock (a check may be running)."""
+        try:
+            return self._pick_output(self._ca())
+        except Exception as e:  # noqa: BLE001 — ctypes land
+            log.warning("stick mic: can't tell which output the tap uses: %s", e)
+            return None
+
     def _new_tap(self, ca, name):
         """-> (tap id, uuid, output uid) or raises Unavailable."""
         process = ca.process_object(self.own_pid)
         if not process:
             raise Unavailable("macOS has no audio process object for the agent")
-        out_uid = ca.default_output_uid()
-        if not out_uid:
+        pick = self._pick_output(ca)
+        if not pick:
             raise Unavailable("there's no default output device")
+        out_uid = pick["uid"]
         err, tap, uuid = ca.create_tap(name, process)
         if err or not tap:
             raise Unavailable(f"can't create the audio tap (CoreAudio error {err})")
@@ -632,7 +709,8 @@ class StickMicDevice:
             self._set_error(f"can't create the {self.name} device (CoreAudio error {err})")
             return ""
         self.tap = tap
-        return self._made(dev, t, f"the Apple audio tap {tap}, clocked by {out_uid}")
+        bt = " (the default output is Bluetooth)" if self.tap_output and self.tap_output["redirected"] else ""
+        return self._made(dev, t, f"the Apple audio tap {tap}, clocked by {out_uid}{bt}")
 
     def remove(self):
         """Destroys every device with our UID (ours and any left over), and our tap. -> how many devices."""
@@ -737,13 +815,14 @@ class StickMicDevice:
         with self._lock:
             t0 = time.monotonic()
             res = {"state": "error", "detail": "", "at": time.time(), "create_ms": None, "first_ms": None,
-                   "level": None, "ms": None}
+                   "level": None, "ms": None, "output": None}
             ca = tap = dev = None
             try:
                 ca = self._ca()
                 if not hasattr(ca, "create_tap"):
                     raise Unavailable("this backend has no process taps")
                 tap, uuid, out_uid = self._new_tap(ca, self.uid + CHECK_SUFFIX + TAP_SUFFIX)
+                res["output"] = self.tap_output["name"]  # the same path the stick's audio takes
                 err, dev = ca.create_aggregate(self.name + "-check", self.uid + CHECK_SUFFIX, out_uid, tap_uid=uuid)
                 if err or not dev:
                     dev = None
@@ -772,8 +851,8 @@ class StickMicDevice:
                             log.warning("stick mic: can't remove the check %s: %s", what, e)
             res["ms"] = round((time.monotonic() - t0) * 1000, 1)
             self.check = res
-            log.info("stick mic: tap check %s in %.0f ms (created in %s ms, tone after %s ms, level %s): %s",
-                     res["state"], res["ms"], res["create_ms"], res["first_ms"],
+            log.info("stick mic: tap check %s in %.0f ms (through %s, created in %s ms, tone after %s ms, "
+                     "level %s): %s", res["state"], res["ms"], res["output"], res["create_ms"], res["first_ms"],
                      None if res["level"] is None else f"{res['level']:.1e}", res["detail"])
             return res
 

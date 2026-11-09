@@ -341,6 +341,36 @@ async def test_rename_from_the_settings(wired, no_core_audio):
     await wired.holds.drop("test")
 
 
+@pytest.mark.parametrize("default_transport, others, want, redirected", [
+    ("bltn", [], "BuiltInSpeaker", False),                        # built-in default: unchanged
+    ("usb ", [], "Default-UID", False),                           # any wired default: unchanged
+    ("blue", [], "BuiltInSpeaker", True),                         # Bluetooth: the built-in speakers
+    ("blea", [], "BuiltInSpeaker", True),                         # Bluetooth LE too
+    ("blue", ["no-speakers"], "USB-UID", True),                   # no built-in speakers: a wired output
+    ("blue", ["no-speakers", "no-usb"], "Default-UID", False),    # nothing else: the default, as before
+])
+def test_choose_tap_output(default_transport, others, want, redirected):
+    ca = FakeCoreAudio()
+    ca.list.update({130: ("Default Out", "Default-UID"), 140: ("USB DAC", "USB-UID"),
+                    160: ("AirPlay TV", "AirPlay-UID")})
+    ca.transports.update({130: default_transport, 140: "usb ", 160: "airp"})
+    ca.outputs |= {130, 140, 160}
+    ca.output_uid = "BuiltInSpeaker" if default_transport == "bltn" else "Default-UID"
+    if "no-speakers" in others:
+        del ca.list[108]
+    if "no-usb" in others:
+        del ca.list[140]
+    pick = stick_mic_device.choose_tap_output(ca)
+    assert pick["uid"] == want and pick["redirected"] is redirected
+    assert bool(pick["why"]) == (default_transport in ("blue", "blea"))
+
+
+def test_choose_tap_output_without_a_default():
+    ca = FakeCoreAudio()
+    ca.output_uid = ""
+    assert stick_mic_device.choose_tap_output(ca) is None
+
+
 def test_names_follow_the_stick():
     from stick_agent import stick_mic_device as m
     assert m.slug("Arbaaz StickS3") == "arbaaz-sticks3"

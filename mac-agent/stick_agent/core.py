@@ -173,8 +173,10 @@ class Agent:
         old = self.mic_dev.mode
         if carrier:
             self.mic_dev.mode = carrier
-        gate = (lambda: self.mic_dev.tap_live) if carrier == mic_device.TAP else None
-        self.wispr.set_carrier(carrier, why, gate)
+        tap = carrier == mic_device.TAP
+        gate = (lambda: self.mic_dev.tap_live) if tap else None
+        # tap mode: play into the output the tapped device is clocked by (built-in when the default is Bluetooth)
+        self.wispr.set_carrier(carrier, why, gate, output=self.mic_dev.output_for_tap if tap else None)
         if carrier and carrier != old and self.mic_dev.present and self.loop is not None:
             asyncio.ensure_future(self.holds.drop(f"now carried by {mic_device.CARRIER_TITLES[carrier]}"))
         return carrier

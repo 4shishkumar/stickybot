@@ -40,6 +40,16 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   to update first. CI checks face pull requests (validation, re-rendered previews, version
   raised) and publishes the signed catalog.
 
+### Fixed
+- **The wireless Wispr mic failed or lagged with Bluetooth headphones as the Mac's output**
+  (AirPods, OnePlus Buds…): with the Apple audio tap, the app played the stick into the
+  default output and clocked the mic device by it; a Bluetooth one could fail to open
+  ("Internal PortAudio error"), never run, or bring the audio in ~1.1 s late, so Wispr
+  missed the start or got nothing. When the default output is Bluetooth, the app now uses
+  the built-in speakers instead (another wired output on a Mac without them), and the
+  inaudible tap check goes the same way. Nothing is heard: the tap mutes it there just the
+  same. The log says which output is used and why.
+
 ## [2.2.0] - 2026-11-09
 
 ### Added
