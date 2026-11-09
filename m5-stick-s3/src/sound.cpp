@@ -41,6 +41,17 @@ N(POP[])        = {{2637, 25}};
 N(LISTEN_UP[])  = {{1319, 45}, {1976, 75}};  // short and bright: "go ahead"
 N(ARPEGGIO[])   = {{523, 80}, {659, 80}, {784, 80}, {1047, 160}};
 N(FANFARE[])    = {{784, 90}, {0, 20}, {784, 90}, {0, 20}, {784, 90}, {1047, 300}, {0, 40}, {932, 120}, {1047, 360}};
+// game effects (not in the dashboard's list of tunes)
+N(G_TAP[])     = {{1568, 18}};
+N(G_FLAP[])    = {{880, 22}, {1175, 26}};
+N(G_SCORE[])   = {{1760, 35}};
+N(G_PERFECT[]) = {{1319, 35}, {1760, 35}, {2349, 60}};
+N(G_HIT[])     = {{220, 70}};
+N(G_OVER[])    = {{523, 90}, {392, 90}, {262, 200}};
+N(G_BEST[])    = {{784, 70}, {988, 70}, {1175, 70}, {1568, 220}};
+N(G_GO[])      = {{1976, 60}};
+N(G_LEVEL[])   = {{1047, 60}, {1319, 60}, {1568, 60}, {2093, 120}};
+N(G_BONUS[])   = {{2093, 30}, {2637, 50}};
 #undef N
 
 #define T(name, x) Tune{name, x, (uint8_t)(sizeof(x) / sizeof(x[0]))}
@@ -49,6 +60,10 @@ static const Tune TUNES[] = {
   T("knock", KNOCK), T("bell", BELL), T("rise", RISE), T("fall", FALL), T("buzz", BUZZ), T("triad-up", TRIAD_UP),
   T("triad-down", TRIAD_DOWN), T("lock", LOCK), T("steps-up", STEPS_UP), T("chirp", CHIRP), T("warn", WARN3),
   T("pop", POP), T("arpeggio", ARPEGGIO), T("fanfare", FANFARE), T("listen-up", LISTEN_UP),
+};
+static const Tune GAME_TUNES[] = {
+  T("g-tap", G_TAP), T("g-flap", G_FLAP), T("g-score", G_SCORE), T("g-perfect", G_PERFECT), T("g-hit", G_HIT),
+  T("g-over", G_OVER), T("g-best", G_BEST), T("g-go", G_GO), T("g-level", G_LEVEL), T("g-bonus", G_BONUS),
 };
 #undef T
 constexpr size_t TUNE_COUNT = sizeof(TUNES) / sizeof(TUNES[0]);
@@ -162,7 +177,7 @@ static void decodeClipFrames() {
 static const Tune* cur = nullptr;
 static uint8_t  step = 0;
 static uint32_t stepEnd = 0, queuedAt = 0;
-static bool     pending = false, speakerOn = false, resumeMic = false;
+static bool     pending = false, speakerOn = false, resumeMic = false, keep_ = false;
 
 // The speaker amp's power: the power chip's GPIO3 (M5Unified sets the output
 // bit but doesn't make the pin an output; our standby leaves it low).
@@ -228,6 +243,23 @@ bool play(const String& name) {
   return startNamed(name);
 }
 
+static void speakerOff();
+
+void effect(const char* name) {
+  if (!settings::soundOn() || mic::live()) return;
+  for (auto& t : GAME_TUNES)
+    if (!strcmp(name, t.name)) {
+      if (cur) M5.Speaker.stop();
+      start(&t);
+      return;
+    }
+}
+
+void keepOn(bool on) {
+  keep_ = on;
+  if (!on && !busy()) speakerOff();
+}
+
 bool setTune(const String& event, const String& tune) {
   int e = eventIndex(event);
   if (e < 0 || (tune != "off" && !tuneByName(tune) && !clipByName(tune))) return false;
@@ -254,6 +286,7 @@ static void speakerOff() {
   }
   if (!speakerOn) return;
   M5.Speaker.stop();
+  if (keep_) return;  // a game: stays up for the next effect
   M5.Speaker.end();
   amp(false);  // the amp draws power even when silent
   speakerOn = false;

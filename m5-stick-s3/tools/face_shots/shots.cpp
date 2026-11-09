@@ -22,6 +22,8 @@
 #include "faces/faces.h"
 #include "faces/pkg/engine.h"
 #include "air_ui.h"
+#include "games/draw.h"
+#include <chrono>
 
 // --- The bits of the firmware the screens touch -------------------------------------
 static uint32_t now_ = 1000;
@@ -433,6 +435,230 @@ static void airShots(const std::string& dir) {
   sheet(dir + "/air-sheet.png", first, shots.size(), 7);
 }
 
+// --- Games (src/games/draw.cpp): every screen, played a little by an autopilot ----------------
+
+namespace gm = games;
+namespace gd = games::draw;
+
+static void gshot(const std::string& dir, const std::string& name) { savePng(dir + "/" + name + ".png"); }
+
+// Each game played by a simple autopilot for `ms` (40 ms frames, drawn each frame); returns
+// the average time to draw a frame on this Mac (microseconds).
+static double gplay(gm::Id g, uint32_t ms, uint32_t seed, gd::Ctx c, bool draw = true);
+
+static gm::Stack     gStack;
+static gm::Flappy    gFlappy;
+static gm::Dino      gDino;
+static gm::Reaction  gReaction;
+static gm::Maze      gMaze;
+static gm::Balance   gBalance;
+static gm::Catch     gCatch;
+
+static void gframe(gm::Id g, const gd::Ctx& c) {
+  switch (g) {
+    case gm::Id::STACK: gd::stack(gStack, c); break;
+    case gm::Id::FLAPPY: gd::flappy(gFlappy, c); break;
+    case gm::Id::DINO: gd::dino(gDino, c); break;
+    case gm::Id::REACTION: gd::reaction(gReaction, c); break;
+    case gm::Id::MAZE: gd::maze(gMaze, c); break;
+    case gm::Id::BALANCE: gd::balance(gBalance, c); break;
+    default: gd::catcher(gCatch, c); break;
+  }
+}
+
+static void greset(gm::Id g, uint32_t seed) {
+  switch (g) {
+    case gm::Id::STACK: gStack.reset(seed); break;
+    case gm::Id::FLAPPY: gFlappy.reset(seed); gFlappy.flap(); break;
+    case gm::Id::DINO: gDino.reset(seed); break;
+    case gm::Id::REACTION: gReaction.reset(seed); break;
+    case gm::Id::MAZE: gMaze.reset(seed); break;
+    case gm::Id::BALANCE: gBalance.reset(seed); break;
+    default: gCatch.reset(seed); break;
+  }
+}
+
+// one 40 ms frame of an autopilot
+static void gauto(gm::Id g, uint32_t t) {
+  const uint32_t dt = 40;
+  switch (g) {
+    case gm::Id::STACK:
+      if (gStack.over) return;
+      if (fabsf(gStack.x() - gStack.block(gStack.height()).x) < (gStack.height() % 3 ? 5.0f : 1.6f)) gStack.drop();
+      gStack.step(dt);
+      break;
+    case gm::Id::FLAPPY: {
+      float target = 120;
+      int best = 9999;
+      for (int i = 0; i < gm::Flappy::PIPES; i++) {
+        const auto& p = gFlappy.pipe(i);
+        if (p.x + gm::Flappy::PIPE_W > gm::Flappy::BIRD_X - gm::Flappy::R && p.x < best) { best = (int)p.x; target = p.gapY + 12; }
+      }
+      for (int k = 0; k < 4; k++) {
+        if (gFlappy.y() > target && gFlappy.vy() > 0) gFlappy.flap();
+        gFlappy.step(10);
+      }
+      break;
+    }
+    case gm::Id::DINO: {
+      for (int k = 0; k < 4; k++) {
+        const gm::Dino::Obstacle* o = nullptr;
+        float lead = 1e9;
+        for (int i = 0; i < gm::Dino::OBST; i++) {
+          const auto& x = gDino.obstacle(i);
+          if (x.active && x.x + x.w > gm::Dino::BOT_X - 9 && x.x < lead) { lead = x.x; o = &x; }
+        }
+        if (o && !o->fly && gDino.onGround() && o->x - (gm::Dino::BOT_X + 9) < gDino.speed() * 0.12f + 4) gDino.press();
+        if (!gDino.onGround() && gDino.height() > 45) gDino.release();
+        gDino.step(10);
+      }
+      break;
+    }
+    case gm::Id::REACTION:
+      gReaction.step(dt);
+      if (gReaction.phase() == gm::Reaction::Phase::GO && gReaction.inPhase() >= 200 + gReaction.round() * 37) gReaction.press();
+      break;
+    case gm::Id::MAZE: {  // roll along the solution: towards the next cell on the way out
+      const auto& gr = gMaze.grid();
+      const float cs = gMaze.cellPx();
+      const int c = (int)((gMaze.ballX() - gMaze.originX()) / cs), r = (int)((gMaze.ballY() - gMaze.originY()) / cs);
+      int best = 9999, nc = c, nr = r;
+      static const int DC[4] = {0, 1, 0, -1}, DR[4] = {-1, 0, 1, 0};
+      static const uint8_t SIDE[4] = {gm::MazeGrid::N, gm::MazeGrid::E, gm::MazeGrid::S, gm::MazeGrid::W};
+      for (int d = 0; d < 4; d++) {
+        if (gr.wall(c, r, SIDE[d])) continue;
+        const int dist = gr.distance(c + DC[d], r + DR[d], gr.cols - 1, gr.rows - 1);
+        if (dist >= 0 && dist < best) { best = dist; nc = c + DC[d]; nr = r + DR[d]; }
+      }
+      const float tx = gMaze.originX() + (nc + 0.5f) * cs - gMaze.ballX(), ty = gMaze.originY() + (nr + 0.5f) * cs - gMaze.ballY();
+      gMaze.step(dt, constrain(tx * 0.03f, -0.3f, 0.3f), constrain(ty * 0.03f, -0.3f, 0.3f));
+      break;
+    }
+    case gm::Id::BALANCE:
+      gBalance.step(dt, constrain(-sinf(gBalance.angle()) - gBalance.pos() * 0.004f - gBalance.vel() * 0.004f, -0.6f, 0.6f));
+      break;
+    default: {
+      float target = gCatch.basketX(), low = -1;
+      for (int i = 0; i < gm::Catch::ITEMS; i++) {
+        const auto& it = gCatch.item(i);
+        if (it.active && it.kind != gm::Catch::Kind::BOMB && it.y > low && it.y < gm::Catch::BASKET_Y) { low = it.y; target = it.x; }
+      }
+      gCatch.step(dt, constrain((target - gCatch.basketX()) * 0.02f, -0.6f, 0.6f));
+      break;
+    }
+  }
+  (void)t;
+}
+
+static double gplay(gm::Id g, uint32_t ms, uint32_t seed, gd::Ctx c, bool draw) {
+  greset(g, seed);
+  double us = 0;
+  int n = 0;
+  for (uint32_t t = 0; t < ms; t += 40) {
+    now_ += 40;
+    gauto(g, t);
+    c.now = now_;
+    if (!draw) continue;
+    auto t0 = std::chrono::steady_clock::now();
+    gframe(g, c);
+    us += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+    n++;
+  }
+  return n ? us / n : 0;
+}
+
+static gm::Base& gbase(gm::Id g) {
+  switch (g) {
+    case gm::Id::STACK: return gStack;
+    case gm::Id::FLAPPY: return gFlappy;
+    case gm::Id::DINO: return gDino;
+    case gm::Id::REACTION: return gReaction;
+    case gm::Id::MAZE: return gMaze;
+    case gm::Id::BALANCE: return gBalance;
+    default: return gCatch;
+  }
+}
+
+static int gamesMode(const std::string& dir) {
+  mkdir(dir.c_str(), 0755);
+  const size_t first = shots.size();
+  const long bests[gm::COUNT] = {23, 41, 812, 231, 4, 356, 0};
+  ui::useSide(0);
+  gd::picker(0, bests, now_);
+  gshot(dir, "00-picker");
+  gd::picker(4, bests, now_);
+  gshot(dir, "01-picker-maze");
+  struct Plan { uint32_t playMs; uint32_t seed; };
+  const Plan plans[gm::COUNT] = {{9000, 5}, {12000, 3}, {14000, 8}, {0, 3}, {16000, 12}, {9000, 6}, {14000, 4}};
+  printf("frame cost on this Mac (draw only, 40 ms frames):\n");
+  for (int i = 0; i < gm::COUNT; i++) {
+    const gm::Id g = (gm::Id)i;
+    const std::string id = gm::info(g).id;
+    const int side = gm::info(g).landscape ? 1 : 0;
+    gd::Ctx c;
+    c.best = bests[i];
+    c.acc = i == 1 ? 1 : i == 2 ? 4 : 0;  // a hat on the Flappy bot, a crown on the runner
+    c.now = now_;
+    ui::useSide(side);
+    greset(g, plans[i].seed);
+    gd::ready(g, c);
+    gshot(dir, id + "-1-ready");
+    if (gm::info(g).tilt) {
+      gd::calibrate(g, 1400, 0.05f, -0.03f, c);
+      gshot(dir, id + "-2-calibrate");
+    }
+    if (g == gm::Id::REACTION) {  // its phases
+      greset(g, 3);
+      gframe(g, c);
+      gshot(dir, id + "-3-wait");
+      while (gReaction.phase() == gm::Reaction::Phase::WAIT) gReaction.step(10);
+      gframe(g, c);
+      gshot(dir, id + "-4-go");
+      gReaction.step(214);
+      gReaction.press();
+      gframe(g, c);
+      gshot(dir, id + "-5-shown");
+      const double us = gplay(g, 20000, 3, c);
+      gd::over(g, gReaction.score, c.best, gm::better(g, gReaction.score, c.best), false, 2000);
+      gshot(dir, id + "-6-over");
+      greset(g, 4);
+      gReaction.step(300);
+      gReaction.press();
+      gframe(g, c);
+      gd::over(g, 0, c.best, false, true, 2000);
+      gshot(dir, id + "-7-false-start");
+      printf("  %-9s %7.0f us\n", id.c_str(), us);
+      continue;
+    }
+    const double us = gplay(g, plans[i].playMs, plans[i].seed, c);
+    gshot(dir, id + "-3-play");
+    printf("  %-9s %7.0f us  (score %ld after %.0f s)\n", id.c_str(), us, gbase(g).score, plans[i].playMs / 1000.0);
+    if (i == 0) {
+      gd::pause(1);
+      gshot(dir, id + "-4-pause");
+    }
+    // play on to the end (or a while), then game over: a new best for some
+    for (int k = 0; k < 3000 && !gbase(g).over; k++) {
+      now_ += 40;
+      if (k > 150) { gbase(g).over = true; break; }  // long enough
+      gauto(g, 0);
+    }
+    gframe(g, c);
+    const bool nb = i % 2 == 0;
+    if (nb) gd::overConfetti();
+    for (int k = 0; k < 12; k++) {  // a few frames in, the confetti flying
+      now_ += 40;
+      gframe(g, c);
+      gd::over(g, nb ? bests[i] + 7 : gbase(g).score, bests[i], nb, false, 480 + k * 40);
+    }
+    gshot(dir, id + "-5-over");
+  }
+  ui::useSide(0);
+  sheet(dir + "/games-sheet.png", first, shots.size(), 6);
+  printf("contact sheet: %s/games-sheet.png\n", dir.c_str());
+  return 0;
+}
+
 int main(int argc, char** argv) {
   ui::begin();
   std::string mode = argc > 1 ? argv[1] : "demo";
@@ -449,6 +675,7 @@ int main(int argc, char** argv) {
     return ok ? 0 : 3;
   }
   if (mode == "air") { airShots(dir); return 0; }
+  if (mode == "games") return gamesMode(dir);
   if (mode == "previews") previews(dir);
   else demo(dir, argc > 3 ? argv[3] : "all");
   return 0;

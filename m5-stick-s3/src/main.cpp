@@ -46,6 +46,7 @@
 #include "ota.h"
 #include "faces/faces.h"
 #include "air.h"
+#include "games/games.h"
 #include <HijelHID_BLEKeyboard.h>  // KEY_MOD_* constants
 
 constexpr uint32_t CPU_MHZ           = 80;
@@ -65,7 +66,7 @@ constexpr uint16_t COLOR_OK   = 0x03E0;
 constexpr uint16_t COLOR_WARN = 0xC300;
 constexpr uint16_t COLOR_DIM  = 0x2104;
 
-enum class Mode { STATUS, MENU, WEB };
+enum class Mode { STATUS, MENU, WEB, GAME };  // GAME: the games (games/games.h) own the screen and buttons
 
 static Mode       mode = Mode::STATUS;
 static bool       agentTalking = false;
@@ -214,6 +215,8 @@ static void render() {
       break;
     case Mode::MENU:
       ui::drawMenu(menu::view());
+      break;
+    case Mode::GAME:  // the games draw themselves
       break;
     case Mode::WEB: {
       String lines[8];
@@ -389,6 +392,7 @@ static const char* otaBusy() {
   if (buddy::hasPrompt()) return "approval";
   if (hid::pairingCode()) return "pairing";
   if (mode == Mode::MENU) return "menu";
+  if (mode == Mode::GAME) return "game";
   if (web::busy()) return "wifi-update";
   if (faces::pkg::install::receiving()) return "faces";  // a face package is arriving (one transfer at a time)
   if (air::active()) return "remote";  // the air mouse / presenter / media remote (air.h)
@@ -513,6 +517,11 @@ static void onMenu(menu::Action a) {
     case menu::Action::CANCEL:
       ui::setBrightness(settings::brightnessPct());  // undo preview
       mode = Mode::STATUS;
+      break;
+    case menu::Action::GAMES:  // leaves the menu like Cancel
+      ui::setBrightness(settings::brightnessPct());
+      games::open(shownScreen.flipped, dockSide());
+      mode = Mode::GAME;
       break;
   }
   dirty = true;
@@ -884,7 +893,9 @@ void loop() {
   {
     orientation::Screen sc =
         orientation::choose(motion::facing(), settings::autoRotate(), settings::landscape(), settings::flipped());
-    if (sc != shownScreen) {
+    if (sc != shownScreen && mode == Mode::GAME) {
+      shownScreen = sc;  // a game keeps its own orientation; this one applies when it closes
+    } else if (sc != shownScreen) {
       if (sc.flipped && !shownScreen.flipped && sc.side == 0) faces::toy(world::Kick::UPSIDE_DOWN);  // turned over
       shownScreen = sc;
       ui::setOrientation(sc.flipped, sc.side);
@@ -1048,7 +1059,8 @@ void loop() {
     }
   }
 
-  if (mev == motion::Event::SHAKE && settings::shakeEscapes() && mode != Mode::MENU && hid::connected()) {
+  if (mev == motion::Event::SHAKE && settings::shakeEscapes() && mode != Mode::MENU && mode != Mode::GAME &&
+      hid::connected()) {
     hid::tapEscape();
     Log.println("-> Escape (shake)");
   }
@@ -1116,6 +1128,30 @@ void loop() {
       }
       if (mode == Mode::MENU && menu::timedOut()) onMenu(menu::Action::CANCEL);
       break;
+
+    case Mode::GAME: {
+      games::Input in{};
+      in.aDown = A.wasPressed();
+      in.aUp = A.wasReleased();
+      in.aHeld = A.isPressed();
+      in.aChangedAt = A.lastChange();
+      in.bClick = B.wasClicked();
+      in.bHold = B.wasHold();
+      in.bHeld = B.isPressed();
+      float az;
+      motion::accel(in.ax, in.ay, az);
+      if (!games::loop(in)) {  // closed: back to Home, as the stick is held
+        mode = Mode::STATUS;
+        ignoreAUntilRelease = A.isPressed();
+        ignoreBUntilRelease = B.isPressed();
+        page = ui::Page::HOME;
+        ui::setOrientation(shownScreen.flipped, shownScreen.side);
+        lastInput = millis();
+        dirty = true;
+      }
+      delay(2);  // (a short pause: the games pace their own frames)
+      return;
+    }
   }
 
   // Dock: on USB power and untouched for a while, the stick becomes a desk clock.

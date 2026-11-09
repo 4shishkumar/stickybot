@@ -13,6 +13,14 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 ## [Unreleased]
 
 ### Added
+- **Games on the stick (firmware 2.5.0).** A **Games** entry in the stick's menu with seven
+  little games and their best scores: **Stack**, **Flappy** and **Dino** (StickyBot as the
+  hero), **Reaction** with button A; **Maze** (a new maze every level), **Balance** and
+  **Catch** by tilting the stick (it calibrates "flat" when a game starts). The same pause
+  (B: Resume / Restart / Quit) and game over in every game, little sound effects (off with
+  the stick's sounds, at its volume). Each game played gives StickyBot a little XP (+1, +3
+  for a new best, at most 10 a day from games), and the dashboard's Stick page has a Games
+  card with the bests (`@games`; PROTOCOL.md, *Games*).
 - **Face packages, the design.** A format for Home faces made of
   data (a manifest + small pixel-art images) that anyone can publish and the dashboard will
   install over Bluetooth without reflashing: `docs/faces/` (format, guidelines, catalog,

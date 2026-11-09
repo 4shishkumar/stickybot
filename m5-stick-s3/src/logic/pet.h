@@ -6,6 +6,7 @@
 //   Level:   1 at 0 XP; level n -> n+1 needs 10 + 10 * n XP (20, 30, 40...)
 //   Streak:  days in a row with at least one merged PR or finished Claude task
 //   Unlocks: hat at a 5-day streak (best ever), sunglasses at 10 green builds, crown at 100 PRs
+//   Games:   (agent only, 2.5.0) +1 a game with points, +3 a new best, at most 10 XP a day
 #pragma once
 #include <stdint.h>
 

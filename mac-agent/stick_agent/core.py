@@ -366,6 +366,9 @@ class Agent:
         if msg.get("src") == "agent" and msg.get("evt") == "event_shown":
             self.notifier.acked(msg.get("id"))
             return
+        if msg.get("src") == "agent" and msg.get("evt") == "game":  # a game finished on the stick (2.5.0)
+            self._on_game(msg)
+            return
         if msg.get("src") == "agent" and msg.get("evt") == "sounds":
             self.sounds = msg.get("sounds")
             if self._sounds_seen:
@@ -404,6 +407,23 @@ class Agent:
             self.set_state("ready" if self.link_state == "connected" else self.link_state)
         elif msg.get("cmd") == "permission" and msg.get("id") in self.prompts:
             self._decide(msg["id"], msg.get("decision"), "stick")
+
+    def _on_game(self, msg):
+        """{"evt":"game","id","score","best","new_best"}: a little XP (capped a day, pet.py) and the
+        dashboard's Games card."""
+        gid, score = msg.get("id"), msg.get("score")
+        xp = self.pet.game(gid, score, msg.get("best"), msg.get("new_best") is True)
+        if gid not in pet.GAMES:
+            log.info("game event for an unknown game %r: ignored", gid)
+            return
+        log.info("game %s: %s%s, +%d XP", gid, score, " (new best)" if msg.get("new_best") is True else "", xp)
+        self.emit("game", id=gid, score=score, best=msg.get("best"), new_best=msg.get("new_best") is True, xp=xp)
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:  # no event loop (called directly, in tests)
+            return
+        if xp:
+            asyncio.ensure_future(self.push_world(only_changed=True))  # the faces show the XP
 
     def _on_audio(self, frame):
         if self.wispr.active:

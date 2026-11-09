@@ -9,7 +9,7 @@ export const subtitle = "The stick's own settings. They're saved on the stick, s
 
 // Fallback for older firmware; newer sticks send their own list (with Fn) in `keys`.
 const MODS = [["Ctrl", 1], ["Option", 4], ["Shift", 2], ["Cmd", 8]];
-let root = null, st = null, keys = null, via = null, snd = null, petInfo = null;
+let root = null, st = null, keys = null, via = null, snd = null, petInfo = null, gamesInfo = null;
 
 export function actions() {
   return [h("button", {class: "btn", type: "button", onclick: load}, "Refresh"),
@@ -22,9 +22,10 @@ export function leave() { root = null; }
 async function load() {
   if (!root) return;
   clear(root).appendChild(h("div", {class: "empty"}, "Asking the stick…"));
-  const [r, k, s, pt] = await Promise.all([proto("state"), keys ? Promise.resolve(null) : proto("keys"), get("/api/sounds"),
-    get("/api/pet").catch(() => null)]);
+  const [r, k, s, pt, gm] = await Promise.all([proto("state"), keys ? Promise.resolve(null) : proto("keys"), get("/api/sounds"),
+    get("/api/pet").catch(() => null), proto("games").catch(() => null)]);
   petInfo = pt && pt.pet ? pt.pet : null;
+  gamesInfo = gm && gm.ok && gm.reply && Array.isArray(gm.reply.games) ? gm.reply.games : null;  // firmware 2.5.0+
   if (k && k.ok && k.reply) keys = k.reply;
   st = r.ok && r.reply ? r.reply : null;
   via = r.via;
@@ -55,8 +56,9 @@ function paint(res) {
         ? "This version of the agent can't change the stick's settings yet. The stick's own menu (triple-press B) still works."
         : (res && res.error) || "Check it's switched on and connected (Overview shows the link)."))));
   } else {
-    root.append(identityCard(), ...(st.faces ? [faceCard(), marketCard()] : []), comboCard(), unlockCard(), slotsCard(),
-      screenCard(), motionCard(), ...(st.air ? [airCard(st, send)] : []), soundCard());  // air: firmware 2.5.0+
+    root.append(identityCard(), ...(st.faces ? [faceCard(), marketCard()] : []), ...(gamesInfo ? [gamesCard()] : []),
+      comboCard(), unlockCard(), slotsCard(), screenCard(), motionCard(),
+      ...(st.air ? [airCard(st, send)] : []), soundCard());  // games, air: firmware 2.5.0+
   }
   root.appendChild(card("Firmware", firmwarePanel()));
 }
@@ -119,6 +121,22 @@ function faceCard() {
     h("p", {class: "lead"}, "How the stick's Home screen looks. Approvals, questions and alerts still take over the screen, ",
       "and every face keeps the time and anything urgent in view."),
     facts, h("div", {class: "faces"}, tiles));
+}
+
+// Games (firmware 2.5.0+): the stick's best scores (`@games`, kept on the stick) and the XP
+// games earned StickyBot today (capped, pet.py).
+function gamesCard() {
+  const g = (petInfo && petInfo.games) || {};
+  const plays = g.plays || {};
+  const rows = gamesInfo.map(x => h("div", {class: "game-row"},
+    h("b", null, x.title),
+    h("span", {class: "small dim"}, x.tilt ? "tilt" : "button A"),
+    h("span", {class: "game-best"}, x.best > 0 ? `${x.best}${x.low ? " ms" : ""}` : "—"),
+    h("span", {class: "small faint"}, plays[x.id] ? `${plays[x.id]} played` : "")));
+  return card("Games",
+    h("p", {class: "lead"}, "Seven little games on the stick: menu (triple-press B) → Games. ",
+      "Each game StickyBot plays earns a little XP: ", h("b", null, `${g.xpToday || 0} of ${g.cap || 10} XP today`), "."),
+    h("div", {class: "games"}, rows));
 }
 
 // Face packages (firmware 2.4.0+, docs/faces/CATALOG.md): the faces installed on the stick

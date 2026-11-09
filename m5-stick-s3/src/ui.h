@@ -74,6 +74,9 @@ void setFlipped(bool flipped);
 // (rotation 1, button A on the right / rotation 3, A on the left) for the screens that
 // have a landscape layout. Takes effect at the next draw.
 void setOrientation(bool flipped, int side);
+// Games (2.5.0): turn to this side now (0 portrait, +1 / -1 landscape) and draw there; the
+// screens with a landscape layout use it too until the next setOrientation().
+void useSide(int side);
 void setBrightness(uint8_t pct);
 // For a screen drawn outside ui.cpp with a landscape layout (the remote modes, air_ui.cpp):
 // turns to the held side (setOrientation) and undims; true = draw the landscape layout.

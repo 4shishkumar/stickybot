@@ -11,6 +11,11 @@
 #                                       compiled (tools/faces/validate.py), drawn in several
 #                                       states -> out/pkg/<id>-*.png + <id>-sheet.png;
 #                                       PREVIEWS=1 also writes <dir>/previews/*.png
+#   make -C tools/face_shots games [OUT=<dir>]
+#                                       the games (src/games/draw.cpp): the picker, each game's
+#                                       title card, play, pause and game over -> OUT (out/games),
+#                                       a contact sheet games-sheet.png, and each game's frame
+#                                       cost on this Mac
 #   make -C tools/face_shots fuzz PKG=<dir> [N=5000] [SAN=1]
 #                                       the engine's loader against N broken copies of a
 #                                       package (SAN=1: with AddressSanitizer + UBSan)
@@ -31,18 +36,21 @@ SANFLAGS := $(if $(SAN),-g -fsanitize=address -fsanitize=undefined -fno-omit-fra
 CXXFLAGS := -std=gnu++17 -O1 -w -Imock -I$(SRC) -I$(GFX) -I$(JSON) $(SANFLAGS)
 CFLAGS   := -O1 -w -Imock -I$(GFX) $(SANFLAGS)
 
-APP  := shots.cpp $(SRC)/ui.cpp $(SRC)/air_ui.cpp $(SRC)/fonts_vlw.cpp $(wildcard $(SRC)/faces/*.cpp) $(SRC)/faces/pkg/engine.cpp $(wildcard $(SRC)/logic/*.cpp)
+APP  := shots.cpp $(SRC)/ui.cpp $(SRC)/air_ui.cpp $(SRC)/fonts_vlw.cpp $(wildcard $(SRC)/faces/*.cpp) $(SRC)/faces/pkg/engine.cpp $(SRC)/games/draw.cpp $(wildcard $(SRC)/logic/*.cpp)
 LGFX := $(GFX)/lgfx/v1/LGFXBase.cpp $(GFX)/lgfx/v1/lgfx_v1.cpp $(GFX)/lgfx/v1/lgfx_fonts.cpp \
         $(GFX)/lgfx/v1/lgfx_v1_panel.cpp fbbase.cpp
 CSRC := $(wildcard $(GFX)/lgfx/utility/*.c) fontstubs.c
 OBJ  := $(addprefix $(B)/,$(notdir $(APP:.cpp=.o) $(LGFX:.cpp=.o) $(CSRC:.c=.o)))
-VPATH := $(SRC) $(SRC)/faces $(SRC)/faces/pkg $(SRC)/logic $(GFX)/lgfx/v1 $(GFX)/lgfx/utility .
+VPATH := $(SRC) $(SRC)/faces $(SRC)/faces/pkg $(SRC)/logic $(SRC)/games $(GFX)/lgfx/v1 $(GFX)/lgfx/utility .
 
-.PHONY: demo previews pkg fuzz air clean
+.PHONY: demo previews pkg fuzz air games clean
+OUT ?= out/games
 demo: $(B)/shots
 	cd $(B)/.. && $(B)/shots demo out $(FACE)
 air: $(B)/shots
 	mkdir -p out/air && $(B)/shots air out/air
+games: $(B)/shots
+	$(B)/shots games $(OUT)
 previews: $(B)/shots
 	$(B)/shots previews ../../../mac-agent/stick_agent/static/faces
 
@@ -61,7 +69,7 @@ fuzz: $(B)/shots
 $(B)/shots: $(OBJ)
 	$(CXX) $(SANFLAGS) -o $@ $^ -lz
 # a header changed (ui::Dash, an engine struct): rebuild what includes it, or the objects disagree
-HDRS := $(wildcard $(SRC)/*.h $(SRC)/faces/*.h $(SRC)/faces/pkg/*.h $(SRC)/logic/*.h)
+HDRS := $(wildcard $(SRC)/*.h $(SRC)/games/*.h $(SRC)/faces/*.h $(SRC)/faces/pkg/*.h $(SRC)/logic/*.h)
 $(addprefix $(B)/,$(notdir $(APP:.cpp=.o))): $(HDRS)
 $(B)/%.o: %.cpp | $(B)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
