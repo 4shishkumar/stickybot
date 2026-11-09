@@ -87,16 +87,18 @@ mod app {
         delay: u64,
         text: String,
         timeout: Option<u64>,
+        as_stick: bool, // the Python app's own mic name + UID, so Wispr's ranking picks it
     }
 
     fn parse() -> Result<Opts, String> {
-        let mut o = Opts { mode: Mode::Probe, delay: 8, text: DEFAULT_TEXT.into(), timeout: None };
+        let mut o = Opts { mode: Mode::Probe, delay: 8, text: DEFAULT_TEXT.into(), timeout: None, as_stick: false };
         let mut it = std::env::args().skip(1);
         while let Some(a) = it.next() {
             let mut val = |name: &str| it.next().ok_or(format!("{name} needs a value"));
             match a.as_str() {
                 "--probe" => o.mode = Mode::Probe,
                 "--speech" => o.mode = Mode::Speech,
+                "--as-stick" => o.as_stick = true,
                 "--tone" => o.mode = Mode::Tone,
                 "--list" => o.mode = Mode::List,
                 "--cleanup" => o.mode = Mode::Cleanup,
@@ -139,7 +141,11 @@ mod app {
         }
         install_guards(opts.timeout.unwrap_or(20));
 
-        let names = Names::spike();
+        let names = if opts.as_stick {
+            Names::new("stickybot-bt-mic", "com.stickkey.rust-wireless-mic")
+        } else {
+            Names::spike()
+        };
         let before = ours(&names);
         let total_before = (hal::devices().len(), hal::taps().len());
         let (nd, nt) = mic::cleanup_stale(&names);
