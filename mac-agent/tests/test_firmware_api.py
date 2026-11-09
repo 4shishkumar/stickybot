@@ -328,9 +328,10 @@ def test_only_stickybot_ports_count_as_sticks(monkeypatch):
     from serial.tools import list_ports
     found = [P(vid=0x303A, pid=0x4001, device="/dev/cu.usbmodem101", serial_number="1", product="Espressif Device",
                description=""),
-             P(vid=0x303A, pid=0x1001, device="/dev/cu.usbmodemJ", serial_number="2", product="USB JTAG/serial debug unit",
+             P(vid=0x303A, pid=0x1001, device="/dev/cu.usbmodemJ", serial_number="2", product="USB JTAG/serial debug",
                description=""),
-             P(vid=0x303A, pid=0x1001, device="/dev/cu.usbmodemS", serial_number="3", product="StickyBot", description="")]
+             P(vid=0x303A, pid=0x1001, device="/dev/cu.usbmodemS", serial_number="3", product="StickyBot",
+               description="")]
     monkeypatch.setattr(list_ports, "comports", lambda: found)
     assert [p["port"] for p in flasher.espressif_ports()] == ["/dev/cu.usbmodemJ", "/dev/cu.usbmodemS"]
     assert len(flasher.espressif_ports(sticks_only=False)) == 3
