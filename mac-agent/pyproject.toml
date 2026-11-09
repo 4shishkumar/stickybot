@@ -1,6 +1,6 @@
 [project]
 name = "stick-agent"
-version = "2.1.0"
+version = "2.2.0"
 description = "StickyBot: a voice assistant for your Mac, driven by an M5StickS3"
 requires-python = ">=3.11"
 dependencies = ["bleak", "aiohttp", "rumps", "parakeet-mlx", "numpy", "soundfile", "soxr", "esptool", "pyserial", "sounddevice",
