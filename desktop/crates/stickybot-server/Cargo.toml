@@ -1,0 +1,28 @@
+[package]
+name = "stickybot-server"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "StickyBot's dashboard + local API (axum) on top of the stick link; the same page the Python agent serves"
+
+[dependencies]
+stick-link = { path = "../stick-link" }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "tower-log"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rust-embed = { version = "8", features = ["mime-guess"] }
+getrandom = "0.3"
+base64 = "0.22"
+log = "0.4"
+env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[[bin]]
+name = "stickybot-headless"
+path = "src/bin/headless.rs"
