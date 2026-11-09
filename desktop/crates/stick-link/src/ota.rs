@@ -134,6 +134,53 @@ impl Stats {
 
 pub type Emit = Arc<dyn Fn(Value) + Send + Sync>;
 
+/// Makes a family's begin message: `(image, force)`.
+pub type BeginFn = Arc<dyn Fn(&Image, bool) -> Value + Send + Sync>;
+
+/// What a transfer says when it fails without the stick saying why (ota.py `Transfer.WORDS`).
+#[derive(Debug, Clone)]
+pub struct Words {
+    pub no_answer: &'static str,
+    pub stalled: &'static str,
+    pub unconfirmed: &'static str,
+}
+
+/// The firmware update's words (ota.py `Sender.WORDS`).
+pub const FIRMWARE_WORDS: Words = Words {
+    no_answer: "the stick didn't answer the update request (firmware older than 1.8.0?)",
+    stalled: "the stick stopped answering during the update",
+    unconfirmed: "the stick didn't confirm the image",
+};
+
+/// Which family of messages a transfer uses (ota.py `Transfer`: `KIND`, the begin message, the
+/// stick's error words): the firmware update (`"ota"`) or a face package (`"faces"`). Both send
+/// over OTA_DATA with the same flow control.
+#[derive(Clone)]
+pub struct Family {
+    /// the key the agent sends and the stick's `evt`
+    pub key: &'static str,
+    /// what goes under `key` to start (or resume): `(image, force)`
+    pub begin: BeginFn,
+    /// the stick's refusal / error message in words
+    pub reason: fn(&Value) -> String,
+    pub words: Words,
+}
+
+impl Family {
+    /// The firmware update (PROTOCOL.md "Firmware update over Bluetooth").
+    pub fn firmware() -> Self {
+        Self {
+            key: "ota",
+            begin: Arc::new(|img, force| {
+                json!({"begin": {"size": img.size(), "sha256": img.sha256, "version": img.version,
+                                 "compressed": false, "force": force}})
+            }),
+            reason,
+            words: FIRMWARE_WORDS,
+        }
+    }
+}
+
 /// Sends one image over a [`Link`]. `emit` gets `{"line"}` / `{"progress","stage"}` events.
 pub struct Sender<C: Connector> {
     link: Link<C>,
@@ -141,6 +188,9 @@ pub struct Sender<C: Connector> {
     cancelled: Arc<AtomicBool>,
     pub timings: Timings,
     pct: i64,
+    family: Family,
+    /// the stick's `done` message, after a successful [`Sender::run`]
+    pub done: Option<Value>,
 }
 
 /// Stops a running [`Sender`] (the dashboard's Cancel).
@@ -166,8 +216,22 @@ impl Drop for Inbox {
 }
 
 impl<C: Connector> Sender<C> {
+    /// A firmware update.
     pub fn new(link: Link<C>, emit: Emit) -> Self {
-        Self { link, emit, cancelled: Arc::new(AtomicBool::new(false)), timings: Timings::default(), pct: -1 }
+        Self::with_family(link, emit, Family::firmware())
+    }
+
+    /// Another kind of file over the same characteristic (a face package).
+    pub fn with_family(link: Link<C>, emit: Emit, family: Family) -> Self {
+        Self {
+            link,
+            emit,
+            cancelled: Arc::new(AtomicBool::new(false)),
+            timings: Timings::default(),
+            pct: -1,
+            family,
+            done: None,
+        }
     }
 
     pub fn cancel_handle(&self) -> CancelHandle {
@@ -181,12 +245,13 @@ impl<C: Connector> Sender<C> {
     fn listen(&self) -> Inbox {
         let mut msgs = self.link.messages();
         let (tx, rx) = mpsc::unbounded_channel();
+        let key = self.family.key;
         let pump = tokio::spawn(async move {
             loop {
                 match msgs.recv().await {
                     Ok(m) => {
                         if m.get("src").and_then(Value::as_str) == Some("agent")
-                            && m.get("evt").and_then(Value::as_str) == Some("ota")
+                            && m.get("evt").and_then(Value::as_str) == Some(key)
                             && tx.send(m).is_err()
                         {
                             return;
@@ -238,8 +303,7 @@ impl<C: Connector> Sender<C> {
     }
 
     async fn begin(&self, inbox: &mut Inbox, img: &Image, force: bool) -> Result<Value, OtaError> {
-        let msg = json!({"src": "agent", "ota": {"begin": {"size": img.size(), "sha256": img.sha256,
-                          "version": img.version, "compressed": false, "force": force}}});
+        let msg = json!({"src": "agent", self.family.key: (self.family.begin)(img, force)});
         let deadline = Instant::now() + self.timings.reconnect;
         let mut unanswered = 0;
         while unanswered < 3 {
@@ -257,16 +321,16 @@ impl<C: Connector> Sender<C> {
                 continue;
             };
             if r["state"] != "ready" {
-                return Err(fail(reason(&r)));
+                return Err(fail((self.family.reason)(&r)));
             }
             return Ok(r);
         }
-        Err(fail("the stick didn't answer the update request (firmware older than 1.8.0?)"))
+        Err(fail(self.family.words.no_answer))
     }
 
     async fn abort(&self, inbox: &mut Inbox) {
         if self.link.connected() {
-            self.link.send(&json!({"src": "agent", "ota": {"cancel": 1}})).await;
+            self.link.send(&json!({"src": "agent", self.family.key: {"cancel": 1}})).await;
             self.reply(inbox, &["cancelled"], self.timings.reply).await;
         }
     }
@@ -343,7 +407,7 @@ impl<C: Connector> Sender<C> {
                         waited_from = Instant::now();
                     }
                     if last_progress.elapsed() > self.timings.stall {
-                        return Err(fail("the stick stopped answering during the update"));
+                        return Err(fail(self.family.words.stalled));
                     }
                     continue;
                 };
@@ -372,7 +436,7 @@ impl<C: Connector> Sender<C> {
                             if by_stick { "cancelled on the stick" } else { "cancelled" }.into(),
                         ));
                     }
-                    Some("error") => return Err(fail(reason(&msg))),
+                    Some("error") => return Err(fail((self.family.reason)(&msg))),
                     _ => {}
                 }
             }
@@ -387,7 +451,7 @@ impl<C: Connector> Sender<C> {
             // everything acknowledged: the stick checks the hash and commits
             (self.emit)(json!({"progress": 100, "stage": "send"}));
             (self.emit)(json!({"progress": 0, "stage": "verify"}));
-            if !self.link.send(&json!({"src": "agent", "ota": {"end": 1}})).await {
+            if !self.link.send(&json!({"src": "agent", self.family.key: {"end": 1}})).await {
                 reconnects += 1;
                 self.wait_link(self.timings.reconnect).await?;
                 continue;
@@ -399,14 +463,15 @@ impl<C: Connector> Sender<C> {
                     self.wait_link(self.timings.reconnect).await?;
                     continue;
                 }
-                return Err(fail("the stick didn't confirm the image"));
+                return Err(fail(self.family.words.unconfirmed));
             };
             match (r["state"].as_str(), r.get("error").and_then(Value::as_str)) {
                 (Some("error"), Some("incomplete")) => continue, // missing bytes after all: resume
                 (Some("cancelled"), _) => return Err(OtaError::Cancelled("cancelled on the stick".into())),
-                (Some("error"), _) => return Err(fail(reason(&r))),
+                (Some("error"), _) => return Err(fail((self.family.reason)(&r))),
                 _ => {}
             }
+            self.done = Some(r);
             (self.emit)(json!({"progress": 100, "stage": "verify"}));
             break;
         }
@@ -421,7 +486,8 @@ impl<C: Connector> Sender<C> {
             sent: sent_bytes,
         };
         log::info!(
-            "ota: {} KB in {secs:.1} s = {kbps:.1} KB/s ({resends} bytes resent, {reconnects} reconnects)",
+            "{}: {} KB in {secs:.1} s = {kbps:.1} KB/s ({resends} bytes resent, {reconnects} reconnects)",
+            self.family.key,
             size / 1024
         );
         let resent = if resends >= 1024 { format!(", {} KB resent", resends / 1024) } else { String::new() };

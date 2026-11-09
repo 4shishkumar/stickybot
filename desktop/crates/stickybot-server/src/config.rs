@@ -147,7 +147,8 @@ pub fn defaults() -> Map<String, Value> {
         "claude_done_min_s": 120,
         "github": {"on": true, "interval_s": 120, "primary_repo": ""},
         "update_check": true,
-        "update_channel": "stable"
+        "update_channel": "stable",
+        "faces_catalog_url": "https://ashish-kumar-noon.github.io/stickybot/faces/catalog.json"
     });
     match v {
         Value::Object(mut m) => {
@@ -233,7 +234,7 @@ pub fn invalid(body: &Map<String, Value>) -> String {
     {
         return "stick must be null or {\"address\", \"name\"}".into();
     }
-    String::new()
+    crate::faces::valid_config(body)
 }
 
 #[cfg(test)]

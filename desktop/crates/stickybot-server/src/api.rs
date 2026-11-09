@@ -102,6 +102,14 @@ pub const PORTED: &[&str] = &[
     "GET /api/ir/export",
     "POST /api/ir/import",
     "GET /api/ir/diag",
+    // face packages (faces.rs)
+    "GET /api/faces/catalog",
+    "GET /api/faces/preview/{id}/{side}",
+    "POST /api/faces/install",
+    "GET /api/faces/jobs/{id}",
+    "POST /api/faces/jobs/{id}/cancel",
+    "POST /api/faces/remove",
+    "POST /api/faces/use",
 ];
 
 /// The Python agent's endpoints that aren't here yet, by the phase that brings them.
@@ -173,6 +181,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/update/firmware/{updater}", post(update_firmware))
         .route("/api/update/jobs/{id}", get(job_events))
         .merge(crate::ir::routes())
+        .merge(crate::faces::routes())
         .fallback(not_ported)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -870,6 +879,11 @@ async fn job_events(State(st): State<Arc<AppState>>, Path(id): Path<String>) -> 
     let Some(job) = st.jobs.get(&id) else {
         return err(StatusCode::NOT_FOUND, "no such job");
     };
+    stream_job(job)
+}
+
+/// A job's events as server-sent events (firmware_api.py `stream_job`; face installs use it too).
+pub(crate) fn stream_job(job: Arc<crate::firmware::Job>) -> Response {
     let s = stream::unfold((job, 0usize, false), |(job, i, finished)| async move {
         if finished {
             return None;
