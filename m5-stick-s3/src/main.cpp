@@ -45,6 +45,7 @@
 #include "events.h"
 #include "ota.h"
 #include "faces/faces.h"
+#include "ir/ir.h"
 #include <HijelHID_BLEKeyboard.h>  // KEY_MOD_* constants
 
 constexpr uint32_t CPU_MHZ           = 80;
@@ -506,6 +507,11 @@ static void onMenu(menu::Action a) {
       ui::setBrightness(settings::brightnessPct());  // undo preview
       mode = Mode::STATUS;
       break;
+    case menu::Action::REMOTE:  // the IR remote screen: the menu's drafts are dropped
+      ui::setBrightness(settings::brightnessPct());
+      mode = Mode::STATUS;
+      ir::screenOpen();
+      break;
   }
   dirty = true;
 }
@@ -682,6 +688,7 @@ void setup() {
   status = readStatus();
   ota::setBusyCheck(otaBusy);
   faces::pkg::install::setBusyCheck(otaBusy);
+  ir::begin();
   ota::bootCheck();  // last: it may start the loop watchdog until a new firmware is confirmed
   Log.printf("ready %s fw %s — combo %s%s. Type 'help' for commands.\n", hid::name().c_str(),
                 FW_VERSION, comboToString(settings::combo()).c_str(), fromStandby ? " (woke from standby)" : "");
@@ -696,6 +703,7 @@ void loop() {
   netlog::loop();
   mic::loop();
   sound::loop();
+  ir::loop();
   pollSerial();
   if (otaLoop()) {
     delay(2);  // the update screen: no other screens, buttons or standby meanwhile
@@ -1012,6 +1020,22 @@ void loop() {
       lastInput = millis();
       dirty = true;
     }
+  }
+
+  // The IR remote screen (menu: Remote) or a learn started from the Mac: it owns the screen and buttons
+  if (mode == Mode::STATUS && !comboDown && !agentTalking && ir::screenActive()) {
+    float ax, ay, az;
+    motion::accel(ax, ay, az);
+    if (ir::screenLoop({aDown, aUp, A.isPressed(), bSingle, bDouble, bTriple, bHold, ax})) {
+      if (aDown || bDown) lastInput = millis();
+      delay(10);
+      return;
+    }
+    ui::setOrientation(shownScreen.flipped, shownScreen.side);
+    ignoreAUntilRelease = A.isPressed();
+    swallowB = B.isPressed();
+    page = ui::Page::HOME;
+    dirty = true;
   }
 
   if (mev == motion::Event::SHAKE && settings::shakeEscapes() && mode != Mode::MENU && hid::connected()) {

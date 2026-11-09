@@ -9,7 +9,7 @@ constexpr uint8_t  STANDBY_STEPS[] = {0, 5, 10, 30};
 constexpr uint16_t ENTER_STEPS[]   = {0, 500, 1000, 1500, 2000, 3000};
 
 enum Item {
-  MOD_FN, MOD_CTRL, MOD_OPTION, MOD_SHIFT, MOD_CMD, KEY, TEST, ENTER,
+  MOD_FN, MOD_CTRL, MOD_OPTION, MOD_SHIFT, MOD_CMD, KEY, TEST, REMOTE, ENTER,
   SLOT, BT, FORGET, STANDBY, SOUND, VOLUME, WMIC, M_LIFT, M_FACE, M_SHAKE, BRIGHT, HOME_FACE, CLOCK24, AUTOROT, LANDSCAPE, FLIP, WEB, DEV, POWER, SAVE, CANCEL, COUNT
 };
 
@@ -68,6 +68,7 @@ Action select() {
     case TEST:
       if (!draft_.combo.valid()) { emptyWarning = true; return Action::REDRAW; }
       return Action::TEST;
+    case REMOTE:  return Action::REMOTE;  // the IR remote screen (src/ir/screen.cpp)
     case ENTER: {
       size_t n = sizeof(ENTER_STEPS) / sizeof(ENTER_STEPS[0]), i = 0;
       while (i < n && ENTER_STEPS[i] != draft_.enterDelayMs) i++;
@@ -124,6 +125,7 @@ ui::MenuView view() {
     v.lines[i] = String(MODS[i].name) + ": " + ((draft_.combo.mods & MODS[i].bit) ? "ON" : "off");
   v.lines[KEY]     = String("Key: ") + KEYS[max(0, keyIndex(draft_.combo.key))].name;
   v.lines[TEST]    = "Test combo";
+  v.lines[REMOTE]  = "Remote (IR)";
   v.lines[ENTER]   = draft_.enterDelayMs ? String("Enter after: ") + String(draft_.enterDelayMs / 1000.0f, 1) + "s"
                                          : String("Enter after: off");
   v.lines[SLOT]    = String("Mac slot: ") + draft_.slot + (draft_.slot != originalSlot ? " *" : "");
@@ -155,6 +157,7 @@ ui::MenuView view() {
   else if (sel == DEV) v.hint = "USB: Wi-Fi on, OTA+logs";
   else if (sel == WMIC) v.hint = "A hold: Wispr mic by BT";
   else if (sel == HOME_FACE) v.hint = "Home screen look";
+  else if (sel == REMOTE) v.hint = "TV / AC: send, learn";
   else if (sel == LANDSCAPE) v.hint = draft_.autoRotate ? "Held sideways: wide" : "Needs auto-rotate";
   else if (sel == TEST || sel == BT || sel == FLIP || sel == WEB || sel == POWER || sel >= SAVE) v.hint = "A next  B select";
   return v;

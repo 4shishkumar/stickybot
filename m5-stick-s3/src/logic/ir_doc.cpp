@@ -6,9 +6,10 @@
 namespace irdoc {
 
 bool validCode(const std::string& code) {
-  static uint16_t scratch[ircodec::MAX_RAW];  // one at a time (the loop task)
+  if (code.size() >= 4096) return false;
+  std::vector<uint16_t> scratch(ircodec::MAX_RAW);
   ircodec::Parsed p;
-  return code.size() < 4096 && ircodec::parse(code.c_str(), p, scratch);
+  return ircodec::parse(code.c_str(), p, scratch.data());
 }
 
 int Device::find(const std::string& name) const {

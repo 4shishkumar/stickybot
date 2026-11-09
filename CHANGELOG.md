@@ -13,6 +13,22 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 ## [Unreleased]
 
 ### Added
+- **The stick is an IR remote (firmware 2.5.0).** It learns the buttons of your TV, air
+  conditioner or soundbar (menu → **Remote** → *+ Learn*, or the dashboard: press the button
+  twice; air conditioners once) and keeps them in its flash, up to 16 remotes of 48 buttons.
+  NEC (and extended), Samsung, LG, Sony 12/15/20, RC5, RC6 and Panasonic/Kaseikyo are
+  recognised; anything else (air conditioners' long state frames) is kept as raw timings.
+  The Remote screen sends them (A, hold to repeat; favourites first). Receiving and sending
+  use the ESP32's RMT peripheral (our own encoders/decoders with native tests: IRremoteESP8266's
+  release is written for the core-2 timer API, and neither it nor Arduino-IRremote receives with RMT). `@ir list|send|learn|
+  rm|rename|fav|diag` (PROTOCOL.md, *IR remote*); `@ir diag` checks the IR pins (G46 / G42).
+- **Remote, in the dashboard.** A new page: the remotes on the stick (send, star, rename,
+  delete), learning with live status, built-in codes for Samsung, LG, Sony and Philips TVs
+  that work without learning, import / export as JSON.
+- **"Turn off the TV".** Quick commands can press a remote button (`"ir": {"dev": "tv",
+  "btn": "power"}`); new phrases for TV power, volume and mute are added to your commands.
+  The brain gets `ir_list()` / `ir_send()` stick tools, so "set the AC to 24" picks the learned
+  button by its name.
 - **Face packages, the design.** A format for Home faces made of
   data (a manifest + small pixel-art images) that anyone can publish and the dashboard will
   install over Bluetooth without reflashing: `docs/faces/` (format, guidelines, catalog,
