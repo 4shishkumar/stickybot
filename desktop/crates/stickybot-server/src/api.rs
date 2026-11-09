@@ -56,6 +56,7 @@ pub const PORTED: &[&str] = &[
     "POST /api/new-chat",
     "GET /api/firmware",
     "POST /api/firmware/ota",
+    "POST /api/firmware/flash",
     "GET /api/firmware/jobs/{id}",
     "POST /api/firmware/jobs/{id}/cancel",
     "POST /api/wireless-mic/show",
@@ -74,20 +75,22 @@ pub const PORTED: &[&str] = &[
     "GET /api/events/history",
     "GET /api/events/kinds",
     "POST /api/claude-event",
+    "GET /api/logs",
+    "GET /api/update",
+    "POST /api/update/check",
+    "POST /api/update/agent",
+    "POST /api/update/firmware/{updater}",
+    "GET /api/update/jobs/{id}",
 ];
 
 /// The Python agent's endpoints that aren't here yet, by the phase that brings them.
 pub const NOT_PORTED: &[(&str, &str)] = &[
-    ("POST /api/firmware/flash", "firmware over USB (esptool)"),
     ("GET /api/onboarding", "setup wizard progress (the wizard keeps it in the browser meanwhile)"),
     ("POST /api/onboarding", "setup wizard progress"),
     ("GET /api/install", "setup page (#install)"),
     ("/api/install/*", "setup page steps and jobs"),
-    ("GET /api/logs", "log viewer (Logs)"),
     ("GET /api/brain", "brains (Claude Code / OpenRouter)"),
     ("/api/brain/*", "brains (OpenRouter key, models, test)"),
-    ("GET /api/update", "update check (releases)"),
-    ("/api/update/*", "updates (agent / firmware)"),
     ("GET /api/components", "installer components"),
     ("/api/components/*", "installer components"),
     ("POST /api/restart", "restart the agent"),
@@ -120,6 +123,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/clips/play", post(clip_play))
         .route("/api/firmware", get(firmware_info))
         .route("/api/firmware/ota", post(ota_update))
+        .route("/api/firmware/flash", post(usb_flash))
         .route("/api/firmware/jobs/{id}", get(job_events))
         .route("/api/firmware/jobs/{id}/cancel", post(job_cancel))
         .route("/api/wireless-mic/show", post(wireless_mic_show))
@@ -137,6 +141,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/events/history", get(event_history))
         .route("/api/events/kinds", get(event_kinds))
         .route("/api/claude-event", post(claude_event))
+        .route("/api/logs", get(logs_tail))
+        .route("/api/update", get(update_info))
+        .route("/api/update/check", post(update_check))
+        .route("/api/update/agent", post(update_agent))
+        .route("/api/update/firmware/{updater}", post(update_firmware))
+        .route("/api/update/jobs/{id}", get(job_events))
         .fallback(not_ported)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -362,16 +372,18 @@ async fn stick_proto(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json
         Ok(l) => l,
         Err(e) => return axum::Json(json!({"ok": false, "via": null, "reply": null, "error": e})),
     };
-    if st.link.connected() {
-        if let Some(reply) = st.link.request(line).await {
-            let ok = reply.get("ok").and_then(Value::as_bool).unwrap_or(true);
-            let error = reply.get("error").cloned().unwrap_or(Value::Null);
-            return axum::Json(json!({"ok": ok, "via": "ble", "reply": reply, "error": error}));
-        }
+    let ble = st.link.connected();
+    if ble && let Some(reply) = st.link.request(line).await {
+        let ok = reply.get("ok").and_then(Value::as_bool).unwrap_or(true);
+        let error = reply.get("error").cloned().unwrap_or(Value::Null);
+        return axum::Json(json!({"ok": ok, "via": "ble", "reply": reply, "error": error}));
+    }
+    // over USB (firmware_api.py `Stick.run`): when Bluetooth isn't there or didn't answer
+    let r = st.usb.run(line).await;
+    if ble && r["via"].is_null() && !st.usb.is_flashing() {
         return axum::Json(json!({"ok": false, "via": "ble", "reply": null, "error": "the stick didn't answer"}));
     }
-    axum::Json(json!({"ok": false, "via": null, "reply": null,
-                      "error": "no stick connected by Bluetooth (USB isn't in the Rust app yet)"}))
+    axum::Json(r)
 }
 
 async fn scan(State(st): State<Arc<AppState>>) -> Response {
@@ -474,6 +486,40 @@ async fn claude_event(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Jso
     let s = |k: &str| b.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let ev = crate::home::claude_finished(&st, elapsed, &s("cwd"), &s("prompt")).await;
     axum::Json(json!({"ok": true, "shown": ev.is_some()}))
+}
+
+/// The update status with the release notes, how this app is installed, the firmware updaters.
+async fn update_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    let cfg = st.cfg.lock().unwrap().clone();
+    axum::Json(st.updates.full(&cfg))
+}
+
+/// Checks now (lists releases, downloads the latest firmware) -> the same.
+async fn update_check(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    crate::updates::refresh_stick(&st).await;
+    let cfg = st.cfg.lock().unwrap().clone();
+    let r = st.updates.check(&cfg).await;
+    crate::updates::emit(&st);
+    axum::Json(r)
+}
+
+/// The app updating itself isn't ported (selfupdate.py).
+async fn update_agent(State(st): State<Arc<AppState>>) -> Response {
+    let cfg = st.cfg.lock().unwrap().clone();
+    let install = st.updates.full(&cfg)["install"].clone();
+    (StatusCode::CONFLICT, axum::Json(json!({"error": crate::updates::NO_SELF_UPDATE, "install": install})))
+        .into_response()
+}
+
+/// No extra firmware updaters here (Bluetooth and USB have their own endpoints).
+async fn update_firmware() -> Response {
+    err(StatusCode::NOT_FOUND, "no such firmware updater")
+}
+
+/// The log file's last `n` (300) lines, oldest first (server.py `logs`).
+async fn logs_tail(State(st): State<Arc<AppState>>, Query(q): Query<HistoryQuery>) -> axum::Json<Value> {
+    let n = q.n.unwrap_or(300).min(5000);
+    axum::Json(json!(crate::logs::tail(&st.paths.log(), n)))
 }
 
 /// The last `n` (50) requests, newest first (server.py `history`).
@@ -630,13 +676,32 @@ async fn clip_play(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<V
     axum::Json(json!({"ok": ok, "error": if ok { Value::Null } else { json!("stick not connected") }}))
 }
 
-/// The bundled firmware, sticks on USB (not in the Rust app: always empty), the connected stick.
+/// The bundled firmware, sticks on USB (with their versions), the connected stick.
 async fn firmware_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
     let bundled = st.firmware().first().map(crate::firmware::describe).unwrap_or(Value::Null);
-    axum::Json(json!({"bundled": bundled, "usb": [], "connected": crate::firmware::connected(&st.link).await}))
+    let usb = st.usb.sticks().await;
+    axum::Json(json!({"bundled": bundled, "usb": usb, "connected": crate::firmware::connected(&st.link).await}))
 }
 
 /// Starts a firmware update over Bluetooth: `{"force"}` -> `{"job"}`.
+/// Flashes the stick on USB with esptool: `{"port", "backup"}` -> `{"job"}` (firmware_api.py `flash`).
+async fn usb_flash(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    let b = body_obj(&body);
+    let port = b.get("port").and_then(Value::as_str).unwrap_or("").to_string();
+    let backup = b.get("backup").and_then(Value::as_bool).unwrap_or(false);
+    let st2 = st.clone();
+    let r = tokio::task::spawn_blocking(move || st2.usb.backend().ports())
+        .await
+        .map(|ports| ports.iter().any(|p| p.port == port));
+    if !matches!(r, Ok(true)) {
+        return err(StatusCode::BAD_REQUEST, &format!("{port} isn't an Espressif USB device (not a stick) — refusing"));
+    }
+    match crate::flasher::start(&st, &port, backup) {
+        Ok(job) => axum::Json(json!({"job": job})).into_response(),
+        Err((code, e)) => err(StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_REQUEST), &e),
+    }
+}
+
 async fn ota_update(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
     let force = body_obj(&body).get("force").and_then(Value::as_bool).unwrap_or(false);
     let t = st.ota_timings.lock().unwrap().clone();
@@ -875,7 +940,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), w.wait_for(|s| *s == LinkState::Paused)).await.unwrap().unwrap();
         let (s, v, _) = call(&app, req("GET", "/api/onboarding", None, None)).await;
         assert_eq!((s, v["missing"].as_bool()), (StatusCode::NOT_FOUND, Some(true)));
-        let (s, _, _) = call(&app, req("POST", "/api/firmware/flash", Some(json!({})), tok)).await;
+        let (s, _, _) = call(&app, req("POST", "/api/onboarding", Some(json!({})), tok)).await;
         assert_eq!(s, StatusCode::NOT_FOUND);
         let (_, v, _) = call(&app, req("GET", "/api/rust", None, None)).await;
         assert!(v["ported"].as_array().unwrap().iter().any(|e| e == "POST /api/stick/proto"));
@@ -1184,6 +1249,105 @@ mod tests {
         let (_, v, _) = call(&app, req("POST", "/api/wireless-mic/check", Some(json!({})), tok)).await;
         assert_eq!((v["ok"].as_bool(), v["state"].as_str()), (Some(false), Some("failed")));
         assert!(v["detail"].as_str().unwrap().contains("System Audio Recording"));
+    }
+
+    #[tokio::test]
+    async fn update_check_downloads_firmware_for_the_bluetooth_and_usb_buttons() {
+        let (app, st, _) = app("update", true).await;
+        st.updates.set_sources(Arc::new(|| {
+            let mut g = crate::releases::tests::FakeGitHub::default();
+            g.add_release("v2.2.0", "9.9.0", false);
+            vec![Box::new(g) as Box<dyn crate::releases::Source>]
+        }));
+        let tok = Some(st.token.as_str());
+        let (_, v, _) = call(&app, req("GET", "/api/update", None, None)).await;
+        assert_eq!((v["latest"].clone(), v["firmware_updaters"].clone()), (Value::Null, json!([])));
+        let (s, v, _) = call(&app, req("POST", "/api/update/check", Some(json!({})), tok)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["latest"]["firmware"], "9.9.0");
+        // the fake stick runs older firmware
+        assert_eq!((v["firmware_update"].as_bool(), v["title"].as_str()), (Some(true), Some("Stick firmware 9.9.0 available")));
+        let (_, v, _) = call(&app, req("GET", "/api/firmware", None, None)).await;
+        assert_eq!((v["bundled"]["version"].as_str(), v["bundled"]["source"].as_str()), (Some("9.9.0"), Some("release")));
+        let (_, v, _) = call(&app, req("GET", "/api/status", None, None)).await;
+        assert_eq!(v["update"]["available"], true);
+        let (s, v, _) = call(&app, req("POST", "/api/update/agent", Some(json!({})), tok)).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        assert!(v["error"].as_str().unwrap().contains("doesn't update itself"));
+    }
+
+    #[tokio::test]
+    async fn proto_falls_back_to_usb_and_usb_sticks_are_listed() {
+        let (app, st, fake) = app("usb", true).await;
+        let usb = crate::usb::FakeUsb::stick("/dev/cu.usbmodem9", "2.1.0");
+        st.usb.set_backend(usb.clone());
+        let tok = Some(st.token.as_str());
+        // Bluetooth first
+        let (_, v, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@state"})), tok)).await;
+        assert_eq!(v["via"], "ble");
+        // Bluetooth silent: the stick on USB answers
+        fake.set_silent(true);
+        let (_, v, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@state"})), tok)).await;
+        assert_eq!((v["via"].as_str(), v["reply"]["fw"].as_str()), (Some("usb"), Some("2.1.0")));
+        let (_, v, _) = call(&app, req("GET", "/api/firmware", None, None)).await;
+        assert_eq!(v["usb"], json!([{"port": "/dev/cu.usbmodem9", "serial": "SN1", "version": "2.1.0", "board": "m5stick-s3"}]));
+        // no stick on USB either: Bluetooth's answer
+        usb.ports.lock().unwrap().clear();
+        let (_, v, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@state"})), tok)).await;
+        assert_eq!((v["via"].as_str(), v["error"].as_str()), (Some("ble"), Some("the stick didn't answer")));
+    }
+
+    #[tokio::test]
+    async fn usb_flash_runs_esptool_as_a_job() {
+        let (app, st, _) = app("flash", false).await;
+        let usb = crate::usb::FakeUsb::stick("/dev/cu.usbmodem3", "2.1.0");
+        st.usb.set_backend(usb.clone());
+        let tool = Arc::new(crate::flasher::tests::FakeEsptool::default());
+        st.set_esptool(tool.clone());
+        *st.flash_timings.lock().unwrap() = crate::flasher::FlashTimings {
+            settle: Duration::ZERO,
+            poll: Duration::from_millis(1),
+            bootloader: Duration::from_millis(100),
+        };
+        let tok = Some(st.token.as_str());
+        let (s, v, _) = call(&app, req("POST", "/api/firmware/flash", Some(json!({"port": "/dev/cu.other"})), tok)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+        let (s, v, _) = call(&app, req("POST", "/api/firmware/flash", Some(json!({"port": "/dev/cu.usbmodem3"})), tok)).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        assert!(v["error"].as_str().unwrap().contains("no firmware"));
+        // a bundle on this Mac
+        let d = st.paths.home.join("firmware/local");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("app.bin"), vec![0xE9u8; 64]).unwrap();
+        std::fs::write(d.join("manifest.json"), json!({"version": "2.3.0", "parts": [{"file": "app.bin", "offset": "0x10000", "size": 64}]}).to_string()).unwrap();
+        let (s, v, _) = call(&app, req("POST", "/api/firmware/flash", Some(json!({"port": "/dev/cu.usbmodem3"})), tok)).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let job = st.jobs.get(v["job"].as_str().unwrap()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !job.is_done() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let evs = job.events_from(0);
+        assert_eq!(evs.last().unwrap()["ok"], true, "{evs:?}");
+        assert_eq!(tool.runs.lock().unwrap().len(), 1); // no backup asked
+        assert_eq!(*usb.touches.lock().unwrap(), vec!["/dev/cu.usbmodem3".to_string()]);
+        assert!(!st.usb.is_flashing());
+    }
+
+    #[tokio::test]
+    async fn the_log_page_reads_the_last_lines() {
+        let (app, st, _) = app("logs", false).await;
+        let (_, v, _) = call(&app, req("GET", "/api/logs", None, None)).await;
+        assert_eq!(v, json!([]));
+        let text: String = (0..400).map(|i| format!("12:00:00 x: line {i}\n")).collect();
+        std::fs::write(st.paths.log(), text).unwrap();
+        let (_, v, _) = call(&app, req("GET", "/api/logs?n=2", None, None)).await;
+        assert_eq!(v, json!(["12:00:00 x: line 398", "12:00:00 x: line 399"]));
+        let (_, v, _) = call(&app, req("GET", "/api/logs", None, None)).await;
+        assert_eq!(v.as_array().unwrap().len(), 300);
     }
 
     #[tokio::test]

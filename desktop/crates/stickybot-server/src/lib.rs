@@ -17,6 +17,8 @@ pub mod github;
 pub mod home;
 pub mod hub;
 pub mod mcp;
+pub mod flasher;
+pub mod logs;
 pub mod migrate;
 pub mod net;
 pub mod pet;
@@ -25,6 +27,9 @@ pub mod speak;
 pub mod speech;
 pub mod talk;
 pub mod weather;
+pub mod releases;
+pub mod updates;
+pub mod usb;
 pub mod wmic;
 
 use serde_json::{Map, Value, json};
@@ -100,6 +105,15 @@ pub struct AppState {
     pub wmic: wmic::WirelessMic,
     /// the home card, weather, feed, events, GitHub watcher, pet (home.rs)
     pub home: home::Home,
+    /// release checks + firmware downloads (`updates.rs`)
+    pub updates: updates::Updates,
+    /// the stick on USB: `@…` lines, the list with versions, flashing (`usb.rs`, `flasher.rs`).
+    /// With the fake stick there's no USB at all (tests never open a real port).
+    pub usb: usb::UsbSticks,
+    /// runs esptool for USB flashing (tests swap it: they never run the real one)
+    esptool: Mutex<Arc<dyn flasher::Esptool>>,
+    /// how long a USB flash waits for the bootloader (tests shorten it)
+    pub flash_timings: Mutex<flasher::FlashTimings>,
     /// the Python app's folder (read-only; see `migrate.rs`)
     pub import_from: Option<PathBuf>,
     /// reading replies aloud
@@ -118,6 +132,7 @@ impl AppState {
         let paths = config::Paths::new(&opts.home)?;
         paths.ensure().map_err(|e| format!("{}: {e}", paths.home.display()))?;
         let token = paths.token_value().map_err(|e| format!("token: {e}"))?;
+        let paths_home = paths.home.clone();
         let cfg = config::load(&paths);
         let fake = backend.is_fake();
         let commands = commands::Store::new(paths.commands());
@@ -168,6 +183,14 @@ impl AppState {
             ota_timings: Mutex::new(firmware::UpdateTimings::default()),
             wmic: wmic::WirelessMic::new(),
             home,
+            updates: updates::Updates::new(&paths_home),
+            usb: if fake {
+                usb::UsbSticks::new(Arc::new(usb::FakeUsb::default()))
+            } else {
+                usb::UsbSticks::default()
+            },
+            esptool: Mutex::new(Arc::new(flasher::SystemEsptool)),
+            flash_timings: Mutex::new(flasher::FlashTimings::default()),
             import_from: opts.import_from.clone(),
             speaker: speak::Speaker::default(),
             mcp: mcp::McpState::default(),
@@ -187,6 +210,14 @@ impl AppState {
     }
 
     /// Firmware bundles on this Mac, best first (`~/.stickybot-rs/firmware`, `$STICKYBOT_RS_FIRMWARE`).
+    pub fn esptool(&self) -> Arc<dyn flasher::Esptool> {
+        self.esptool.lock().unwrap().clone()
+    }
+
+    pub fn set_esptool(&self, t: Arc<dyn flasher::Esptool>) {
+        *self.esptool.lock().unwrap() = t;
+    }
+
     pub fn firmware(&self) -> Vec<Value> {
         let extra = std::env::var_os("STICKYBOT_RS_FIRMWARE").map(std::path::PathBuf::from);
         firmware::bundles(&firmware::firmware_root(&self.paths.home), extra.as_deref())
@@ -330,7 +361,7 @@ impl AppState {
             "github": self.home.github_status(),
             "stick_approvals": cfg.get("stick_approvals").cloned().unwrap_or(json!(true)),
             "wireless_mic": wireless_mic,
-            "update": {},
+            "update": self.updates.status(&cfg, false),
             "brain": brain_status,
             "app": {"name": "StickyBot (Rust)", "window": true, "rust": true, "fake_stick": self.fake},
         })
@@ -428,8 +459,15 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     let (home, port, token) = (state.paths.home.clone(), addr.port(), state.token.clone());
     claude.set_mcp(move || mcp::brain_config(&home, port, &token));
     state.set_brain(Arc::new(claude));
+    let weak = Arc::downgrade(&state);
+    logs::set_live(Some(Box::new(move |text| {
+        if let Some(st) = weak.upgrade() {
+            st.hub.emit("log", json!({"text": text}));
+        }
+    })));
     spawn_link_watcher(state.clone());
     talk::spawn(state.clone());
+    updates::spawn(state.clone());
     wmic::spawn(state.clone());
     home::spawn(state.clone());
     tokio::spawn(wmic::startup(state.clone())); // left-overs of a crashed run, then the tap check

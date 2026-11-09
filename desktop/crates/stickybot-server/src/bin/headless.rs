@@ -7,8 +7,8 @@ use stickybot_server::{Options, start};
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let mut opts = Options::from_env();
+    stickybot_server::logs::init(&opts.home.join("app.log")); // stderr + app.log + the Logs page
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {

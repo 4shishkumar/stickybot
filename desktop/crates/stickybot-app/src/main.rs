@@ -57,8 +57,8 @@ fn show_dashboard(app: &AppHandle) {
 }
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let opts = Options::from_env();
+    stickybot_server::logs::init(&opts.home.join("app.log")); // stderr + app.log + the Logs page
 
     let app = tauri::Builder::default()
         .setup(move |app| {

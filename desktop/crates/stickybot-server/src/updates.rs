@@ -1,0 +1,291 @@
+//! Update checks (a port of `updates.py`, the firmware part): is there a StickyBot release with
+//! newer firmware than the connected stick's? Checked 20 s after start-up and then every 24 h
+//! (config `update_check`), on `update_channel`. A check lists the releases (`releases.rs`) and
+//! downloads the latest release's firmware into `~/.stickybot-rs/firmware/<version>/` when it
+//! isn't there yet, so "Update over Bluetooth" / "Update via USB" work straight away.
+//!
+//! Not ported: the app updating itself (`selfupdate.py`: the Rust app is built from the repo for
+//! now; `agent_update` is always false and `POST /api/update/agent` says so), and the "Update vX
+//! ready" toast on the stick (needs the events notifier). State: `~/.stickybot-rs/updates.json`.
+
+use crate::releases::{self, ReleaseError, Source};
+use serde_json::{Map, Value, json};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+pub const CHECK_EVERY: Duration = Duration::from_secs(24 * 3600);
+pub const FIRST_CHECK: Duration = Duration::from_secs(20);
+pub const TICK: Duration = Duration::from_secs(60);
+pub const NO_SELF_UPDATE: &str = "the Rust app doesn't update itself yet — build it from the repo (desktop/README.md)";
+
+/// Where releases come from (tests swap it for a fake GitHub).
+pub type Sources = Arc<dyn Fn() -> Vec<Box<dyn Source>> + Send + Sync>;
+
+pub fn channel(cfg: &Map<String, Value>) -> String {
+    match cfg.get("update_channel").and_then(Value::as_str) {
+        Some(c) if releases::CHANNELS.contains(&c) => c.to_string(),
+        _ => "stable".into(),
+    }
+}
+
+#[derive(Default)]
+struct State {
+    checking: bool,
+    ran: bool,
+    error: String,
+    note: String,
+    checked_at: f64,
+    /// a release summary + "firmware" (its firmware version)
+    latest: Option<Value>,
+    stick_fw: Option<String>,
+}
+
+pub struct Updates {
+    path: PathBuf,
+    firmware_root: PathBuf,
+    repo: String,
+    sources: Mutex<Sources>,
+    s: Mutex<State>,
+    lock: tokio::sync::Mutex<()>,
+}
+
+impl Updates {
+    pub fn new(home: &std::path::Path) -> Self {
+        let path = home.join("updates.json");
+        let mut s = State::default();
+        if let Some(v) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
+            s.checked_at = v.get("checked_at").and_then(Value::as_f64).unwrap_or(0.0);
+            s.latest = v.get("latest").filter(|l| l.is_object()).cloned();
+        }
+        let repo = releases::repo();
+        let r2 = repo.clone();
+        Self {
+            path,
+            firmware_root: crate::firmware::firmware_root(home),
+            repo,
+            sources: Mutex::new(Arc::new(move || releases::sources(&r2))),
+            s: Mutex::new(s),
+            lock: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    pub fn set_sources(&self, s: Sources) {
+        *self.sources.lock().unwrap() = s;
+    }
+
+    fn save(&self) {
+        let s = self.s.lock().unwrap();
+        let v = json!({"checked_at": s.checked_at, "latest": s.latest});
+        if let Err(e) = std::fs::write(&self.path, serde_json::to_string_pretty(&v).unwrap_or_default()) {
+            log::warn!("couldn't save {}: {e}", self.path.display());
+        }
+    }
+
+    pub fn set_stick_fw(&self, v: Option<String>) {
+        if v.is_some() {
+            self.s.lock().unwrap().stick_fw = v;
+        }
+    }
+
+    /// updates.py `status` (+ the notes with `notes`).
+    pub fn status(&self, cfg: &Map<String, Value>, notes: bool) -> Value {
+        let s = self.s.lock().unwrap();
+        let lat = s.latest.clone();
+        let fw = lat.as_ref().and_then(|l| l.get("firmware")).and_then(Value::as_str).map(str::to_string);
+        let firmware_update = fw.is_some() && s.stick_fw.is_some() && releases::newer(fw.as_deref(), s.stick_fw.as_deref());
+        let title = if firmware_update { format!("Stick firmware {} available", fw.unwrap_or_default()) } else { String::new() };
+        let latest = lat.map(|mut l| {
+            if !notes && let Some(o) = l.as_object_mut() {
+                o.remove("notes");
+            }
+            l
+        });
+        json!({"enabled": cfg.get("update_check").and_then(Value::as_bool) != Some(false),
+               "channel": channel(cfg), "checking": s.checking,
+               "checked_at": if s.checked_at > 0.0 { json!(s.checked_at) } else { Value::Null },
+               "error": s.error, "note": s.note,
+               "current": {"agent": env!("CARGO_PKG_VERSION"), "firmware": s.stick_fw},
+               "latest": latest, "agent_update": false, "firmware_update": firmware_update,
+               "available": firmware_update, "title": title})
+    }
+
+    /// `GET /api/update`: the status with notes, how this app is installed, the updaters.
+    pub fn full(&self, cfg: &Map<String, Value>) -> Value {
+        let mut st = self.status(cfg, true);
+        st["install"] = json!({"kind": "rust", "path": std::env::current_exe().ok(), "can_update": false,
+                               "why": NO_SELF_UPDATE, "head": null, "branch": null,
+                               "instructions": ["cd desktop/crates/stickybot-app && cargo tauri build --bundles app"]});
+        // Bluetooth has its own button (POST /api/firmware/ota), USB too: no other updaters
+        st["firmware_updaters"] = json!([]);
+        st
+    }
+
+    /// A check is due: on, and not yet since start-up, or the last one was 24 h ago.
+    pub fn due(&self, cfg: &Map<String, Value>) -> bool {
+        if cfg.get("update_check").and_then(Value::as_bool) == Some(false) {
+            return false;
+        }
+        let s = self.s.lock().unwrap();
+        !s.ran || crate::hub::now() - s.checked_at >= CHECK_EVERY.as_secs_f64()
+    }
+
+    /// (blocking) the latest release + its firmware, downloaded.
+    fn fetch(srcs: Vec<Box<dyn Source>>, repo: &str, chan: &str, root: &std::path::Path) -> Result<(Value, String), ReleaseError> {
+        let (rel, src) = releases::latest(&srcs, repo, chan)?;
+        let mut info = rel.summary();
+        info["firmware"] = Value::Null;
+        if rel.assets.contains_key(releases::MANIFEST) {
+            match releases::download_firmware(&rel, src, root, &|l| log::info!("{l}")) {
+                Ok((_, m)) => info["firmware"] = m["version"].clone(),
+                Err(e) => {
+                    log::warn!("firmware of {}: {e}", rel.tag);
+                    return Ok((info, format!("couldn't get its firmware: {e}")));
+                }
+            }
+        }
+        Ok((info, String::new()))
+    }
+
+    /// Checks now (one at a time) -> the full status.
+    pub async fn check(&self, cfg: &Map<String, Value>) -> Value {
+        let _g = self.lock.lock().await;
+        self.s.lock().unwrap().checking = true;
+        let chan = channel(cfg);
+        let (srcs, repo, root) = ((self.sources.lock().unwrap())(), self.repo.clone(), self.firmware_root.clone());
+        let c2 = chan.clone();
+        let r = tokio::task::spawn_blocking(move || Self::fetch(srcs, &repo, &c2, &root)).await;
+        {
+            let mut s = self.s.lock().unwrap();
+            match r {
+                Ok(Ok((info, note))) => {
+                    log::info!("update check ({chan}): latest {} (firmware {})", info["tag"], info["firmware"]);
+                    s.latest = Some(info);
+                    s.note = note;
+                    s.error.clear();
+                }
+                Ok(Err(ReleaseError::NoRelease(e))) => {
+                    log::info!("update check ({chan}): {e}");
+                    s.latest = None;
+                    s.note = e;
+                    s.error.clear();
+                }
+                Ok(Err(e)) => {
+                    log::warn!("update check failed: {e}");
+                    s.error = e.to_string();
+                }
+                Err(e) => s.error = format!("unexpected error: {e}"),
+            }
+            s.checking = false;
+            s.ran = true;
+            s.checked_at = crate::hub::now();
+        }
+        self.save();
+        self.full(cfg)
+    }
+}
+
+/// The check loop: 20 s after start-up, then whenever due (and the stick's version on the way).
+pub fn spawn(st: Arc<crate::AppState>) {
+    let weak = Arc::downgrade(&st);
+    drop(st);
+    tokio::spawn(async move {
+        tokio::time::sleep(FIRST_CHECK).await;
+        let mut asked = None::<tokio::time::Instant>;
+        loop {
+            let Some(st) = weak.upgrade() else { return };
+            if st.link.connected() && asked.is_none_or(|t| t.elapsed() >= Duration::from_secs(3600)) {
+                asked = Some(tokio::time::Instant::now());
+                refresh_stick(&st).await;
+            }
+            let cfg = st.cfg.lock().unwrap().clone();
+            if st.updates.due(&cfg) {
+                st.updates.check(&cfg).await;
+                emit(&st);
+            }
+            drop(st);
+            tokio::time::sleep(TICK).await;
+        }
+    });
+}
+
+/// The connected stick's firmware version, for "Stick firmware X available".
+pub async fn refresh_stick(st: &crate::AppState) {
+    let c = crate::firmware::connected(&st.link).await;
+    st.updates.set_stick_fw(c.get("version").and_then(Value::as_str).map(str::to_string));
+}
+
+/// The `update` event for the banner.
+pub fn emit(st: &crate::AppState) {
+    let cfg = st.cfg.lock().unwrap().clone();
+    let s = st.updates.status(&cfg, false);
+    let mut ev = Map::new();
+    for k in ["available", "title", "agent_update", "firmware_update", "error", "note"] {
+        ev.insert(k.into(), s[k].clone());
+    }
+    st.hub.emit("update", Value::Object(ev));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::releases::tests::FakeGitHub;
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("stickybot-upd-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn fake(f: impl Fn() -> FakeGitHub + Send + Sync + 'static) -> Sources {
+        Arc::new(move || vec![Box::new(f()) as Box<dyn Source>])
+    }
+
+    #[tokio::test]
+    async fn a_check_downloads_the_firmware_and_compares_with_the_stick() {
+        let home = tmp("check");
+        let u = Updates::new(&home);
+        u.set_sources(fake(|| {
+            let mut g = FakeGitHub::default();
+            g.add_release("v2.2.0", "2.3.0", false);
+            g.add_release("v2.3.0-beta.1", "2.4.0", true);
+            g
+        }));
+        let mut cfg = crate::config::defaults();
+        assert!(u.due(&cfg));
+        let s = u.check(&cfg).await;
+        assert_eq!((s["latest"]["tag"].as_str(), s["latest"]["firmware"].as_str()), (Some("v2.2.0"), Some("2.3.0")));
+        assert_eq!(s["latest"]["notes"], "notes for v2.2.0");
+        assert_eq!((s["available"].as_bool(), s["install"]["can_update"].as_bool()), (Some(false), Some(false)));
+        assert!(home.join("firmware/2.3.0/app.bin").exists());
+        assert!(!u.due(&cfg));
+        // the stick runs older firmware: an update is offered
+        u.set_stick_fw(Some("2.2.1".into()));
+        let st = u.status(&cfg, false);
+        assert_eq!((st["firmware_update"].as_bool(), st["title"].as_str()), (Some(true), Some("Stick firmware 2.3.0 available")));
+        assert!(st["latest"].get("notes").is_none());
+        // beta: the prerelease
+        cfg.insert("update_channel".into(), json!("beta"));
+        let s = u.check(&cfg).await;
+        assert_eq!(s["latest"]["firmware"], "2.4.0");
+        // remembered across restarts
+        let again = Updates::new(&home);
+        assert_eq!(again.status(&cfg, false)["latest"]["tag"], "v2.3.0-beta.1");
+        cfg.insert("update_check".into(), json!(false));
+        assert!(!again.due(&cfg));
+    }
+
+    #[tokio::test]
+    async fn no_release_and_errors_are_reported() {
+        let home = tmp("err");
+        let u = Updates::new(&home);
+        u.set_sources(fake(FakeGitHub::default));
+        let cfg = crate::config::defaults();
+        let s = u.check(&cfg).await;
+        assert_eq!((s["note"].as_str(), s["error"].as_str()), (Some(releases::NO_RELEASE), Some("")));
+        u.set_sources(fake(|| FakeGitHub { fail_json: Some("offline".into()), ..Default::default() }));
+        let s = u.check(&cfg).await;
+        assert!(s["error"].as_str().unwrap().contains("offline"));
+    }
+}

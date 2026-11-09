@@ -121,7 +121,7 @@ pub struct Job {
 }
 
 impl Job {
-    fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         let mut b = [0u8; 4];
         getrandom::fill(&mut b).expect("system randomness");
         Arc::new(Self {
@@ -138,7 +138,7 @@ impl Job {
         self.changed.notify_waiters();
     }
 
-    fn finish(&self, e: Value) {
+    pub(crate) fn finish(&self, e: Value) {
         self.events.lock().unwrap().push(e);
         *self.done.lock().unwrap() = true;
         self.changed.notify_waiters();
@@ -180,7 +180,7 @@ impl Jobs {
     pub fn busy(&self) -> bool {
         self.jobs.lock().unwrap().values().any(|j| !j.is_done())
     }
-    fn add(&self, j: Arc<Job>) {
+    pub(crate) fn add(&self, j: Arc<Job>) {
         self.jobs.lock().unwrap().insert(j.id.clone(), j);
     }
 }
