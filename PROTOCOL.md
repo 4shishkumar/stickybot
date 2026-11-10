@@ -216,6 +216,41 @@ The agent may also send the Hardware Buddy `{"cmd":"status"}` over this link (th
 | board → Mac | `{"src":"agent","evt":"wispr","state":"stop"}` after the last audio frame (also after a press cancelled before `ready`) |
 | board → Mac | `{"src":"agent","evt":"usb","mounted":true\|false}` — plugged into a computer that enumerated its USB device (firmware 1.7.1+): when it changes, to a new agent, and every 20 s with the hellos; `usbMounted` in `@state` |
 | Mac → board | `{"src":"agent","state":"thinking"\|"working"\|"done"\|"error","heard":"…","text":"…"}` — shown on screen. While Claude writes, repeated `working` messages carry the answer so far (≤ ~3 per second, ≤ 300 characters); `done` (with its chime) follows once |
+| Mac → board | `"rid":n,"parts":k` in a `done` whose answer is longer than its 300 characters (Mac apps after 2.3.2): the whole answer follows in `k` parts, see *The reply view* below |
+| Mac → board | `{"src":"agent","reply":{"rid":n,"i":0…k-1,"t":"…"}}` — one part of the whole answer, in order right after its `done` |
+| Mac → board | `"speak":true` in the hello (Mac apps after 2.3.2) — it reads the last answer aloud when the board asks |
+| board → Mac | `{"src":"agent","evt":"speak","what":"last"\|"stop"}` — the reply view's **hold A** (firmware 2.6.0): read the last answer aloud / stop |
+| Mac → board | `{"src":"agent","speech":"on"\|"off"}` — reading aloud started / ended (any reading: asked on the board, or the automatic *Read replies aloud*) |
+| Mac → board | `{"src":"agent","bye":true}` — the agent is going: paused, another board picked, or quitting (Mac apps after 2.3.2). The board shows the agent offline at once; without it, only once the hellos have stopped for 25 s (the Bluetooth link itself stays up for the keyboard) |
+
+**The reply view** (firmware 2.6.0, Mac apps after 2.3.2): after `done` the board shows the whole answer
+to read. The agent sends it when the answer (as the board can draw it) is longer than the 300
+characters `done` carries: `done` gets `"rid"` (a number, new for each answer) and `"parts"`, then
+`{"reply":{"rid","i","t"}}` messages follow, `i` from 0, each `t` at most 480 bytes of UTF-8 (cut
+between characters), together at most 3000 bytes. The text keeps paragraphs (`\n`, a blank line
+between them) and list items (`• `); markdown marks and code fences are dropped (the code stays),
+characters outside the stick's fonts are transliterated (as for `text`). Each part is one JSON
+line, so the link's usual 180-byte writes carry it and the board's line limit (4 KB) is never
+near; nothing else waits for them. The board keeps up to 3072 bytes; it shows the 300 characters
+of `done` until the last part is in, and keeps them if a part is missing (an `i` out of order).
+A new `done` or `thinking` starts over.
+
+On the board (logic/actions.cpp, `docs/CONTEXT-ACTIONS.md`): **A** = the next page (back to the
+top after the last), **hold A** = `{"evt":"speak","what":"last"}`, again while it reads = `"stop"`
+(shown only when the hello said `"speak":true`), **tilt** forward / back = scroll, **B** or a
+**shake** = close (also stops the reading), **hold B** = talk as everywhere. A is not the key
+combo while the reply view shows. It stays 60 s after the last touch (and while it reads), then
+Home. The board shows "Reading aloud" between `speech` `on` and `off`; asked and not answered
+within 8 s, it goes back.
+
+The agent reads the answer whole for `"what":"last"` (sentence by sentence; `speak_max_words` only
+limits the automatic reading), through the speaker the *Read replies aloud* output setting picks
+(the stick's, or the Mac's when it isn't connected). Nothing to read: it answers `"speech":"off"`.
+
+**Older boards and agents.** Firmware before 2.6.0 takes `reply`, `speech` and `bye` messages
+(no `"state"`) for hellos: nothing changes on its screen (a `bye` then keeps the agent "ready" for
+its 25 s, as before); `rid` / `parts` in `done` are ignored and the 300 characters show as before.
+A Mac app up to 2.3.2 never says `"speak":true`, so the board offers no listen.
 
 Audio frames: 16 kHz mono IMA-ADPCM, ≤20 ms each, little-endian:
 `[seq u16][predictor i16][step index u8][samples, 4 bits each, low nibble first]`.

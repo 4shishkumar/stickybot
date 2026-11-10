@@ -12,6 +12,35 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- **The whole reply on the stick (firmware 2.6.0).** After the agent answers, the stick shows
+  all of it (up to 3 KB), not just the first 300 characters: **A** turns the page, **tilting**
+  the stick forward or back scrolls (it ignores small changes in how you hold it), a thumb on
+  the right and *2/5* at the top say where you are, **B** closes it. It stays for a minute after
+  the last touch, then Home. Short answers keep the done screen. The Mac apps (Python and Rust)
+  send the full text in parts after the answer.
+- **"Listen" on the stick.** On the reply, **hold A** and the Mac reads the answer aloud
+  (through the stick's speaker, or the Mac's, as *Read replies aloud* is set; the whole answer,
+  sentence by sentence), hold A again to stop. The stick shows *Reading aloud* while it plays.
+- **Button hints.** The reply, the agent's thinking / working screen, the talk screen and (for a
+  few seconds after the screen wakes) Home show what the buttons do at the bottom. Each screen's
+  buttons and gestures now come from one table (`logic/actions.cpp`) that also makes the hints.
+  [docs/CONTEXT-ACTIONS.md](docs/CONTEXT-ACTIONS.md) lists every screen's buttons and proposes
+  more screen-specific actions (media playing, approvals, the remotes).
+
+### Changed
+- **On the reply, A is the reader's** (next page / hold: listen), not the key combo; B or a shake
+  closes it as before, and also stops the reading. Hold B (talk), double B (unlock) and triple B
+  (Launcher) work everywhere as before.
+- **Long replies read aloud are no longer cut at 30 s**: the sentences go to the stick in clips
+  that fit its buffer (Python and Rust).
+
+### Fixed
+- **Pause / Quit showed on the stick only after ~25 s**: the Bluetooth link stays up for the
+  keyboard, so the stick waited for the missing hellos. The Mac apps now say goodbye
+  (`{"src":"agent","bye":true}`) before they disconnect for Pause or another stick, and when they
+  quit; firmware 2.6.0 shows the agent offline at once, and redraws at once when it comes back.
+
 ## [2.3.2] - 2026-11-10
 
 ### Changed
