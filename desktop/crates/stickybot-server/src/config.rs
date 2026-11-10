@@ -148,7 +148,7 @@ pub fn defaults() -> Map<String, Value> {
         "github": {"on": true, "interval_s": 120, "primary_repo": ""},
         "update_check": true,
         "update_channel": "stable",
-        "faces_catalog_url": "https://ashish-kumar-noon.github.io/stickybot/faces/catalog.json"
+        "faces_catalog_url": "https://4shishkumar.github.io/stickybot/faces/catalog.json"
     });
     match v {
         Value::Object(mut m) => {
@@ -170,8 +170,14 @@ pub fn load(paths: &Paths) -> Map<String, Value> {
     {
         cfg.extend(saved);
     }
+    // the repo moved (2.3.2), its Pages too: a saved (or imported) old catalog URL follows it
+    if cfg.get("faces_catalog_url").and_then(Value::as_str) == Some(OLD_FACES_CATALOG_URL) {
+        cfg.insert("faces_catalog_url".into(), defaults()["faces_catalog_url"].clone());
+    }
     cfg
 }
+
+pub const OLD_FACES_CATALOG_URL: &str = "https://ashish-kumar-noon.github.io/stickybot/faces/catalog.json";
 
 pub fn save(paths: &Paths, cfg: &Map<String, Value>) -> std::io::Result<()> {
     let tmp = paths.home.join("config.json.tmp");
@@ -268,6 +274,18 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(fs::metadata(p.token()).unwrap().permissions().mode() & 0o777, 0o600);
         }
+    }
+
+    #[test]
+    fn the_old_catalog_url_follows_the_repo() {
+        let p = tmp("catalog");
+        let mut cfg = load(&p);
+        cfg.insert("faces_catalog_url".into(), json!(OLD_FACES_CATALOG_URL));
+        save(&p, &cfg).unwrap();
+        assert_eq!(load(&p)["faces_catalog_url"], json!(crate::faces::DEFAULT_CATALOG_URL));
+        cfg.insert("faces_catalog_url".into(), json!("https://example.com/my/catalog.json"));
+        save(&p, &cfg).unwrap();
+        assert_eq!(load(&p)["faces_catalog_url"], json!("https://example.com/my/catalog.json"));
     }
 
     #[test]

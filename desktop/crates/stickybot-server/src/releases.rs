@@ -16,7 +16,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub const DEFAULT_REPO: &str = "ashish-kumar-noon/stickybot";
+pub const DEFAULT_REPO: &str = "4shishkumar/stickybot";
 pub const API: &str = "https://api.github.com";
 pub const CHANNELS: &[&str] = &["stable", "beta"];
 pub const MANIFEST: &str = "manifest.json";

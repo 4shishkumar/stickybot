@@ -46,7 +46,7 @@ Environment: `STICKYBOT_RS_PORT` (8670), `STICKYBOT_RS_HOME` (`~/.stickybot-rs`)
 `STICKYBOT_RS_FAKE_STICK=1`, `STICKYBOT_RS_PYTHON_PORT` (8660), `STICKYBOT_RS_ALLOW_SHARED=1`
 (see *Safety*), `RUST_LOG=debug` (every message from the stick is logged at debug),
 `STICKYBOT_RS_MODELS` (`<home>/models`, the speech model), `STICKYBOT_RS_NO_STT=1` (don't download /
-load it), `STICKYBOT_RS_FIRMWARE` (a firmware bundle folder), `STICKYBOT_RS_REPO` (`ashish-kumar-noon/stickybot`, where releases come from), `STICKYBOT_RS_ESPTOOL` (the esptool to flash with; else `esptool` on PATH / Homebrew, else `python3 -m esptool`), `STICKYBOT_RS_SOUNDS`
+load it), `STICKYBOT_RS_FIRMWARE` (a firmware bundle folder), `STICKYBOT_RS_REPO` (`4shishkumar/stickybot`, where releases come from), `STICKYBOT_RS_ESPTOOL` (the esptool to flash with; else `esptool` on PATH / Homebrew, else `python3 -m esptool`), `STICKYBOT_RS_SOUNDS`
 (`<home>/sounds`, sound packs), `STICKYBOT_RS_IMPORT_FROM` (`~/.stick-agent`, read-only: what
 *Import from StickyBot* copies), `STICKYBOT_RS_AUDIO_E2E=1` (runs the wireless-mic test against real
 Core Audio).

@@ -36,7 +36,7 @@ pub const CONNECT: Duration = Duration::from_secs(10);
 pub const READ: Duration = Duration::from_secs(60);
 pub const MODELS_TTL: Duration = Duration::from_secs(600);
 pub const BASE_URL: &str = "https://openrouter.ai/api/v1";
-pub const REFERER: &str = "https://github.com/ashish-kumar-noon/stickybot";
+pub const REFERER: &str = "https://github.com/4shishkumar/stickybot";
 pub const LABEL: &str = "OpenRouter";
 
 /// Fast, cheap models that can call tools, in order of preference (openai_brain.py `PREFERRED`).

@@ -35,7 +35,7 @@ use std::time::Duration;
 use stick_link::ota::{self, Emit, Family, Image, OtaError, Sender, Timings, Words};
 use stick_link::{Backend, Link};
 
-pub const DEFAULT_CATALOG_URL: &str = "https://ashish-kumar-noon.github.io/stickybot/faces/catalog.json";
+pub const DEFAULT_CATALOG_URL: &str = "https://4shishkumar.github.io/stickybot/faces/catalog.json";
 /// The first firmware with the face engine (`pkgFaces` in `@state`).
 pub const MIN_FIRMWARE: &str = "2.4.0";
 /// catalog.json `"catalog"` this app understands
