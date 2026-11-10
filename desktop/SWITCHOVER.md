@@ -59,15 +59,28 @@ Login Items → *Allow in the Background* → **StickyBot** off.
 Nothing here changes `~/.stick-agent/`, the Keychain, Wispr Flow or `~/.claude/settings.json`
 (except the optional step 9, which asks first and keeps a backup).
 
-1. **Build and install** the signed app: `STICKYBOT_SIGNING_IDENTITY=<SHA-1> desktop/scripts/build-app.sh`,
-   then copy `desktop/target/release/bundle/macos/StickyBot (Rust).app` to `/Applications` (the
-   hooks of step 9 point at this path; don't move it afterwards).
+1. **Install** the app in `/Applications` (the hooks of step 9 point at this path; don't move it
+   afterwards). Either download it: `StickyBot-<version>-macos-arm64.zip` from the
+   [latest release](https://github.com/4shishkumar/stickybot/releases/latest), as in
+   [Install the Mac app](../README.md#install-the-mac-app) (signed ad hoc: the first open needs
+   right-click → Open, and each new download asks for the permissions again). Or build it signed
+   with your own identity, so the permissions survive updates:
+   `STICKYBOT_SIGNING_IDENTITY=<SHA-1> desktop/scripts/build-app.sh`, then copy
+   `desktop/target/release/bundle/macos/StickyBot.app` to `/Applications`. (The Python app's bundle
+   is `~/Applications/StickyBot.app`, another folder: both are called StickyBot in Spotlight; the
+   Rust one is the one in `/Applications`.)
 2. **Import the settings** with both apps running (the Rust app on 8670, holding off the stick):
    Rust menu bar → *Open StickyBot (Rust)* → Settings → *Import from StickyBot* (`POST /api/import`).
    It takes the stick, GitHub (primary repo), brain / model, wireless mic, sounds, events and every
-   other shared setting, the voice commands, sound packs, history, the pet, the GitHub watcher's
-   state and Claude's `CLAUDE.md`; this app's replaced files are kept as `*.before-import`. On a
-   first start with an empty `~/.stickybot-rs/` this happens on its own.
+   other shared setting, the voice commands, sound packs, the GitHub watcher's state and Claude's
+   `CLAUDE.md` (this app's replaced files are kept as `*.before-import`), and **merges** the request
+   history, the events log and the pet with this app's own: the histories line up by time with no
+   request twice, and the pet's XP, PRs, builds, Claude tasks, releases and game plays add up (see
+   *Importing* in [README.md](README.md)). On a first start with an empty `~/.stickybot-rs/` this
+   happens on its own. Importing again is safe: the pet only gets what the Python app earned since
+   the last import, and the history only the new requests. Do it once more right after step 3, so
+   what the Python app did meanwhile comes over too (settings and commands: the Python app's win
+   again, so do it before you change them here).
 3. **Stop the Python app and keep it from coming back** (it stays installed):
    1. Python menu bar icon → **Quit StickyBot** (exit 0: launchd leaves it stopped).
    2. In a terminal:
@@ -89,7 +102,7 @@ Nothing here changes `~/.stick-agent/`, the Keychain, Wispr Flow or `~/.claude/s
    and the window say **StickyBot** (no "(Rust)"), and the "Python agent has the stick" check is
    off. macOS may ask for Bluetooth once more if this is the first signed build.
 6. **Start at login**: Settings → *Start at login* on. If it says "needs approval", allow
-   StickyBot (Rust) in System Settings → General → Login Items.
+   StickyBot in System Settings → General → Login Items.
 7. **Check**: the stick connects (*agent ready*; the menu says "Ready — hold B on the stick" with
    the eyes icon); hold B and ask something (the icon fills while listening); run a Claude Code tool
    that needs approval in a terminal (the icon gets its dot, the menu says "Waiting for approval
@@ -100,7 +113,7 @@ Nothing here changes `~/.stick-agent/`, the Keychain, Wispr Flow or `~/.claude/s
 8. **Log out and in** once: only the Rust app comes up (one icon), on 8660.
 9. *(Optional, asks before it changes `~/.claude/settings.json`; keeps a dated backup)* Setup →
    **Claude Code hooks**: replaces the Python hooks (`<venv>/python …/hook.py`,
-   `…/claude_hooks.py`) with this app's (`'/Applications/StickyBot (Rust).app/Contents/MacOS/stickybot-rs' --hook …`).
+   `…/claude_hooks.py`) with this app's (`/Applications/StickyBot.app/Contents/MacOS/stickybot-rs --hook …`).
    Until then the Python hooks keep working (they post to 8660 with the same token), but they
    need the Python venv: don't delete `mac-agent/.venv` (or wherever the installer put it) before
    this step.

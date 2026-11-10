@@ -1,5 +1,11 @@
 # StickyBot desktop (Rust + Tauri 2)
 
+**Just want the app?** Download `StickyBot-<version>-macos-arm64.zip` from the
+[latest release](https://github.com/4shishkumar/stickybot/releases/latest) and follow
+[Install the Mac app](../README.md#install-the-mac-app) (it's unsigned: the first open needs
+right-click → Open). Coming from the Python app: [SWITCHOVER.md](SWITCHOVER.md). The rest of this
+page is for building and working on it.
+
 The rewrite of StickyBot's Mac app (`mac-agent/`, Python) in Rust. **Phase 1** runs *next to* the
 Python agent and replaces nothing: its own port (**8670**, Python: 8660), its own folder
 (**`~/.stickybot-rs/`**, never `~/.stick-agent/`), its own bundle id (**`com.stickybot.rs`**).
@@ -18,7 +24,10 @@ Every endpoint the Python app serves (incl. feature/faces-2.4 and the 2.5.0 bran
 ## Run it
 
 Needs Rust (stable, edition 2024) and, for the app bundle, the Tauri CLI
-(`cargo install tauri-cli --version "^2" --locked`).
+(`cargo install tauri-cli --version 2.12.4 --locked`, the one the release workflow uses). The first
+build downloads sherpa-onnx's prebuilt static libraries (~20 MB, from k2-fsa's GitHub release;
+`SHERPA_ONNX_ARCHIVE_DIR=<folder with the .tar.bz2>` uses a copy you have). The speech model is not
+part of the build: the app downloads it on its first start.
 
 ```sh
 cd desktop
@@ -30,10 +39,12 @@ open http://localhost:8670/#stick
 # the menu bar app (tray icon → Open StickyBot (Rust)); add STICKYBOT_RS_FAKE_STICK=1 for the fake stick
 cd crates/stickybot-app && cargo tauri dev
 
-# the bundle: target/release/bundle/macos/StickyBot (Rust).app
-cd crates/stickybot-app && cargo tauri build --bundles app
+# the bundle: target/release/bundle/macos/StickyBot.app, signed ad hoc (what the release ships)
+scripts/build-app.sh
 # ... signed with a stable identity (permissions survive rebuilds): see SWITCHOVER.md
 STICKYBOT_SIGNING_IDENTITY=<sha1> scripts/build-app.sh
+# ... with the release's version in the bundle (default: tauri.conf.json's)
+STICKYBOT_VERSION=2.4.0 scripts/build-app.sh
 
 cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p stick-link --example scan        # read-only scan for sticks (never connects)
@@ -145,10 +156,19 @@ never written, moved or deleted there; a test checks every byte and mtime):
   Not taken: `stt_model` (a different speech model here), removed keys (`wispr_fallback_mic`), the
   token (each app has its own).
 - `commands.json` (your voice commands, with their real repo URLs), `sounds/<pack>/*` (sound files
-  only; a clip already here is kept), `history.jsonl` (same format; merged in time order, no
-  duplicates; unknown lines skipped), `workspace/CLAUDE.md` (if you changed it), `pet.json` and `github_state.json` (first start: unless
-this app's pet already made progress; explicit: they win, `*.before-import` kept), `events.jsonl`
-(merged like the history).
+  only; a clip already here is kept), `history.jsonl` (same format; merged with this app's in time
+  order, one line per request: the same time `t` is the same request, whichever app wrote the
+  line; unknown lines skipped), `workspace/CLAUDE.md` (if you changed it), `events.jsonl` (merged
+  like the history, by event `id`), `github_state.json` (first start: unless this app has its own;
+  explicit: it wins, `*.before-import` kept).
+- `pet.json`: **merged** with this app's pet when both made progress (`migrate::merge_pet`): XP,
+  merged PRs, green builds, Claude tasks, releases, today's merges and game plays add up; the towers
+  of both; the later streak (joined with the other when they touch), the best of the bests and of
+  the game scores; the Python pet's city (`seed`). The Python pet's counters at that import are kept
+  in this app's `pet.json` (`python_import`), so importing again later adds only what happened in
+  the Python app since, and an import never counts anything twice (a pet copied whole by an older
+  version of the import: each counter is the larger one). This app's pet before the merge is kept
+  as `pet.json.before-import`.
 
 When: on the **first start** (no `config.json` and no `imported.json` in `~/.stickybot-rs/`; not with
 the fake stick) it fills the empty app: commands only if still the defaults. And on demand:

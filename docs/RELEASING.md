@@ -37,15 +37,38 @@ Ordering follows SemVer: `1.8.0-beta.2 < 1.8.0-beta.10 < 1.8.0-rc.1 < 1.8.0`.
    git push origin main v1.8.0
    ```
 6. The **Release** workflow ([.github/workflows/release.yml](../.github/workflows/release.yml))
-   runs on the tag, on one ubuntu-latest runner (about 5 minutes; PlatformIO is cached):
-   - checks that the tag matches the agent version and that CHANGELOG.md has its entry
-   - runs ruff and the agent tests (without the macOS-only libraries, which the tests don't need)
-   - runs the firmware's native unit tests and builds the firmware
-   - `m5-stick-s3/tools/make_release.py --out dist`: `bootloader.bin`, `partitions.bin`,
-     `boot_app0.bin`, `app.bin` + `manifest.json` (firmware and agent versions, git commit,
-     every part's offset / size / sha256, the flash parameters)
-   - creates the GitHub release "StickyBot vX.Y.Z" with those 5 assets and the changelog entry as notes,
-     as a prerelease when the tag has a `-` suffix
+   runs on the tag, in three jobs:
+   - **tests** (ubuntu-latest, about 5 minutes; PlatformIO is cached):
+     - checks that the tag matches the agent version and that CHANGELOG.md has its entry
+     - runs ruff and the agent tests (without the macOS-only libraries, which the tests don't need)
+     - runs the firmware's native unit tests and builds the firmware
+     - `m5-stick-s3/tools/make_release.py --out dist`: `bootloader.bin`, `partitions.bin`,
+       `boot_app0.bin`, `app.bin` + `manifest.json` (firmware and agent versions, git commit,
+       every part's offset / size / sha256, the flash parameters)
+   - **mac-app** (macos-15, Apple silicon; after *tests*): the Rust app in `desktop/`:
+     `cargo test --workspace`, `cargo clippy -D warnings`, then `desktop/scripts/build-app.sh`
+     with the release's version, **signed ad hoc** (no Apple certificate in CI: users open it with
+     right-click → Open, see the README's *Install the Mac app*), zipped with `ditto` as
+     `StickyBot-X.Y.Z-macos-arm64.zip` (~16 MB). Cached: cargo's registry and `target/`
+     (Swatinem/rust-cache), the Tauri CLI (`TAURI_CLI_VERSION`, installed with
+     `cargo install --locked` on a cache miss) and sherpa-onnx's prebuilt libraries (a pinned
+     URL, checked against `SHERPA_ONNX_SHA256`; the crate's own build script would download them
+     unchecked). The speech model is never bundled: the app downloads it on first start. About
+     15–25 minutes cold, 5–10 with the caches.
+   - **publish** (ubuntu-latest): `tools/release_tool.py add-app` lists the zip in
+     `manifest.json` (`"apps": [{name, platform, version, file, size, sha256}]`; agents read only
+     the firmware keys, so older ones are unaffected), then creates the GitHub release
+     "StickyBot vX.Y.Z" with the 5 firmware assets, the zip and the changelog entry as notes, as
+     a prerelease when the tag has a `-` suffix
+
+   **Trying the Mac build before tagging:** Actions → Release → *Run workflow* on a branch runs
+   only *mac-app* (no tag check, nothing published); the zip
+   (`StickyBot-<version>-dev.<commit>-macos-arm64.zip`) is the run's `mac-app` artifact.
+
+   Moving to a newer sherpa-onnx (`desktop/crates/stt/Cargo.toml`) or Tauri: update
+   `SHERPA_ONNX_VERSION` / `SHERPA_ONNX_ARCHIVE` / `SHERPA_ONNX_SHA256` (`shasum -a 256` of the
+   `osx-arm64-static-lib` archive from k2-fsa's release) or `TAURI_CLI_VERSION` at the top of the
+   workflow.
 
    Only the built-in `GITHUB_TOKEN` is used. If the workflow fails, fix the problem, delete
    the tag (`git tag -d v1.8.0 && git push origin :refs/tags/v1.8.0`) and the GitHub

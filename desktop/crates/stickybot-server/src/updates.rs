@@ -4,8 +4,8 @@
 //! downloads the latest release's firmware into `~/.stickybot-rs/firmware/<version>/` when it
 //! isn't there yet, so "Update over Bluetooth" / "Update via USB" work straight away.
 //!
-//! Not ported: the app updating itself (`selfupdate.py`: the Rust app is built from the repo for
-//! now; `agent_update` is always false and `POST /api/update/agent` says so), and the "Update vX
+//! Not ported: the app updating itself (`selfupdate.py`: the Rust app is downloaded from a
+//! release (`StickyBot-<version>-macos-arm64.zip`) or built from the repo; `agent_update` is always false and `POST /api/update/agent` says so), and the "Update vX
 //! ready" toast on the stick (needs the events notifier). State: `~/.stickybot-rs/updates.json`.
 
 use crate::releases::{self, ReleaseError, Source};
@@ -17,7 +17,8 @@ use std::time::Duration;
 pub const CHECK_EVERY: Duration = Duration::from_secs(24 * 3600);
 pub const FIRST_CHECK: Duration = Duration::from_secs(20);
 pub const TICK: Duration = Duration::from_secs(60);
-pub const NO_SELF_UPDATE: &str = "the Rust app doesn't update itself yet — build it from the repo (desktop/README.md)";
+pub const NO_SELF_UPDATE: &str =
+    "the Rust app doesn't update itself yet — download the new StickyBot-<version>-macos-arm64.zip from the release (README: Install the Mac app), or build it from the repo";
 
 /// Where releases come from (tests swap it for a fake GitHub).
 pub type Sources = Arc<dyn Fn() -> Vec<Box<dyn Source>> + Send + Sync>;
@@ -123,7 +124,8 @@ impl Updates {
         let mut st = self.status(cfg, true);
         st["install"] = json!({"kind": "rust", "path": std::env::current_exe().ok(), "can_update": false,
                                "why": NO_SELF_UPDATE, "head": null, "branch": null,
-                               "instructions": ["cd desktop/crates/stickybot-app && cargo tauri build --bundles app"]});
+                               "instructions": [format!("https://github.com/{}/releases/latest  (StickyBot-<version>-macos-arm64.zip)", self.repo),
+                                                "or from the repo: desktop/scripts/build-app.sh"]});
         // Bluetooth has its own button (POST /api/firmware/ota), USB too: no other updaters
         st["firmware_updaters"] = json!([]);
         st

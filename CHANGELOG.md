@@ -13,6 +13,17 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 ## [Unreleased]
 
 ### Added
+- **StickyBot.app, the Mac app in Rust, as a download.** Each release now carries
+  `StickyBot-<version>-macos-arm64.zip` (Apple silicon, macOS 13+), built by the release workflow
+  on GitHub Actions and listed in the release's `manifest.json` (`apps`, with its size and
+  sha256; older agents ignore it). Unzip it and move StickyBot.app to /Applications. It is
+  **unsigned** (signed ad hoc, not notarized): open it the first time with right-click → **Open**
+  (on macOS 15 and later: System Settings → Privacy & Security → **Open Anyway**), or run
+  `xattr -dr com.apple.quarantine /Applications/StickyBot.app`. Each new version asks for
+  Bluetooth and System Audio Recording again. The speech model is not in the zip: the app downloads
+  it on its first start. See [Install the Mac app](README.md#install-the-mac-app). The Python app
+  (`install.sh`) is the legacy option for now; [desktop/SWITCHOVER.md](desktop/SWITCHOVER.md)
+  moves you over.
 - **The whole reply on the stick (firmware 2.6.0).** After the agent answers, the stick shows
   all of it (up to 3 KB), not just the first 300 characters: **A** turns the page, **tilting**
   the stick forward or back scrolls (it ignores small changes in how you hold it), a thumb on
@@ -43,6 +54,12 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   that fit its buffer (Python and Rust).
 
 ### Fixed
+- **Rust app, Import from StickyBot: the pet and the history now merge.** When the Rust app already
+  had a pet with progress of its own, the import kept it on a first start and replaced it with the
+  Python app's otherwise, so one side's XP, PRs and streak were lost. The two pets now add up (XP,
+  merged PRs, green builds, Claude tasks, releases, game plays; the longer streak, the best scores),
+  and importing again later adds only what the Python app earned since (never twice). The request
+  history merges by time, so a request both apps wrote (formatted differently) appears once.
 - **Pause / Quit showed on the stick only after ~25 s**: the Bluetooth link stays up for the
   keyboard, so the stick waited for the missing hellos. The Mac apps now say goodbye
   (`{"src":"agent","bye":true}`) before they disconnect for Pause or another stick, and when they
