@@ -9,7 +9,8 @@ served from Rust, a menu bar app, and (Phase 2) **hold B to talk** (on-device sp
 commands, Claude Code streamed to the stick), Claude Code **approvals** on the stick, **sound clips**,
 the **firmware update over Bluetooth** and the **wireless Wispr mic** (hold A: the stick's mic reaches
 Wispr Flow over Bluetooth, through a Core Audio tap), **face packages** (the faces catalog, installed over
-Bluetooth), the stick 2.5.0 features (**IR remote**, **games**, **air mouse / presenter**), and the
+Bluetooth), the stick 2.5.0 / 2.5.1 features (**IR remote**, **games**, **air mouse / presenter**, the
+**Launcher** card), and the
 **setup page** (first-run steps, components, Claude Code hooks), `/api/restart` and `/api/window`.
 Every endpoint the Python app serves (incl. feature/faces-2.4 and the 2.5.0 branches) is here; see
 *Endpoint diff* below.
@@ -87,7 +88,7 @@ Bluetooth until it's needed.
 | `GET /api/status` | the Python shape (`weather`, `github` as below); unported parts are `null`/empty, plus `held_back` |
 | `GET /api/events` | SSE: catch-up of the last 150, `link` / `state` / `config` / `sounds` events, keep-alive every 15 s |
 | `GET` / `PUT /api/config` | the Python `DEFAULT_CONFIG` keys and checks (brain, OpenRouter model / max tokens, the stick's shape); unknown keys dropped; a new `stick` re-targets the link |
-| `POST /api/stick/proto` | `{"line":"@state"}` → `{"ok","via":"ble","reply","error"}` over Bluetooth; when Bluetooth isn't there or doesn't answer, over the stick's USB serial (`via: "usb"`, `usb.rs`: Espressif ports, VID 0x303A, 115200 baud, the `@{…}` reply line) |
+| `POST /api/stick/proto` | `{"line":"@state"}` → `{"ok","via":"ble","reply","error"}` over Bluetooth; when Bluetooth isn't there or doesn't answer, over the stick's USB serial (`via: "usb"`, `usb.rs`: Espressif ports (VID 0x303A) whose USB product name contains "StickyBot", or a chip in download mode, never another ESP32 board (flasher.py `espressif_ports()` / `is_stick`); 115200 baud, the `@{…}` reply line). The Stick page's cards (incl. the **Launcher** card, firmware 2.5.1: `"launcher"` in @state, `@launcher tiles=…\|reset=1`) all go through here |
 | `GET /api/scan` | sticks advertising the service, strongest first |
 | `POST /api/pause` | pause / resume the link |
 | `GET` / `PUT /api/sounds`, `POST /api/sounds/play` | the stick's sound settings (`{"sound":…}` → `evt: sounds`, 3 s) |
@@ -130,7 +131,7 @@ as in the Python app; its *Pick your stick* step scans and saves the stick to **
 | **Logs** | `GET /api/logs?n=` (300): the last lines of `~/.stickybot-rs/app.log` (`logs.rs`: every log line goes to stderr as before (`RUST_LOG`, default `info`), to `app.log` (rotated at 2 MB, `app.log.1`/`.2` kept, like the Python `RotatingFileHandler`) and to the live feed as `log` events, the Logs page's *Follow live*). |
 | **Updates (firmware)** | `releases.rs` (releases.py): SemVer precedence, the latest release per channel (`update_channel` stable / beta), listed with `gh` when installed, else api.github.com over HTTPS; the release's firmware downloaded into `~/.stickybot-rs/firmware/<version>/` through a temporary folder, every part checked against the manifest's sha256 and GitHub's asset digest, 3 versions kept. `updates.rs` (updates.py): a check 20 s after start-up and every 24 h (`update_check`), state in `updates.json`, the stick's version from `@state` → `firmware_update` / the banner (`status.update`, `update` events). `GET /api/update`, `POST /api/update/check`, `GET /api/update/jobs/{id}`. The "Update … ready" toast on the stick once per release (`notified` in `updates.json`). Not ported: the app updating itself (`POST /api/update/agent` answers 409 with why; build it from the repo). |
 | **Start at login, switch-over** | `PUT /api/login-item` `{on}` / `GET`: the menu bar app registers itself with `SMAppService.mainAppService` (macOS 13+; no LaunchAgent, no `launchctl`; System Settings → Login Items lists it; a terminal binary says "unavailable"). `POST /api/switch-over` `{confirm}` / `{undo}`, `GET`: see [SWITCHOVER.md](SWITCHOVER.md). Both are Settings cards from `/static-rs/rust.js`. |
-| **Firmware over USB** | `POST /api/firmware/flash` `{port, backup}` → `{job}` (the same job SSE). `flasher.rs` (flasher.py): refuses a port that isn't an Espressif USB device and any part whose erase range touches NVS (0x9000-0xDFFF: pairings, name, settings stay); the 1200-baud touch, waits for the bootloader's port (12 s), an optional backup of the whole flash (`read-flash` into `~/.stickybot-rs/backups/<serial>-<time>.bin`), then `write-flash` of every part at its offset with the manifest's mode / freq / size, `--before usb-reset --after hard-reset`; esptool's output as `line` / `progress` events. No port is opened for anything else meanwhile. esptool runs as a subprocess behind the `Esptool` trait: tests use a fake and never open a real port or run esptool. |
+| **Firmware over USB** | `POST /api/firmware/flash` `{port, backup}` → `{job}` (the same job SSE). `flasher.rs` (flasher.py): refuses a port that isn't an Espressif USB device (a port picked by hand: any Espressif device, as `check_port`; the lists and the bootloader wait: sticks only) and any part whose erase range touches NVS (0x9000-0xDFFF: pairings, name, settings stay); the 1200-baud touch, waits for the bootloader's port (12 s), an optional backup of the whole flash (`read-flash` into `~/.stickybot-rs/backups/<serial>-<time>.bin`), then `write-flash` of every part at its offset with the manifest's mode / freq / size, `--before usb-reset --after hard-reset`; esptool's output as `line` / `progress` events. No port is opened for anything else meanwhile. esptool runs as a subprocess behind the `Esptool` trait: tests use a fake and never open a real port or run esptool. |
 | **Firmware over Bluetooth** | `GET /api/firmware` (bundle + connected stick; `usb`: sticks on USB with their version from `@state`, cached 10 s; a port in the bootloader is listed as "download mode" and never opened), `POST /api/firmware/ota` `{force}`, `GET /api/firmware/jobs/{id}` (SSE), `POST /api/firmware/jobs/{id}/cancel`. Bundles in `~/.stickybot-rs/firmware/<version>|local/` or `$STICKYBOT_RS_FIRMWARE`. `ota.py`'s checks (support, pending, versions / force, manifest SHA-256), windowed transfer, resume, then waits for the stick to come back with the new version (confirmed / rolled back). |
 
 ### Importing the Python app's settings (`migrate.rs`)
@@ -336,6 +337,26 @@ so Wispr's ranking needs no change.
    `games.xpToday` grows and stops at 10 a day; the Games card shows the bests from `@games`.
 5. **Mouse & presenter** card: start Air mouse, Presenter, Media, then Stop; pointer speed, invert,
    scroll, talk length and slide keys keep their values.
+6. **Bluetooth after 2.5.0's HID** (keyboard + consumer + mouse changed the GATT handles): the link
+   connects and stays up with no `the stick has no Mac link service` / characteristic errors; the
+   app only discovers the NUS service (`corebt.rs`), so macOS's Battery / HID services are left
+   alone. If it doesn't connect after the update: forget the stick in the Mac's Bluetooth settings
+   and pair again.
+
+### Stick 2.5.1: Launcher, USB filter
+
+1. **Launcher card** (Stick page, shown when @state has `launcher`): it lists the eight tiles in the
+   stick's order. Hide Games and move Faces to the top → Save → "Launcher saved"; triple-press B on
+   the stick → the grid starts with Faces and has no Games. Quick settings / Settings can't be
+   unticked. Reset → the default order (`grapmfqs`) on the card and the stick. Save stays disabled
+   until something changes.
+2. The same over USB: pause Bluetooth, the Stick page loads `via: "usb"`, Save the Launcher again.
+3. **Another ESP32 board on USB** (the MicroPython ESP32-S3, 303a:4001 "Espressif Device"): with
+   the stick unplugged and Bluetooth paused, the Stick page says "no stick connected (Bluetooth or
+   USB)" and the board gets no `@` lines (its REPL stays quiet); Firmware → USB lists no sticks.
+   With both plugged in: only the stick is listed and talked to (no "several sticks on USB").
+4. A stick in download mode (hold the side button while plugging in) is listed as "download mode"
+   and can be flashed.
 
 ### Setup page, components, restart, window
 
@@ -379,8 +400,8 @@ identity, and macOS asks for Bluetooth again**. See *Open decisions*.
 ## Endpoint diff
 
 Python routes (`web.get/post/put/delete` in `mac-agent/stick_agent/*.py` on feature/faces-2.4,
-feature/air-mouse, feature/games, feature/ir-remote and feature/stick-2.5) against the Rust router:
-84 Python routes, **none missing**. (`/api/install/{step}/run` and `/api/install/github/repo` are
+feature/air-mouse, feature/games, feature/ir-remote and feature/stick-2.5 up to the launcher, firmware
+2.5.1: it added no route) against the Rust router: 84 Python routes, **none missing**. (`/api/install/{step}/run` and `/api/install/github/repo` are
 served by `POST /api/install/{step}/{action}`.) Rust-only: `/api/import`, `/api/login-item`,
 `/api/rust`, `/api/speech`, `/api/speech/retry`, `/api/switch-over`, `/static-rs/*`.
 
