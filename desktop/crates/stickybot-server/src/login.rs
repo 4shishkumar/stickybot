@@ -19,7 +19,9 @@ pub enum LoginState {
 impl LoginState {
     pub fn from_status(n: isize) -> Self {
         match n {
-            0 => LoginState::Off,
+            // 3 (SMAppServiceStatusNotFound): what macOS answers for an app that was never
+            // registered, e.g. one opened from a build folder; registering it works
+            0 | 3 => LoginState::Off,
             1 => LoginState::On,
             2 => LoginState::NeedsApproval,
             _ => LoginState::Unavailable,

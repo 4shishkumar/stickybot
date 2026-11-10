@@ -1546,6 +1546,8 @@ mod tests {
         let (_, v, _) = call(&app, req("GET", "/api/login-item", None, None)).await;
         assert_eq!(v["state"], "on");
         assert_eq!(crate::login::LoginState::from_status(2).to_json()["state"], "needs_approval");
+        assert_eq!(crate::login::LoginState::from_status(3).to_json()["state"], "off"); // never registered
+        assert_eq!(crate::login::LoginState::from_status(-1).to_json()["state"], "unavailable");
         // the switch-over needs a confirm and a Python folder (taking over is unit-tested in switch.rs)
         let (s, _, _) = call(&app, req("POST", "/api/switch-over", Some(json!({})), tok)).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
