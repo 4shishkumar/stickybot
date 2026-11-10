@@ -666,3 +666,14 @@ async def test_firmware_update_waits_for_a_face_install(client):
     client.agent.faces_busy = True
     r = await client.post("/api/firmware/ota", headers=client.auth, json={})
     assert r.status == 409 and "face" in (await r.json())["error"]
+
+
+def test_the_old_catalog_url_follows_the_repo(home):
+    """Before 2.3.2 the default catalog URL was saved into config.json; the repo (and its Pages) moved."""
+    cfg = config.load()
+    cfg["faces_catalog_url"] = config.OLD_FACES_CATALOG_URL
+    config.save(cfg)
+    assert config.load()["faces_catalog_url"] == faces.DEFAULT_CATALOG_URL
+    cfg["faces_catalog_url"] = "https://example.com/my/catalog.json"  # someone's own: kept
+    config.save(cfg)
+    assert config.load()["faces_catalog_url"] == "https://example.com/my/catalog.json"

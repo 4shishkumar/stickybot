@@ -141,7 +141,7 @@ async def test_streams_the_answer_with_cost(orb, fake):
     assert c.texts[-1] == "It's **Paris**. Lovely city." and len(c.texts) >= 2  # as it was written
     req = fake.requests[0]
     assert req["headers"]["Authorization"] == f"Bearer {KEY}"
-    assert req["headers"]["HTTP-Referer"] == "https://github.com/ashish-kumar-noon/stickybot"
+    assert req["headers"]["HTTP-Referer"] == "https://github.com/4shishkumar/stickybot"
     assert req["headers"]["X-Title"] == "StickyBot"
     body = req["body"]
     assert body["model"] == MODEL and body["stream"] is True and body["max_tokens"] == 400

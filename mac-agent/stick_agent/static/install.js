@@ -12,8 +12,8 @@ const append = (el, ...kids) => el.append(...kids.filter(k => k !== null && k !=
 export const title = "Set up StickyBot";
 export const subtitle = "";
 
-const DOCS = "https://github.com/ashish-kumar-noon/stickybot/blob/main/mac-agent/README.md";
-const TEAM_DOCS = "https://github.com/ashish-kumar-noon/stickybot/blob/main/docs/TEAMMATE-SETUP.md";
+const DOCS = "https://github.com/4shishkumar/stickybot/blob/main/mac-agent/README.md";
+const TEAM_DOCS = "https://github.com/4shishkumar/stickybot/blob/main/docs/TEAMMATE-SETUP.md";
 const KIND = {required: "", recommended: "Recommended", optional: "Optional"};
 const PILL = {done: ["ok", "Done"], todo: ["", "To do"], skipped: ["", "Skipped"], unavailable: ["warn", "Not available"]};
 const POLL_MS = 4000;

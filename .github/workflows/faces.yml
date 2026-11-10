@@ -7,7 +7,7 @@
 # main (and nightly, to pick up retirements): build catalog.json and the compiled faces, sign
 # catalog.json with the ed25519 key in the FACES_SIGNING_KEY secret, check the signature
 # against the keys built into the agent, and deploy to GitHub Pages:
-#   https://ashish-kumar-noon.github.io/stickybot/faces/catalog.json
+#   https://4shishkumar.github.io/stickybot/faces/catalog.json
 # Needs Settings -> Pages -> Source: "GitHub Actions", and the FACES_SIGNING_KEY secret.
 name: Faces
 on:
@@ -92,7 +92,7 @@ jobs:
       - name: Install cryptography (for the signature)
         run: python -m pip install cryptography
       - name: Build the catalog
-        run: python tools/faces/build_catalog.py --out site/faces --base https://ashish-kumar-noon.github.io/stickybot/faces/
+        run: python tools/faces/build_catalog.py --out site/faces --base https://4shishkumar.github.io/stickybot/faces/
       - name: Sign it
         env:
           FACES_SIGNING_KEY: ${{ secrets.FACES_SIGNING_KEY }}

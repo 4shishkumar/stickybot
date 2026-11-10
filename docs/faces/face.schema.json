@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/ashish-kumar-noon/stickybot/docs/faces/face.schema.json",
+  "$id": "https://github.com/4shishkumar/stickybot/docs/faces/face.schema.json",
   "title": "StickyBot face package manifest, format 1",
   "description": "The manifest.json of a face package (docs/faces/FORMAT.md). The schema covers the shape; tools/faces/validate.py adds the checks a schema can't express (references, bindings, fonts, budgets, pictures).",
   "type": "object",

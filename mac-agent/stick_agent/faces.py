@@ -34,7 +34,7 @@ from . import config, flasher, ota
 
 log = logging.getLogger("faces")
 
-DEFAULT_CATALOG_URL = "https://ashish-kumar-noon.github.io/stickybot/faces/catalog.json"
+DEFAULT_CATALOG_URL = "https://4shishkumar.github.io/stickybot/faces/catalog.json"
 MIN_FIRMWARE = "2.4.0"   # the first firmware with the face engine (pkgFaces in @state)
 CATALOG_VERSION = 1      # catalog.json "catalog" this agent understands
 FORMATS = (1,)           # face formats this agent can check

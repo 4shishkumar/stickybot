@@ -80,7 +80,7 @@ DEFAULT_CONFIG = {
     "ir_voice_added": False,
     # Face packages (faces.py): the catalog the dashboard's "Get more faces" offers. Another URL
     # (a fork, a test server) needn't be signed; the default one must be (faces.CATALOG_KEYS)
-    "faces_catalog_url": "https://ashish-kumar-noon.github.io/stickybot/faces/catalog.json",
+    "faces_catalog_url": "https://4shishkumar.github.io/stickybot/faces/catalog.json",
 }
 
 
@@ -96,6 +96,9 @@ def ensure_home():
         TOKEN.chmod(0o600)
 
 
+OLD_FACES_CATALOG_URL = "https://ashish-kumar-noon.github.io/stickybot/faces/catalog.json"
+
+
 def load():
     cfg = dict(DEFAULT_CONFIG)
     try:
@@ -103,6 +106,8 @@ def load():
     except (OSError, ValueError):
         pass
     cfg.pop("wispr_fallback_mic", None)  # the smart mic's fallback (removed)
+    if cfg.get("faces_catalog_url") == OLD_FACES_CATALOG_URL:  # the repo moved (2.3.2): its Pages too
+        cfg["faces_catalog_url"] = DEFAULT_CONFIG["faces_catalog_url"]
     return cfg
 
 

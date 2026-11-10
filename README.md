@@ -19,7 +19,7 @@ Mac slots), so the same settings page works with any of them.
 Start with the board's README: install PlatformIO, flash, pair.
 
 **Quick start — the StickyBot Mac app** (voice agent, approvals, alerts, dashboard):
-`curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stickybot/main/install.sh | sh`,
+`curl -fsSL https://raw.githubusercontent.com/4shishkumar/stickybot/main/install.sh | sh`,
 or `./install.sh` from the repo root, then follow the dashboard's setup wizard. Setting
 up someone else's stick: [docs/TEAMMATE-SETUP.md](docs/TEAMMATE-SETUP.md). Building
 everything from scratch: [docs/BUILDING.md](docs/BUILDING.md).

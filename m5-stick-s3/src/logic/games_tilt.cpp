@@ -236,7 +236,10 @@ void Catch::drop(float x, float y, float vy, Kind k) {
 void Catch::spawn() {
   const float bomb = minf(0.15f + score * 0.004f, 0.32f), r = rng_.unit();
   const Kind k = r < bomb ? Kind::BOMB : r < bomb + 0.1f ? Kind::STAR : Kind::COIN;
-  drop(rng_.between(10, W - 10), -ITEM_R, 70 + minf(score * 2.2f, 110) + rng_.between(0, 20), k);
+  // one draw per line: arguments are evaluated in no set order (gcc and clang differ)
+  const float x = rng_.between(10, W - 10);
+  const float vy = 70 + minf(score * 2.2f, 110) + rng_.between(0, 20);
+  drop(x, -ITEM_R, vy, k);
   const uint32_t every = (uint32_t)maxf(380, 900 - score * 12.0f);
   nextAt_ = t + every;
 }
