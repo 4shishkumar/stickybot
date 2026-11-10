@@ -1628,6 +1628,7 @@ mod tests {
             assert!(w["pet"].get(k).is_some(), "{k}");
         }
         assert_eq!(h["wready"], true);
+        assert_eq!(h["speak"], true); // the stick's reply view may ask us to read aloud (2.6.0)
         assert!(h.get("wx").is_none());
         // with weather (stick-safe place name)
         st.home.weather.lock().unwrap().now = Some(json!({"t": 18, "i": "cloudy", "c": "cloudy", "day": 1, "hi": 25, "lo": 11, "at": "Zürich"}));

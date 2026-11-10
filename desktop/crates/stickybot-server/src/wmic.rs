@@ -803,6 +803,8 @@ pub fn init(st: &Arc<AppState>) {
             .map(|st| {
                 let mut m = crate::home::hello_extra(&st);
                 m.extend(hello_extra(&st));
+                // we read the last reply aloud when the stick asks ({"evt":"speak"}, firmware 2.6.0)
+                m.insert("speak".into(), json!(true));
                 m
             })
             .unwrap_or_default()

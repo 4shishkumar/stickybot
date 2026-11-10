@@ -251,6 +251,9 @@ pub struct Utterance {
     cancelled: AtomicBool,
     tx: mpsc::UnboundedSender<Option<String>>,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// [`Utterance::wait`] saw it end (its tasks are taken then)
+    over: AtomicBool,
+    ended: tokio::sync::Notify,
 }
 
 #[derive(Default)]
@@ -281,12 +284,28 @@ impl Utterance {
         });
         let play = tokio::spawn(async move {
             let mut done = false;
+            let mut carry: Option<Clip> = None; // made, but it didn't fit in the last clip
             while !done {
-                let Some(Some(clip)) = ready_rx.recv().await else { return };
+                let clip = match carry.take() {
+                    Some(c) => c,
+                    None => match ready_rx.recv().await {
+                        Some(Some(c)) => c,
+                        _ => return,
+                    },
+                };
+                let mut secs = clip_seconds(&clip);
                 let mut batch = vec![clip];
                 while let Ok(more) = ready_rx.try_recv() {
                     match more {
-                        Some(c) => batch.push(c), // everything already made goes in one go
+                        // everything already made goes in one go, as long as the stick's buffer holds it
+                        Some(c) if secs + GAP.as_secs_f64() + clip_seconds(&c) > MAX_CLIP_S as f64 => {
+                            carry = Some(c);
+                            break;
+                        }
+                        Some(c) => {
+                            secs += GAP.as_secs_f64() + clip_seconds(&c);
+                            batch.push(c);
+                        }
                         None => {
                             done = true;
                             break;
@@ -302,6 +321,8 @@ impl Utterance {
             cancelled: AtomicBool::new(false),
             tx,
             tasks: Mutex::new(vec![make, play]),
+            over: AtomicBool::new(false),
+            ended: tokio::sync::Notify::new(),
         })
     }
 
@@ -356,19 +377,69 @@ impl Utterance {
         for t in tasks {
             let _ = t.await;
         }
+        self.ended.notify_waiters();
+        self.over.store(true, Ordering::Relaxed);
     }
+
+    /// Until it has ended (played or cancelled), without taking the tasks from [`Utterance::wait`].
+    async fn wait_ended(&self) {
+        loop {
+            if self.over.load(Ordering::Relaxed) || self.cancelled() {
+                return;
+            }
+            let finished = {
+                let t = self.tasks.lock().unwrap();
+                !t.is_empty() && t.iter().all(|h| h.is_finished())
+            };
+            if finished {
+                return;
+            }
+            tokio::select! {
+                _ = self.ended.notified() => {}
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+        }
+    }
+}
+
+/// How long a clip made for the stick plays (0 for a file for the Mac's speakers).
+pub fn clip_seconds(c: &Clip) -> f64 {
+    c.pcm.len() as f64 / crate::clips::RATE as f64
 }
 
 /// The speaker's state (in [`AppState`]).
 pub struct Speaker {
     pub voice: Mutex<Arc<dyn Voice>>,
     current: Mutex<Option<Arc<Utterance>>>,
+    /// speech is on (told to the stick: `{"src":"agent","speech":"on"|"off"}`, firmware 2.6.0)
+    speaking: AtomicBool,
 }
 
 impl Default for Speaker {
     fn default() -> Self {
-        Self { voice: Mutex::new(Arc::new(SystemVoice)), current: Mutex::new(None) }
+        Self { voice: Mutex::new(Arc::new(SystemVoice)), current: Mutex::new(None), speaking: AtomicBool::new(false) }
     }
+}
+
+impl Speaker {
+    pub fn speaking(&self) -> bool {
+        self.speaking.load(Ordering::Relaxed)
+    }
+}
+
+/// Speech started / ended: the stick's reply view shows "Reading aloud".
+fn changed(st: &AppState, on: bool) {
+    if st.speaker.speaking.swap(on, Ordering::Relaxed) == on {
+        return;
+    }
+    st.hub.emit("speech", json!({"on": on}));
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    let link = st.link.clone();
+    tokio::spawn(async move {
+        link.send(&json!({"src": "agent", "speech": if on { "on" } else { "off" }})).await;
+    });
 }
 
 /// Where speech goes right now: "stick" (its speaker) or "mac".
@@ -377,19 +448,61 @@ pub fn output(st: &AppState) -> &'static str {
     if on_stick && st.link.connected() { "stick" } else { "mac" }
 }
 
-/// A new reply to speak (stops the one before).
+/// A new reply to speak (stops the one before; no "off" in between).
 pub fn start(st: &Arc<AppState>, max_words: Option<usize>) -> Arc<Utterance> {
-    stop(st);
+    if let Some(old) = st.speaker.current.lock().unwrap().take() {
+        old.cancel();
+    }
     let voice = st.speaker.voice.lock().unwrap().clone();
     let u = Utterance::new(st.clone(), voice, max_words);
     *st.speaker.current.lock().unwrap() = Some(u.clone());
+    changed(st, true);
+    // ended (all of it played, or nothing to say): "off", unless another one took its place
+    let (st2, u2) = (Arc::downgrade(st), u.clone());
+    tokio::spawn(async move {
+        u2.wait_ended().await;
+        let Some(st) = st2.upgrade() else { return };
+        let mut cur = st.speaker.current.lock().unwrap();
+        if cur.as_ref().is_some_and(|c| Arc::ptr_eq(c, &u2)) {
+            *cur = None;
+            drop(cur);
+            changed(&st, false);
+        }
+    });
     u
 }
 
 pub fn stop(st: &AppState) {
-    if let Some(u) = st.speaker.current.lock().unwrap().take() {
+    let had = st.speaker.current.lock().unwrap().take();
+    if let Some(u) = had {
         u.cancel();
     }
+    changed(st, false);
+}
+
+/// The stick's "listen" (its reply view, `{"evt":"speak","what":"last"}`): the last answer read
+/// aloud whole, whatever the speak settings say.
+pub fn speak_last(st: &Arc<AppState>) -> bool {
+    let mut text = st.last_done.lock().unwrap().clone();
+    if text.is_empty() {
+        text = st
+            .last_reply
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|r| r.get("text"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+    }
+    if speakable(&text).trim().is_empty() {
+        log::info!("reading aloud: nothing to read");
+        st.speaker.speaking.store(true, Ordering::Relaxed); // so the stick hears "off"
+        changed(st, false);
+        return false;
+    }
+    log::info!("reading aloud: the last reply ({} words)", text.split_whitespace().count());
+    speak(st, &text, false, true)
 }
 
 fn max_words(cfg: &Map<String, Value>) -> usize {
@@ -426,8 +539,14 @@ pub fn speak(st: &Arc<AppState>, text: &str, quick: bool, force: bool) -> bool {
     if !force && !should_speak(&cfg, text, quick) {
         return false;
     }
+    // sentence by sentence: a long text plays in clips the stick can hold, the first one soon
     let u = start(st, None);
-    u.add(&speakable(text).split_whitespace().collect::<Vec<_>>().join(" "));
+    let mut cut = Sentences::default();
+    let mut sentences = cut.feed(text);
+    sentences.extend(cut.finish());
+    for s in sentences {
+        u.add(&s);
+    }
     u.close();
     st.hub.emit("spoken", json!({"text": text}));
     true
@@ -648,6 +767,54 @@ pub(crate) mod tests {
         assert_eq!(stream_speech(&cfg), Some(2));
         cfg.insert("speak_stream".into(), json!(false));
         assert_eq!(stream_speech(&cfg), None);
+    }
+
+    #[tokio::test]
+    async fn clips_are_joined_only_up_to_the_sticks_buffer() {
+        struct Long(Arc<FakeVoice>);
+        impl Voice for Long {
+            fn synth(&self, s: String, _v: String, _f: bool) -> BoxFuture<'static, Result<Clip, String>> {
+                Box::pin(async move { Ok(Clip { pcm: vec![0; 16000 * 12], path: None, text: s }) }) // 12 s each
+            }
+            fn play(&self, st: Arc<AppState>, batch: Vec<Clip>, voice: String) -> BoxFuture<'static, ()> {
+                self.0.play(st, batch, voice)
+            }
+        }
+        let (t, v) = rig("sp-buffer", FakeVoice { play_ms: 50, ..Default::default() }).await;
+        *t.st.speaker.voice.lock().unwrap() = Arc::new(Long(v.clone()));
+        let u = start(&t.st, None);
+        for s in ["A", "B", "C", "D", "E", "F"] {
+            u.add(s);
+        }
+        u.close();
+        tokio::time::timeout(Duration::from_secs(3), u.wait()).await.unwrap();
+        let played = v.played.lock().unwrap().clone();
+        assert_eq!(played.concat(), ["A", "B", "C", "D", "E", "F"]); // nothing lost or cut
+        assert!(played.iter().all(|b| b.len() <= 2), "{played:?}"); // 2 x 12 s fit in 30 s, 3 don't
+    }
+
+    #[tokio::test]
+    async fn speech_on_and_off_reach_the_stick_once_each() {
+        let (t, _v) = rig("sp-onoff", FakeVoice { play_ms: 50, ..Default::default() }).await;
+        let msgs = || -> Vec<String> {
+            crate::talk::tests::lines(&t.fake)
+                .iter()
+                .filter_map(|m| m.get("speech").and_then(Value::as_str).map(String::from))
+                .collect()
+        };
+        t.st.cfg.lock().unwrap().insert("speak_replies".into(), json!(true));
+        assert!(say(&t.st, "Old one.", false).await);
+        assert!(say(&t.st, "New one.", false).await); // replaces it: no "off" in between
+        for _ in 0..200 {
+            if msgs().len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(msgs(), ["on", "off"]);
+        stop(&t.st); // nothing playing: nothing more to say
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(msgs(), ["on", "off"]);
     }
 
     #[tokio::test]

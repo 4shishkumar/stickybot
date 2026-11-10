@@ -109,6 +109,12 @@ pub struct AppState {
     stats: Mutex<Map<String, Value>>,
     /// the last good brain reply `{"t", "text"}` (the home card, later)
     pub last_reply: Mutex<Option<Value>>,
+    /// the last answer the stick showed ("done"): what its "listen" reads (firmware 2.6.0)
+    pub last_done: Mutex<String>,
+    /// the full reply's id for the stick's reply view (talk.rs `tell_stick`)
+    pub reply_id: std::sync::atomic::AtomicU64,
+    /// the runtime, for the bye on quit (called from outside it)
+    rt: OnceLock<tokio::runtime::Handle>,
     /// firmware update jobs (Bluetooth)
     pub jobs: firmware::Jobs,
     /// Claude Code permission prompts waiting on the stick
@@ -204,6 +210,9 @@ impl AppState {
                     .unwrap_or_default(),
             ),
             last_reply: Mutex::new(None),
+            last_done: Mutex::new(String::new()),
+            reply_id: std::sync::atomic::AtomicU64::new(0),
+            rt: OnceLock::new(),
             jobs: firmware::Jobs::default(),
             approvals: approvals::Approvals::default(),
             ota_timings: Mutex::new(firmware::UpdateTimings::default()),
@@ -235,6 +244,9 @@ impl AppState {
             me: OnceLock::new(),
         });
         let _ = st.me.set(Arc::downgrade(&st));
+        if let Ok(h) = tokio::runtime::Handle::try_current() {
+            let _ = st.rt.set(h);
+        }
         wmic::init(&st);
         let weak = Arc::downgrade(&st);
         st.speech.on_change(move |p| {
@@ -374,7 +386,26 @@ impl AppState {
     /// Quit / Ctrl-C: nothing left behind (the wireless mic's device and tap outlive the process
     /// otherwise). Blocking; call it outside the runtime's worker threads.
     pub fn shutdown(&self) {
+        self.bye_blocking(std::time::Duration::from_millis(1500));
         wmic::shutdown(self);
+    }
+
+    /// Quitting: tells the stick ("Agent offline" at once instead of after 25 s). Waits at most
+    /// `timeout`; on a runtime worker thread it only starts it (blocking there would stall it).
+    pub fn bye_blocking(&self, timeout: std::time::Duration) -> bool {
+        let Some(h) = self.rt.get() else { return false };
+        if !self.link.connected() {
+            return false;
+        }
+        let link = self.link.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        h.spawn(async move {
+            let _ = tx.send(link.bye().await);
+        });
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return true;
+        }
+        rx.recv_timeout(timeout).unwrap_or(false)
     }
 
     /// `GET /api/status`: the Python shape, with what isn't ported left empty (the pages cope).

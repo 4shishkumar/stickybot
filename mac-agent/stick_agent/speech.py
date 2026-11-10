@@ -142,44 +142,82 @@ class Utterance:
 
     async def _play(self):
         done = False
+        carry = None  # made, but it didn't fit in the last clip
         while not done:
-            clip = await self._ready.get()
+            clip = carry if carry is not None else await self._ready.get()
+            carry = None
             if clip is None:
                 return
-            batch = [clip]
-            while not self._ready.empty():  # everything already made goes in one go
+            batch, secs = [clip], clip_seconds(clip)
+            while not self._ready.empty():  # everything already made goes in one go...
                 more = self._ready.get_nowait()
                 if more is None:
                     done = True
                     break
+                if secs + GAP_S + clip_seconds(more) > MAX_CLIP_S:  # ...that fits the stick's clip buffer
+                    carry = more
+                    break
                 batch.append(more)
+                secs += GAP_S + clip_seconds(more)
             await self.speaker.play(batch, self._procs)
 
 
-class Speaker:
-    """Makes and plays speech. `output()` says where it goes right now: "stick" or "mac"."""
+def clip_seconds(clip):
+    """How long a clip made for the stick plays (0 for a file for the Mac's speakers)."""
+    return len(clip["pcm"]) / clips.RATE if "pcm" in clip else 0.0
 
-    def __init__(self, link, output, voice):
+
+class Speaker:
+    """Makes and plays speech. `output()` says where it goes right now: "stick" or "mac".
+    `on_speech(bool)` hears when speech starts and when it ends (stopped, or all of it played):
+    the stick shows "Reading aloud" (2.6.0)."""
+
+    def __init__(self, link, output, voice, on_speech=None):
         self._link = link      # () -> the Bluetooth link
         self.output = output   # () -> "stick" | "mac"
         self.voice = voice     # () -> macOS voice name or ""
+        self.on_speech = on_speech  # (bool) -> None: speech started / ended
         self.current = None    # the Utterance being spoken
+        self.speaking = False
 
     def start(self, max_words=None):
         """A new reply to speak (stops the one before)."""
-        self.stop()
-        self.current = Utterance(self, max_words)
-        return self.current
+        if self.current:
+            self.current.cancel()  # replaced: no "ended" in between
+        u = self.current = Utterance(self, max_words)
+        self._changed(True)
+        asyncio.ensure_future(self._ended(u))
+        return u
+
+    async def _ended(self, u):
+        await u.wait()
+        if self.current is u:
+            self.current = None
+            self._changed(False)
+
+    def _changed(self, on):
+        if on == self.speaking:
+            return
+        self.speaking = on
+        if self.on_speech:
+            try:
+                self.on_speech(on)
+            except Exception as e:  # noqa: BLE001 — never break speech for it
+                log.warning("on_speech: %s", e)
 
     def stop(self):
         if self.current:
             self.current.cancel()
         self.current = None
+        self._changed(False)
 
     def say(self, text):
-        """Speaks a whole text in one go (returns at once; `.wait()` on the result to wait)."""
+        """Speaks a whole text (returns at once; `.wait()` on the result to wait). Sentence by
+        sentence, so a long one plays in clips the stick can hold, the first one soon."""
         u = self.start()
-        u.add(" ".join(speakable(text).split()))
+        cut = Sentences()
+        for sentence in cut.feed(text) + cut.finish():
+            u.add(sentence)
         u.close()
         return u
 
