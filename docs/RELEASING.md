@@ -80,7 +80,7 @@ git push origin v1.7.2
     (the agent runs from a clone somewhere else) is never touched: the dashboard shows the
     commands to run instead.
     Before fetching it points an install clone's `origin` that still names
-    `ashish-kumar-noon/stick-key` at `ashish-kumar-noon/stickybot` (install.sh does the same).
+    an old name (`ashish-kumar-noon/stick-key` or `ashish-kumar-noon/stickybot`) at `4shishkumar/stickybot` (install.sh does the same).
     The new code then builds StickyBot.app if Python changed or it isn't built yet.
   - *Stick firmware*: Stick → Firmware → **Update via USB**. Other ways, such as Bluetooth
     OTA, plug in through `updates.register_firmware_updater()` and appear next to it.

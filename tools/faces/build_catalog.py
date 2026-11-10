@@ -26,7 +26,7 @@ import facepkg  # noqa: E402
 
 FACES = facepkg.ROOT / "faces"
 CATALOG_VERSION = 1
-SOURCE = "https://github.com/ashish-kumar-noon/stickybot/tree/main/"
+SOURCE = "https://github.com/4shishkumar/stickybot/tree/main/"
 
 
 def packages(root=FACES):

@@ -80,7 +80,7 @@ DEFAULT_CONFIG = {
     "ir_voice_added": False,
     # Face packages (faces.py): the catalog the dashboard's "Get more faces" offers. Another URL
     # (a fork, a test server) needn't be signed; the default one must be (faces.CATALOG_KEYS)
-    "faces_catalog_url": "https://ashish-kumar-noon.github.io/stickybot/faces/catalog.json",
+    "faces_catalog_url": "https://4shishkumar.github.io/stickybot/faces/catalog.json",
 }
 
 

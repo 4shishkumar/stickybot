@@ -1,12 +1,12 @@
 # Faces (docs/faces/GUIDELINES.md, "Updates"): only a face's author or a maintainer changes it.
 # The maintainers own everything under faces/; a community face's PR adds a line for its folder
 # naming its author too, e.g.
-#   /faces/community/pixelpond/  @their-github-name @ashish-kumar-noon
+#   /faces/community/pixelpond/  @their-github-name @4shishkumar
 # (GitHub only requests reviews from owners with write access; for other authors, the
 # maintainer checks the PR comes from the manifest's author.github.)
-/faces/                     @ashish-kumar-noon
-/faces/retired.json         @ashish-kumar-noon
-/tools/faces/               @ashish-kumar-noon
-/.github/workflows/faces.yml @ashish-kumar-noon
+/faces/                     @4shishkumar @ashish-kumar-noon
+/faces/retired.json         @4shishkumar @ashish-kumar-noon
+/tools/faces/               @4shishkumar @ashish-kumar-noon
+/.github/workflows/faces.yml @4shishkumar @ashish-kumar-noon
 
 # Community faces (one line per face, added with it):

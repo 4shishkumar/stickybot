@@ -152,7 +152,7 @@ def test_an_install_clone_under_the_old_repo_name_follows_the_rename(fake):
     r = fake(src_arg=False)
     assert r.returncode == 0, r.stdout + r.stderr
     url = subprocess.run(["git", "-C", str(src), "remote", "get-url", "origin"], capture_output=True, text=True)
-    assert url.stdout.strip() == "https://github.com/ashish-kumar-noon/stickybot.git"
+    assert url.stdout.strip() == "https://github.com/4shishkumar/stickybot.git"
     assert "the repo was renamed" in r.stdout
     assert any(c.startswith("git -C") and "fetch" in c for c in r.calls)  # then fetched as before
     r = fake(src_arg=False)  # once
@@ -161,8 +161,8 @@ def test_an_install_clone_under_the_old_repo_name_follows_the_rename(fake):
 
 def test_the_one_line_install_uses_the_new_repo_name():
     text = SCRIPT.read_text()
-    assert 'REPO="ashish-kumar-noon/stickybot"' in text
-    assert "raw.githubusercontent.com/ashish-kumar-noon/stickybot/main/install.sh" in text
+    assert 'REPO="4shishkumar/stickybot"' in text
+    assert "raw.githubusercontent.com/4shishkumar/stickybot/main/install.sh" in text
 
 
 def test_no_command_line_tools_asks_for_them_and_stops(fake, tmp_path):

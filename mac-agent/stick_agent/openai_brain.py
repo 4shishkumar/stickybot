@@ -462,7 +462,7 @@ class OpenRouterBrain(OpenAICompatBrain):
     label = "OpenRouter"
     base_url = "https://openrouter.ai/api/v1"
     needs_key = True
-    REFERER = "https://github.com/ashish-kumar-noon/stickybot"
+    REFERER = "https://github.com/4shishkumar/stickybot"
 
     def __init__(self, agent=None):
         super().__init__(agent)

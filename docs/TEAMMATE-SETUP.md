@@ -34,7 +34,7 @@ That also gives them B click = Enter and the stick's own screens, sounds and men
 ### The voice agent (hold B)
 1. **Run one line in Terminal** (no GitHub account needed):
    ```sh
-   curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stickybot/main/install.sh | sh
+   curl -fsSL https://raw.githubusercontent.com/4shishkumar/stickybot/main/install.sh | sh
    ```
    It installs the app into `~/.stick-agent`, starts it, and opens the **setup page**
    in the browser (http://localhost:8660/#install).

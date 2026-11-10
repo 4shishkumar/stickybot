@@ -23,7 +23,7 @@ import urllib.request
 from pathlib import Path
 
 SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
-REPO = os.environ.get("STICK_AGENT_REPO", "ashish-kumar-noon/stickybot")
+REPO = os.environ.get("STICK_AGENT_REPO", "4shishkumar/stickybot")
 API = "https://api.github.com"
 CHANNELS = ("stable", "beta")
 MANIFEST = "manifest.json"

@@ -109,7 +109,7 @@ needs the agent's token). Claude can use it to reach you on the stick:
 One command (no GitHub login needed):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stickybot/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/4shishkumar/stickybot/main/install.sh | sh
 ```
 
 or, from a clone of the repo, `./install.sh`.

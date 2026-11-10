@@ -2,7 +2,7 @@
 # StickyBot installer — the Mac app for the M5StickS3 StickyBot.
 #
 # One line:
-#   curl -fsSL https://raw.githubusercontent.com/ashish-kumar-noon/stickybot/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/4shishkumar/stickybot/main/install.sh | sh
 # or from a clone:
 #   ./install.sh
 #
@@ -27,7 +27,8 @@
 # latest stable release tag (main until the first release). Re-running moves a
 # release install to the newest stable release after it, and a branch checkout
 # (installs from before releases) does `git pull --ff-only`. A clone whose origin
-# still has the repo's old name (ashish-kumar-noon/stick-key) gets the new one.
+# still has one of the repo's old names (ashish-kumar-noon/stick-key or
+# ashish-kumar-noon/stickybot) gets the new one.
 # The dashboard can do the same update in one click (Settings → Updates).
 #
 # Options (passed on to `stickybot setup`; any of them means: terminal, no browser):
@@ -47,7 +48,7 @@
 
 set -eu
 
-REPO="ashish-kumar-noon/stickybot"
+REPO="4shishkumar/stickybot"
 AGENT_HOME="${STICK_AGENT_HOME:-$HOME/.stick-agent}"
 VENV="$AGENT_HOME/venv"
 LOG="$AGENT_HOME/install.log"
@@ -185,9 +186,10 @@ if [ -z "$SRC" ]; then
     if [ "$DRY_RUN" = 1 ]; then say "would update $SRC (git fetch, then the latest release or git pull)"; else
       say "updating $SRC…"
       origin="$(git -C "$SRC" remote get-url origin 2>/dev/null || true)"
-      case "$origin" in   # the repo was renamed: follow it (GitHub redirects the old name, not forever)
-        *github.com[:/]ashish-kumar-noon/stick-key|*github.com[:/]ashish-kumar-noon/stick-key.git|*github.com[:/]ashish-kumar-noon/stick-key/)
-          new_origin="$(printf '%s' "$origin" | sed 's#ashish-kumar-noon/stick-key#ashish-kumar-noon/stickybot#')"
+      case "$origin" in   # the repo was renamed / moved: follow it (GitHub redirects the old name, not forever)
+        *github.com[:/]ashish-kumar-noon/stick-key|*github.com[:/]ashish-kumar-noon/stick-key.git|*github.com[:/]ashish-kumar-noon/stick-key/|\
+        *github.com[:/]ashish-kumar-noon/stickybot|*github.com[:/]ashish-kumar-noon/stickybot.git|*github.com[:/]ashish-kumar-noon/stickybot/)
+          new_origin="$(printf '%s' "$origin" | sed -E 's#ashish-kumar-noon/(stick-key|stickybot)#4shishkumar/stickybot#')"
           run git -C "$SRC" remote set-url origin "$new_origin"
           say "origin is now $new_origin (the repo was renamed)" ;;
       esac

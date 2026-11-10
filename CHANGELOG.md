@@ -12,6 +12,20 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Changed
+- **The repo moved to [4shishkumar/stickybot](https://github.com/4shishkumar/stickybot).**
+  The update check, the install command and the faces catalog use the new address. GitHub
+  redirects the old one, and an install whose `origin` still names
+  `ashish-kumar-noon/stickybot` (or the older `stick-key`) is pointed at the new one on its
+  next update. The faces catalog is now at `4shishkumar.github.io/stickybot/faces/`.
+
+### Fixed
+- **The Catch game differed between builds**: two random draws in one call ran in a
+  different order with gcc (the stick, Linux) than with clang (the Mac), so the same seed
+  gave another game and the v2.3.1 release build's test failed. One draw per line now.
+- **v2.3.0 and v2.3.1 were never published**: their release builds stopped at the tests.
+  v2.3.2 is the first release with everything listed under them.
+
 ## [2.3.1] - 2026-11-10
 
 ### Fixed
@@ -382,16 +396,16 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/ashish-kumar-noon/stickybot/compare/v2.3.1...HEAD
-[2.3.1]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.3.1
-[2.3.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.3.0
-[2.2.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.2.0
-[2.1.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.1.0
-[2.0.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.0.0
-[1.8.6]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.6
-[1.8.5]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.5
-[1.8.4]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.4
-[1.8.3]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.3
-[1.8.2]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.2
-[1.8.1]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.1
-[1.8.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.0
+[Unreleased]: https://github.com/4shishkumar/stickybot/compare/v2.3.1...HEAD
+[2.3.1]: https://github.com/4shishkumar/stickybot/releases/tag/v2.3.1
+[2.3.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.3.0
+[2.2.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.2.0
+[2.1.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.1.0
+[2.0.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.0.0
+[1.8.6]: https://github.com/4shishkumar/stickybot/releases/tag/v1.8.6
+[1.8.5]: https://github.com/4shishkumar/stickybot/releases/tag/v1.8.5
+[1.8.4]: https://github.com/4shishkumar/stickybot/releases/tag/v1.8.4
+[1.8.3]: https://github.com/4shishkumar/stickybot/releases/tag/v1.8.3
+[1.8.2]: https://github.com/4shishkumar/stickybot/releases/tag/v1.8.2
+[1.8.1]: https://github.com/4shishkumar/stickybot/releases/tag/v1.8.1
+[1.8.0]: https://github.com/4shishkumar/stickybot/releases/tag/v1.8.0

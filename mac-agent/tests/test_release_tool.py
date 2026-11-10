@@ -31,8 +31,8 @@ Intro.
 ### Added
 - the first release
 
-[Unreleased]: https://github.com/ashish-kumar-noon/stickybot/compare/v1.7.2...HEAD
-[1.7.2]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.7.2
+[Unreleased]: https://github.com/4shishkumar/stickybot/compare/v1.7.2...HEAD
+[1.7.2]: https://github.com/4shishkumar/stickybot/releases/tag/v1.7.2
 """
 
 
@@ -78,8 +78,8 @@ def test_changelog_turns_unreleased_into_the_release():
     assert "## [Unreleased]\n\n## [1.8.0] - 2026-12-01\n\n### Added\n- a new thing" in new
     assert tool.notes("1.8.0", new) == "### Added\n- a new thing"
     assert tool.notes("Unreleased", new) == ""
-    assert "[Unreleased]: https://github.com/ashish-kumar-noon/stickybot/compare/v1.8.0...HEAD" in new
-    assert "[1.8.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v1.8.0" in new
+    assert "[Unreleased]: https://github.com/4shishkumar/stickybot/compare/v1.8.0...HEAD" in new
+    assert "[1.8.0]: https://github.com/4shishkumar/stickybot/releases/tag/v1.8.0" in new
     assert "[1.7.2]: " in new
 
 

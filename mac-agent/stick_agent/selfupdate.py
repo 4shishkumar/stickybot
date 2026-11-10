@@ -10,8 +10,9 @@ then builds StickyBot.app if the Python changed (`stickybot app build`, app.py; 
 fatal) and restarts the agent the usual way (Agent.restart_soon: execv, like Restart in
 the menu bar). If a step fails the checkout goes back to where it was.
 
-The repo was renamed (stick-key -> stickybot): a clone whose origin still has the old
-name gets the new one first (GitHub redirects the old name, but not forever).
+The repo moved (ashish-kumar-noon/stick-key -> ashish-kumar-noon/stickybot ->
+4shishkumar/stickybot): a clone whose origin still has an old name gets the new one
+first (GitHub redirects the old name, but not forever).
 
 Anything else is left alone, with instructions instead:
   - a developer's checkout (the agent runs from a clone somewhere else): your branch,
@@ -31,7 +32,7 @@ from . import config
 
 log = logging.getLogger("selfupdate")
 PKG = Path(__file__).resolve().parent
-OLD_ORIGIN = re.compile(r"^(?P<head>(?:https://|ssh://git@|git@)github\.com[:/])ashish-kumar-noon/stick-key"
+OLD_ORIGIN = re.compile(r"^(?P<head>(?:https://|ssh://git@|git@)github\.com[:/])ashish-kumar-noon/(?:stick-key|stickybot)"
                         r"(?P<tail>\.git)?/?$", re.IGNORECASE)
 
 
@@ -61,11 +62,11 @@ def git_out(root, *args, timeout=20):
 def renamed_origin(url):
     """The origin URL under the repo's new name, or None if it doesn't need changing."""
     m = OLD_ORIGIN.match((url or "").strip())
-    return f"{m['head']}ashish-kumar-noon/stickybot{m['tail'] or ''}" if m else None
+    return f"{m['head']}4shishkumar/stickybot{m['tail'] or ''}" if m else None
 
 
 def fix_origin(root, emit=None):
-    """Points origin at ashish-kumar-noon/stickybot if it still has the old name. -> the new URL or None."""
+    """Points origin at 4shishkumar/stickybot if it still has an old name. -> the new URL or None."""
     code, url = git_out(root, "remote", "get-url", "origin")
     new = renamed_origin(url) if code == 0 else None
     if new and git_out(root, "remote", "set-url", "origin", new)[0] == 0:

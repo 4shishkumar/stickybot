@@ -18,7 +18,7 @@ class FakeGit:
     """git_out + run_cmd: answers from a table, records every command, can fail one step."""
 
     def __init__(self, root, dirty="", fail=None, version="9.0.0",
-                 origin="https://github.com/ashish-kumar-noon/stickybot.git"):
+                 origin="https://github.com/4shishkumar/stickybot.git"):
         self.root, self.dirty, self.fail, self.version, self.origin = root, dirty, fail, version, origin
         self.ran = []
         self.set_url = []
@@ -252,19 +252,21 @@ async def test_a_firmware_updater_needs_firmware(client, ota, monkeypatch):
     assert r.status == 409 and "make -C m5-stick-s3 release" in (await r.json())["error"]
 
 
-# --- the repo's rename (stick-key -> stickybot) ---------------------------------------------
+# --- the repo's moves (stick-key -> stickybot -> 4shishkumar) ---------------------------------------------
 
 @pytest.mark.parametrize("old, new", [
-    ("https://github.com/ashish-kumar-noon/stick-key.git", "https://github.com/ashish-kumar-noon/stickybot.git"),
-    ("https://github.com/ashish-kumar-noon/stick-key", "https://github.com/ashish-kumar-noon/stickybot"),
-    ("git@github.com:ashish-kumar-noon/stick-key.git", "git@github.com:ashish-kumar-noon/stickybot.git"),
-    ("ssh://git@github.com/ashish-kumar-noon/stick-key", "ssh://git@github.com/ashish-kumar-noon/stickybot"),
+    ("https://github.com/ashish-kumar-noon/stick-key.git", "https://github.com/4shishkumar/stickybot.git"),
+    ("https://github.com/ashish-kumar-noon/stick-key", "https://github.com/4shishkumar/stickybot"),
+    ("git@github.com:ashish-kumar-noon/stick-key.git", "git@github.com:4shishkumar/stickybot.git"),
+    ("git@github.com:ashish-kumar-noon/stickybot.git", "git@github.com:4shishkumar/stickybot.git"),
+    ("ssh://git@github.com/ashish-kumar-noon/stick-key", "ssh://git@github.com/4shishkumar/stickybot"),
+    ("https://github.com/ashish-kumar-noon/stickybot", "https://github.com/4shishkumar/stickybot"),
 ])
 def test_an_old_origin_gets_the_new_name(old, new):
     assert selfupdate.renamed_origin(old) == new
 
 
-@pytest.mark.parametrize("url", ["https://github.com/ashish-kumar-noon/stickybot.git",
+@pytest.mark.parametrize("url", ["https://github.com/4shishkumar/stickybot.git",
                                  "https://github.com/someone/stick-key.git",  # a fork: theirs
                                  "https://github.com/ashish-kumar-noon/stick-key-extras.git", ""])
 def test_other_origins_are_left_alone(url):
@@ -275,7 +277,7 @@ async def test_update_switches_an_old_origin_first(clone):
     clone.origin = "https://github.com/ashish-kumar-noon/stick-key.git"
     events = []
     await selfupdate.update(TAG, events.append, restart=lambda: None)
-    assert clone.set_url == ["https://github.com/ashish-kumar-noon/stickybot.git"]
+    assert clone.set_url == ["https://github.com/4shishkumar/stickybot.git"]
     assert "fetch" in clone.ran[0]  # set before the fetch
     assert any("the repo was renamed" in e.get("line", "") for e in events)
 
@@ -291,10 +293,10 @@ def test_fix_origin_against_a_real_clone(tmp_path, monkeypatch):
     subprocess.run(["git", "-C", str(root), "remote", "add", "origin",
                     "https://github.com/ashish-kumar-noon/stick-key.git"], check=True)
     monkeypatch.setattr(selfupdate, "git_out", lambda r, *a, timeout=20: _git(r, *a))
-    assert selfupdate.fix_origin(root) == "https://github.com/ashish-kumar-noon/stickybot.git"
+    assert selfupdate.fix_origin(root) == "https://github.com/4shishkumar/stickybot.git"
     assert selfupdate.fix_origin(root) is None  # once
     url = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"], capture_output=True, text=True)
-    assert url.stdout.strip() == "https://github.com/ashish-kumar-noon/stickybot.git"
+    assert url.stdout.strip() == "https://github.com/4shishkumar/stickybot.git"
 
 
 def _git(root, *args):

@@ -55,12 +55,12 @@ must match; a diff fails the check: planned, PLAN.md).
    "format": 1,
    "minFirmware": "2.4.0",
    "motion": "calm",
-   "sfb": "https://ashish-kumar-noon.github.io/stickybot/faces/catnap/catnap-1.0.0.sfb",
+   "sfb": "https://4shishkumar.github.io/stickybot/faces/catnap/catnap-1.0.0.sfb",
    "size": 8772,
    "sha256": "…64 hex…",
    "previews": {"portrait": "https://…/faces/catnap/portrait.png",
                 "landscape": "https://…/faces/catnap/landscape.png"},
-   "source": "https://github.com/ashish-kumar-noon/stickybot/tree/main/faces/examples/catnap",
+   "source": "https://github.com/4shishkumar/stickybot/tree/main/faces/examples/catnap",
    "updated": "2026-11-06"
   }
  ],
@@ -86,7 +86,7 @@ per-face discussion; not in v1.
 
 | Option | For | Against |
 |---|---|---|
-| **GitHub Pages** (`actions/deploy-pages` from the catalog build) | A stable URL (`https://ashish-kumar-noon.github.io/stickybot/faces/catalog.json`); served by a CDN with HTTPS; correct content types and CORS; updates minutes after a merge; independent of app releases; free for public repos | One more workflow and a Pages setting to turn on |
+| **GitHub Pages** (`actions/deploy-pages` from the catalog build) | A stable URL (`https://4shishkumar.github.io/stickybot/faces/catalog.json`); served by a CDN with HTTPS; correct content types and CORS; updates minutes after a merge; independent of app releases; free for public repos | One more workflow and a Pages setting to turn on |
 | raw.githubusercontent.com (a generated `catalog` branch) | No Pages setup | Rate-limited, ~5 min caching, `text/plain` for everything, not meant as a CDN; a generated branch to keep |
 | A release asset (`faces-catalog` release, re-uploaded) | Download counts per asset | Release noise; files must be re-uploaded every time; URLs of `latest` redirect; awkward for many small files |
 
