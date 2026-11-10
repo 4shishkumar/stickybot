@@ -17,7 +17,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   The update check, the install command and the faces catalog use the new address. GitHub
   redirects the old one, and an install whose `origin` still names
   `ashish-kumar-noon/stickybot` (or the older `stick-key`) is pointed at the new one on its
-  next update. The faces catalog is now at `4shishkumar.github.io/stickybot/faces/`.
+  next update. The faces catalog is now at `4shishkumar.github.io/stickybot/faces/`, and a
+  settings file that saved the old catalog address gets the new one.
 
 ### Fixed
 - **The Catch game differed between builds**: two random draws in one call ran in a
