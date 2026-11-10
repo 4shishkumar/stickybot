@@ -67,7 +67,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   the stick's sounds, at its volume). Each game played gives StickyBot a little XP (+1, +3
   for a new best, at most 10 a day from games), and the dashboard's Stick page has a Games
   card with the bests (`@games`; PROTOCOL.md, *Games*).
-- **The stick is an IR remote (firmware 2.5.0).** It learns the buttons of your TV, air
+- **The stick is an IR remote (firmware 2.5.0), experimental.** Sending is untested and
+  learning hasn't heard a remote yet on a real stick; a fix is in progress. It learns the buttons of your TV, air
   conditioner or soundbar (menu → **Remote** → *+ Learn*, or the dashboard: press the button
   twice; air conditioners once) and keeps them in its flash, up to 16 remotes of 48 buttons.
   NEC (and extended), Samsung, LG, Sony 12/15/20, RC5, RC6 and Panasonic/Kaseikyo are
@@ -106,6 +107,16 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   the built-in speakers instead (another wired output on a Mac without them), and the
   inaudible tap check goes the same way. Nothing is heard: the tap mutes it there just the
   same. The log says which output is used and why.
+- **The Mac app lost the stick after firmware 2.5.0** ("'CBService' object has no attribute
+  'handle'", then "Writing is not permitted"): 2.5.0's keyboard + mouse moved the stick's
+  Bluetooth services, and macOS handed the Battery service back in a way the Bluetooth
+  library can't read. The app now asks only for its own service. If the stick still won't
+  connect after updating, forget it in the Mac's Bluetooth settings and pair it again (once).
+- **Other ESP32 boards on USB were taken for the stick**: the app's USB fallback sent its
+  `@` lines to whatever Espressif device was plugged in. Only a device named StickyBot (or
+  a chip in download mode, for flashing) counts now.
+- **Air mouse** (firmware 2.5.0): a slower pointer, up/down faster so it reaches the bottom
+  edge, and holding A+B for 1.2 s leaves even when one button was pressed first.
 
 ## [2.2.0] - 2026-11-09
 
