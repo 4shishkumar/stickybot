@@ -12,6 +12,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-11-10
+
 ### Fixed
 - **The v2.3.0 release build failed** before publishing anything: its test machine didn't
   install `cryptography`, which the face-package tests need. v2.3.1 is v2.3.0 with that fixed.
@@ -380,7 +382,8 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/ashish-kumar-noon/stickybot/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/ashish-kumar-noon/stickybot/compare/v2.3.1...HEAD
+[2.3.1]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.3.1
 [2.3.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.3.0
 [2.2.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.2.0
 [2.1.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.1.0
