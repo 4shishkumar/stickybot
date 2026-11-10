@@ -558,7 +558,8 @@ pub async fn onboarding_state(st: &Arc<AppState>) -> Value {
             let mut versions: Vec<String> = conn["version"].as_str().map(str::to_string).into_iter().collect();
             versions.extend(st.usb.sticks().await.iter().filter_map(|u| u["version"].as_str().map(str::to_string)));
             let want = stick_link::ota::version_tuple(&fw);
-            versions.iter().any(|v| stick_link::ota::version_tuple(v) >= want)
+            // no stick to ask (asleep, out of range): not a reason to call setup unfinished
+            versions.is_empty() || versions.iter().any(|v| stick_link::ota::version_tuple(v) >= want)
         }
         None => true,
     };
@@ -573,6 +574,17 @@ pub async fn onboarding_state(st: &Arc<AppState>) -> Value {
         ("repo", !commands.is_empty() && !commands.contains("<org>") && !commands.contains("<repo>")),
         ("tested", history.contains("\"source\":\"voice\"") || history.contains("\"source\": \"voice\"")),
     ]);
+    // a step seen done stays done (the wizard's marks do the same in the Python app): the stick
+    // asleep or a slow reply must not bring the "Setup isn't finished" banner back
+    let newly: Vec<&str> =
+        ONBOARDING_STEPS.iter().copied().filter(|k| *k != "firmware" && !marks.contains_key(*k) && auto[k]).collect();
+    let mut marks = marks;
+    if !newly.is_empty() {
+        for k in &newly {
+            marks.insert((*k).into(), json!(true));
+        }
+        let _ = set(st, json!({"onboarding": marks.clone()}));
+    }
     let mut steps = Map::new();
     for k in ONBOARDING_STEPS {
         let v = match marks.get(k) {

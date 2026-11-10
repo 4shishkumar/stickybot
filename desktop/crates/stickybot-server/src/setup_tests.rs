@@ -493,7 +493,14 @@ async fn onboarding_marks_and_reset() {
     assert_eq!((&v["steps"]["tested"], &v["done"]), (&json!(true), &json!(false)));
     let (_, v) = t.post("/api/onboarding", json!({"step": "paired", "done": false})).await;
     assert_eq!(v["steps"]["paired"], false);
-    assert_eq!(t.st.cfg.lock().unwrap()["onboarding"], json!({"tested": true, "paired": false}));
+    {
+        let cfg = t.st.cfg.lock().unwrap();
+        let marks = &cfg["onboarding"];
+        assert_eq!((&marks["tested"], &marks["paired"]), (&json!(true), &json!(false)));
+        // a step seen done is kept (the stick asleep later doesn't undo it); firmware is always live
+        assert_eq!(marks["picked"], json!(true));
+        assert!(marks.get("firmware").is_none());
+    }
     let (_, v) = t.post("/api/onboarding", json!({"step": "reset"})).await;
     assert_eq!((&v["steps"]["paired"], &v["steps"]["tested"]), (&json!(true), &json!(false)));
     let (s, v) = t.post("/api/onboarding", json!({"step": "fly"})).await;
