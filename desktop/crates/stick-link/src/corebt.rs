@@ -392,6 +392,8 @@ impl CoreBluetooth {
         .await
         .map_err(|e| if e.message.starts_with("timed out") { BleError::not_found(e.message) } else { e })?;
 
+        // only our service (link.py `services=[NUS]`): since firmware 2.5.0 the stick also has a
+        // composite HID + Battery; we never discover, read or subscribe to anything outside NUS
         let pp = p.clone();
         self.on_queue(move || unsafe {
             pp.get().discoverServices(Some(&NSArray::from_retained_slice(&[cbuuid(NUS)])))

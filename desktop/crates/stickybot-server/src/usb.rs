@@ -29,11 +29,23 @@ impl PortInfo {
     pub fn in_bootloader(&self) -> bool {
         self.product.to_lowercase().contains("jtag")
     }
+
+    /// Ours: the firmware names its USB device "StickyBot" (flasher.py `is_stick`). Another ESP32
+    /// board on the Mac (a MicroPython dev board, "Espressif Device") is not.
+    pub fn is_stick(&self) -> bool {
+        self.product.to_lowercase().contains("stickybot")
+    }
 }
 
 pub trait Usb: Send + Sync {
-    /// Espressif USB devices only (`/dev/cu.*`).
+    /// Every Espressif USB device (`/dev/cu.*`), sticks or not (flasher.py
+    /// `espressif_ports(sticks_only=False)`): only for checking a port picked by hand.
     fn ports(&self) -> Vec<PortInfo>;
+    /// Just the sticks: ours ([`PortInfo::is_stick`]) and chips in download mode (flasher.py
+    /// `espressif_ports()`). Nothing else is ever talked to or flashed as "the stick".
+    fn sticks(&self) -> Vec<PortInfo> {
+        self.ports().into_iter().filter(|p| p.is_stick() || p.in_bootloader()).collect()
+    }
     /// Sends one `@…` line and returns the `@{…}` reply, or `None`.
     fn proto(&self, port: &str, line: &str, timeout: Duration) -> Option<Value>;
     /// Opens + closes the port at 1200 baud: the firmware reboots into the bootloader.
@@ -158,7 +170,7 @@ impl UsbSticks {
         let usb = self.backend();
         let line = line.to_string();
         tokio::task::spawn_blocking(move || {
-            let ports: Vec<PortInfo> = usb.ports().into_iter().filter(|p| !p.in_bootloader()).collect();
+            let ports: Vec<PortInfo> = usb.sticks().into_iter().filter(|p| !p.in_bootloader()).collect();
             match ports.len() {
                 0 => json!({"ok": false, "via": null, "reply": null, "error": "no stick connected (Bluetooth or USB)"}),
                 1 => match usb.proto(&ports[0].port, &line, Duration::from_millis(2500)) {
@@ -185,7 +197,7 @@ impl UsbSticks {
         }
         let usb = self.backend();
         let out = tokio::task::spawn_blocking(move || {
-            usb.ports()
+            usb.sticks()
                 .into_iter()
                 .map(|p| {
                     let mut e = json!({"port": p.port, "serial": p.serial, "version": null, "board": null});
@@ -288,5 +300,44 @@ mod tests {
         // while flashing, no port is opened
         u.flashing.store(true, std::sync::atomic::Ordering::Relaxed);
         assert_eq!(u.run("@state").await["error"], "the stick is being flashed");
+    }
+
+    /// Another ESP32 board on the Mac (MicroPython: "Espressif Device", 303a:4001) is never "the
+    /// stick": no `@` line goes to it and it isn't listed (test_only_stickybot_ports_count_as_sticks).
+    #[tokio::test]
+    async fn only_stickybot_ports_count_as_sticks() {
+        let port = |port: &str, pid: u16, product: &str| PortInfo {
+            port: port.into(),
+            serial: "1".into(),
+            product: product.into(),
+            pid,
+        };
+        let fake = Arc::new(FakeUsb::default());
+        *fake.ports.lock().unwrap() = vec![
+            port("/dev/cu.usbmodem101", 0x4001, "Espressif Device"),
+            port("/dev/cu.usbmodemJ", 0x1001, "USB JTAG/serial debug unit"),
+            port("/dev/cu.usbmodemS", 0x1001, "StickyBot"),
+        ];
+        for p in ["/dev/cu.usbmodem101", "/dev/cu.usbmodemS"] {
+            fake.states.lock().unwrap().insert(p.into(), json!({"ok": true, "fw": "2.5.1", "board": "m5stick-s3"}));
+        }
+        let names = |v: Vec<PortInfo>| v.into_iter().map(|p| p.port).collect::<Vec<_>>();
+        assert_eq!(names(fake.sticks()), ["/dev/cu.usbmodemJ", "/dev/cu.usbmodemS"]);
+        assert_eq!(fake.ports().len(), 3);
+
+        let u = UsbSticks::new(fake.clone());
+        let r = u.run("@state").await;
+        assert_eq!((r["ok"].as_bool(), r["via"].as_str()), (Some(true), Some("usb")));
+        let list = u.sticks().await;
+        assert_eq!(list.iter().map(|e| e["port"].as_str().unwrap()).collect::<Vec<_>>(), ["/dev/cu.usbmodemJ", "/dev/cu.usbmodemS"]);
+        assert!(fake.lines.lock().unwrap().iter().all(|(p, _)| p == "/dev/cu.usbmodemS"));
+
+        // only the other board on USB: "no stick", and it's never opened
+        fake.ports.lock().unwrap().retain(|p| p.port == "/dev/cu.usbmodem101");
+        fake.lines.lock().unwrap().clear();
+        u.forget();
+        assert_eq!(u.run("@brightness pct=60").await["error"], "no stick connected (Bluetooth or USB)");
+        assert!(u.sticks().await.is_empty());
+        assert!(fake.lines.lock().unwrap().is_empty());
     }
 }

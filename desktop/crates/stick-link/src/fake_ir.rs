@@ -173,7 +173,7 @@ pub fn message_args(o: &Map<String, Value>) -> Option<(String, Vec<(String, Stri
     Some((op.clone(), args))
 }
 
-/// The 2.5.0 parts of `@state`: `ir` (unless unsupported) and `air`.
+/// The 2.5.0 / 2.5.1 parts of `@state`: `ir` (unless unsupported), `air` and `launcher`.
 pub fn state_extra(st: &mut Value, ir: &FakeIr) {
     if ir.unsupported {
         if let Some(m) = st.as_object_mut() {
@@ -186,9 +186,49 @@ pub fn state_extra(st: &mut Value, ir: &FakeIr) {
         st["air"] = json!({"mode": "home", "sens": 5, "invX": false, "invY": false, "scroll": 5,
                            "invScroll": false, "talkMin": 0, "keys": "arrows", "mouseKnown": true});
     }
+    if st.get("launcher").is_none() {
+        st["launcher"] = json!(LAUNCHER_DEFAULT);
+    }
 }
 
-/// `@air`, `@mode`, `@games` (StickS3 2.5.0); `None` for other actions.
+/// The Launcher's tiles (firmware 2.5.1, logic/launcher.cpp): `(id, letter, always shown)`.
+const LAUNCHER_TILES: [(&str, char, bool); 8] = [
+    ("games", 'g', false),
+    ("remote", 'r', false),
+    ("air", 'a', false),
+    ("presenter", 'p', false),
+    ("media", 'm', false),
+    ("faces", 'f', false),
+    ("quick", 'q', true),
+    ("settings", 's', true),
+];
+const LAUNCHER_DEFAULT: &str = "grapmfqs";
+
+/// `tiles=` (ids or letters, comma separated) -> the letters, with Quick settings and Settings
+/// added at the end when left out (launcher.cpp `parse`); `Err` is the stick's error text.
+fn launcher_parse(tiles: &str) -> Result<String, String> {
+    let mut out = String::new();
+    for name in tiles.split(',').map(|n| n.trim_matches(' ')).filter(|n| !n.is_empty()) {
+        let Some(t) = LAUNCHER_TILES.iter().find(|t| t.0 == name || (name.len() == 1 && name.starts_with(t.1))) else {
+            return Err(format!("unknown tile: {name}"));
+        };
+        if out.contains(t.1) {
+            return Err(format!("tile listed twice: {name}"));
+        }
+        out.push(t.1);
+    }
+    if out.is_empty() {
+        return Err("no tiles".into());
+    }
+    for t in LAUNCHER_TILES.iter().filter(|t| t.2) {
+        if !out.contains(t.1) {
+            out.push(t.1);
+        }
+    }
+    Ok(out)
+}
+
+/// `@air`, `@mode`, `@games` (StickS3 2.5.0), `@launcher` (2.5.1); `None` for other actions.
 pub fn run_25(st: &mut Value, action: &str, args: &[(String, String)]) -> Option<Value> {
     let get = |k: &str| args.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
     let num = |k: &str| get(k).and_then(|v| v.parse::<i64>().ok());
@@ -209,6 +249,21 @@ pub fn run_25(st: &mut Value, action: &str, args: &[(String, String)]) -> Option
             }
             _ => json!({"ok": false, "error": "name must be mouse, presenter, media or home"}),
         },
+        "launcher" => {
+            let (tiles, reset) = (get("tiles").unwrap_or_default(), get("reset").unwrap_or_default());
+            if reset == "1" || reset == "true" {
+                st["launcher"] = json!(LAUNCHER_DEFAULT);
+            } else if !tiles.is_empty() {
+                match launcher_parse(&tiles) {
+                    Ok(l) => st["launcher"] = json!(l),
+                    Err(e) => return Some(json!({"ok": false, "error": e})),
+                }
+            }
+            let letters = st["launcher"].as_str().unwrap_or(LAUNCHER_DEFAULT).to_string();
+            let ids: Vec<&str> =
+                letters.chars().filter_map(|c| LAUNCHER_TILES.iter().find(|t| t.1 == c).map(|t| t.0)).collect();
+            json!({"ok": true, "launcher": letters, "tiles": ids.join(",")})
+        }
         "air" => {
             let a = &mut st["air"];
             for (k, key, lo, hi) in [("sens", "sens", 1, 10), ("scroll", "scroll", 1, 10), ("talk", "talkMin", 0, 600)]
@@ -235,4 +290,33 @@ pub fn run_25(st: &mut Value, action: &str, args: &[(String, String)]) -> Option
         }
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `@launcher` as firmware 2.5.1 answers it (launcher_session.cpp `command`).
+    #[test]
+    fn launcher_tiles() {
+        let mut st = json!({"ok": true});
+        state_extra(&mut st, &FakeIr::default());
+        assert_eq!(st["launcher"], "grapmfqs");
+        let run = |st: &mut Value, a: &[(&str, &str)]| {
+            let a: Vec<(String, String)> = a.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            run_25(st, "launcher", &a).unwrap()
+        };
+        assert_eq!(
+            run(&mut st, &[("tiles", "faces, games,a")]),
+            json!({"ok": true, "launcher": "fgaqs", "tiles": "faces,games,air,quick,settings"})
+        );
+        assert_eq!(st["launcher"], "fgaqs");
+        assert_eq!(run(&mut st, &[])["launcher"], "fgaqs");
+        assert_eq!(run(&mut st, &[("tiles", "games,tv")])["error"], "unknown tile: tv");
+        assert_eq!(run(&mut st, &[("tiles", "games,g")])["error"], "tile listed twice: g");
+        assert_eq!(run(&mut st, &[("tiles", " , ")])["error"], "no tiles");
+        assert_eq!(st["launcher"], "fgaqs");
+        assert_eq!(run(&mut st, &[("tiles", "settings,media")])["launcher"], "smq");
+        assert_eq!(run(&mut st, &[("reset", "1")])["tiles"], "games,remote,air,presenter,media,faces,quick,settings");
+    }
 }

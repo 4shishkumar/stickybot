@@ -145,7 +145,7 @@ fn wait_for_bootloader(usb: &dyn Usb, old: &str, t: &FlashTimings) -> Result<Str
     let deadline = Instant::now() + t.bootloader;
     std::thread::sleep(t.settle);
     while Instant::now() < deadline {
-        let boot: Vec<_> = usb.ports().into_iter().filter(|p| p.in_bootloader()).collect();
+        let boot: Vec<_> = usb.sticks().into_iter().filter(|p| p.in_bootloader()).collect();
         if !boot.is_empty() {
             return Ok(boot.iter().find(|p| p.port == old).unwrap_or(&boot[0]).port.clone());
         }

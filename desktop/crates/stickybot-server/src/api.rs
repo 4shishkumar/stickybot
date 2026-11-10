@@ -2011,4 +2011,29 @@ mod tests {
         let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@games"})), tok)).await;
         assert_eq!(r["reply"]["games"].as_array().unwrap().len(), 7);
     }
+
+    #[tokio::test]
+    async fn the_launcher_card_goes_through_the_proto_endpoint() {
+        // the Stick page's Launcher card (firmware 2.5.1): "launcher" in @state, @launcher tiles=…|reset=1
+        let (app, st, _fake) = app("launcher", true).await;
+        let tok = Some(st.token.as_str());
+        let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@state"})), tok)).await;
+        assert_eq!(r["reply"]["launcher"], "grapmfqs");
+        // stick.js: encodeURIComponent("faces,games,air")
+        let line = "@launcher tiles=faces%2Cgames%2Cair";
+        let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": line})), tok)).await;
+        assert_eq!((r["ok"].as_bool(), r["via"].as_str()), (Some(true), Some("ble")));
+        assert_eq!(r["reply"]["tiles"], "faces,games,air,quick,settings");
+        let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@state"})), tok)).await;
+        assert_eq!(r["reply"]["launcher"], "fgaqs");
+        let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@launcher tiles=tv"})), tok)).await;
+        assert_eq!((r["ok"].as_bool(), r["error"].as_str()), (Some(false), Some("unknown tile: tv")));
+        let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@launcher reset=1"})), tok)).await;
+        assert_eq!(r["reply"]["launcher"], "grapmfqs");
+        // the card itself comes with the Python app's static files
+        let (s, body, _) = call(&app, req("GET", "/static/pages/stick.js", None, None)).await;
+        assert_eq!(s, StatusCode::OK);
+        let body = body.as_str().unwrap();
+        assert!(body.contains("function launcherCard()") && body.contains("send(\"launcher\""));
+    }
 }
