@@ -123,6 +123,16 @@ impl LineDecoder {
     }
 }
 
+/// "We're going" (paused, another stick picked, quitting; firmware 2.6.0+): the stick shows the
+/// agent offline at once. The Bluetooth link stays up for the keyboard, so otherwise it would only
+/// notice when the hellos stop (25 s). Older firmware takes it for a hello (harmless).
+pub fn bye() -> Value {
+    json!({"src": "agent", "bye": true})
+}
+
+/// How long the bye may take before we disconnect anyway.
+pub const BYE_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// The hello (every [`HELLO_EVERY`]): `{"src":"agent","hello":1,"v":1,"t":<unix s>,"tz":<s east of UTC>}`
 /// plus `extra` (the home card, weather, `wmic`... in later phases).
 pub fn hello(t: i64, tz: i32, extra: Option<&Map<String, Value>>) -> Value {

@@ -219,12 +219,81 @@ impl StickStream {
 
 // --- the flow ----------------------------------------------------------------------------------------
 
-/// Shows `state` on the stick (core.py `tell_stick`).
+/// The reply view's text (bytes, UTF-8; the stick keeps 3072).
+pub const READER_MAX: usize = 3000;
+/// ... sent in parts this long after "done".
+pub const PART_BYTES: usize = 480;
+
+static FENCE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^[ \t]*```.*$\n?").expect("valid"));
+static BOLD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*\*|__|`").expect("valid"));
+static HEADING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^[ \t]*#{1,6}[ \t]*").expect("valid"));
+static QUOTE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^[ \t]*>[ \t]?").expect("valid"));
+static BULLET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^([ \t]*)[-*][ \t]+").expect("valid"));
+static TRAILING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[ \t]+\n").expect("valid"));
+static BLANKS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").expect("valid"));
+
+/// The whole reply for the stick's reply view (firmware 2.6.0; core.py `reader_text`): its
+/// paragraphs and list items kept, markdown marks dropped, what the stick can draw, at most
+/// `limit` bytes.
+pub fn reader_text(text: &str, limit: usize) -> String {
+    let t = FENCE.replace_all(text, "");
+    let t = BOLD.replace_all(&t, "");
+    let t = HEADING.replace_all(&t, "");
+    let t = QUOTE.replace_all(&t, "");
+    let t = BULLET.replace_all(&t, "${1}• ");
+    let t = stick_text(&t);
+    let t = TRAILING.replace_all(&t, "\n");
+    let t = BLANKS.replace_all(&t, "\n\n").trim().to_string();
+    if t.len() <= limit {
+        return t;
+    }
+    let mut end = limit - 3;
+    while !t.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", t[..end].trim_end())
+}
+
+/// `text` in pieces of at most `size` UTF-8 bytes, never splitting a character (core.py `reply_parts`).
+pub fn reply_parts(text: &str, size: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for ch in text.chars() {
+        if !cur.is_empty() && cur.len() + ch.len_utf8() > size {
+            out.push(std::mem::take(&mut cur));
+        }
+        cur.push(ch);
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Shows `state` on the stick (core.py `tell_stick`). A "done" longer than the screen's 300
+/// characters is followed by the whole reply in parts (`{"reply":{"rid","i","t"}}`) for the
+/// reply view (firmware 2.6.0; older firmware takes them for hellos and keeps the 300).
 pub async fn tell_stick(st: &AppState, state: &str, heard: &str, text: &str) -> bool {
-    st.link
-        .send(&json!({"src": "agent", "state": state, "heard": cut(&stick_text(heard), 200),
-                      "text": cut(&stick_text(text), 300)}))
-        .await
+    let mut msg = json!({"src": "agent", "state": state, "heard": cut(&stick_text(heard), 200),
+                         "text": cut(&stick_text(text), 300)});
+    let mut parts = Vec::new();
+    let mut rid = 0;
+    if state == "done" {
+        *st.last_done.lock().unwrap() = text.to_string();
+        if stick_text(text).chars().count() > 300 {
+            parts = reply_parts(&reader_text(text, READER_MAX), PART_BYTES);
+            rid = st.reply_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            msg["rid"] = json!(rid);
+            msg["parts"] = json!(parts.len());
+        }
+    }
+    let ok = st.link.send(&msg).await;
+    for (i, p) in parts.iter().enumerate() {
+        if !st.link.send(&json!({"src": "agent", "reply": {"rid": rid, "i": i, "t": p}})).await {
+            break;
+        }
+    }
+    ok
 }
 
 /// Listens to the link for talks and cancels. Runs for the life of the app.
@@ -280,6 +349,16 @@ fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<Recording>) {
         (Some("talk"), Some("stop")) => {
             if let Some(r) = rec.take() {
                 tokio::spawn(handle_talk(st.clone(), r));
+            }
+        }
+        (Some("speak"), _) => {
+            // the reply view's "listen" (firmware 2.6.0)
+            if msg.get("what").and_then(Value::as_str) == Some("stop") {
+                log::info!("reading aloud: stopped on the stick");
+                crate::speak::stop(st);
+            } else {
+                st.pressed();
+                crate::speak::speak_last(st);
             }
         }
         (Some("cancel"), _) => {
@@ -919,5 +998,134 @@ pub(crate) mod tests {
         let st = states(&t);
         assert!(st.contains(&pair("working", "Searching: weather")));
         assert_eq!(st.last().unwrap(), &pair("done", "It's sunny."));
+    }
+
+    // --- the reply view (firmware 2.6.0; test_reply_view.py) ----------------------------------------
+
+    const LONG: &str = "## Release notes\n\nHere's what changed this week:\n\n- **Login**: the redirect bug is fixed, the session cookie survives the round trip.\n- Dark mode landed behind the `theme` toggle.\n\n```sh\nnpm run build\n```\n\n";
+
+    fn long() -> String {
+        format!("{LONG}{}It's 28°C — nice.", "Still open: the billing refactor needs a review, and the CI cache keeps missing. ".repeat(8))
+    }
+
+    /// The JSON lines the fake stick got.
+    pub fn lines(fake: &FakeStick) -> Vec<Value> {
+        String::from_utf8(fake.writes().concat()).unwrap().lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+    }
+
+    #[test]
+    fn reader_text_keeps_paragraphs_and_drops_markdown() {
+        let t = reader_text(&long(), READER_MAX);
+        assert!(t.starts_with("Release notes\n\nHere's what changed this week:\n\n• Login: the redirect"), "{t}");
+        assert!(t.contains("• Dark mode landed behind the theme toggle."));
+        assert!(t.contains("npm run build") && !t.contains("```") && !t.contains("**") && !t.contains("##"));
+        assert!(!t.contains("\n\n\n"));
+        assert!(t.contains("28°C — nice."));
+        let capped = reader_text(&"°".repeat(5000), READER_MAX);
+        assert!(capped.len() <= READER_MAX && capped.ends_with('…'));
+        assert_eq!(reader_text("short", READER_MAX), "short");
+    }
+
+    #[test]
+    fn reply_parts_fit_and_join_back() {
+        let t = reader_text(&long().repeat(3), READER_MAX);
+        let parts = reply_parts(&t, PART_BYTES);
+        assert_eq!(parts.concat(), t);
+        assert!(parts.iter().all(|p| p.len() <= PART_BYTES));
+        let dashes = reply_parts(&"—".repeat(200), 10);
+        assert_eq!(dashes.len(), 67);
+        assert!(dashes[..66].iter().all(|p| p == "———") && dashes[66] == "——");
+        assert!(reply_parts("", 10).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_long_answer_follows_done_in_parts() {
+        let t = agent("reply-parts", false).await;
+        let before = lines(&t.fake).len();
+        tell_stick(&t.st, "done", "what changed", &long()).await;
+        let sent: Vec<Value> = lines(&t.fake).into_iter().skip(before).filter(|m| m.get("hello").is_none()).collect();
+        let (done, rest) = sent.split_first().unwrap();
+        assert_eq!(done["state"], "done");
+        assert_eq!(done["text"].as_str().unwrap().chars().count(), 300);
+        assert_eq!(done["rid"], 1);
+        assert_eq!(done["parts"].as_u64().unwrap() as usize, rest.len());
+        assert!(rest.len() >= 2);
+        for (i, m) in rest.iter().enumerate() {
+            assert_eq!((m["reply"]["rid"].as_u64(), m["reply"]["i"].as_u64()), (Some(1), Some(i as u64)));
+        }
+        let joined: String = rest.iter().map(|m| m["reply"]["t"].as_str().unwrap()).collect();
+        assert_eq!(joined, reader_text(&long(), READER_MAX));
+        assert_eq!(*t.st.last_done.lock().unwrap(), long());
+        // short: just "done"
+        let before = lines(&t.fake).len();
+        tell_stick(&t.st, "done", "weather", "It's 28°C.").await;
+        let sent: Vec<Value> = lines(&t.fake).into_iter().skip(before).filter(|m| m.get("hello").is_none()).collect();
+        assert_eq!(sent, vec![json!({"src": "agent", "state": "done", "heard": "weather", "text": "It's 28°C."})]);
+    }
+
+    fn speech_msgs(fake: &FakeStick) -> Vec<String> {
+        lines(fake).iter().filter_map(|m| m.get("speech").and_then(Value::as_str).map(String::from)).collect()
+    }
+
+    async fn until(f: impl Fn() -> bool) -> bool {
+        for _ in 0..300 {
+            if f() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        false
+    }
+
+    #[tokio::test]
+    async fn listen_reads_the_last_reply_and_says_when_it_ends() {
+        let t = agent("listen", false).await;
+        let v = Arc::new(crate::speak::tests::FakeVoice::default());
+        *t.st.speaker.voice.lock().unwrap() = Arc::new(v.clone());
+        tell_stick(&t.st, "done", "weather", "It's 28°C in Bangalore. Rain later. Take an umbrella.").await;
+        t.fake.notify(&json!({"src": "agent", "evt": "speak", "what": "last"}));
+        assert!(until(|| speech_msgs(&t.fake) == ["on", "off"]).await, "{:?}", speech_msgs(&t.fake));
+        assert_eq!(*v.made.lock().unwrap(), ["It's 28°C in Bangalore.", "Rain later.", "Take an umbrella."]);
+    }
+
+    #[tokio::test]
+    async fn listen_again_stops_it() {
+        let t = agent("listen-stop", false).await;
+        let v = Arc::new(crate::speak::tests::FakeVoice { play_ms: 5000, ..Default::default() });
+        *t.st.speaker.voice.lock().unwrap() = Arc::new(v.clone());
+        tell_stick(&t.st, "done", "x", "One. Two.").await;
+        t.fake.notify(&json!({"src": "agent", "evt": "speak", "what": "last"}));
+        assert!(until(|| !v.played.lock().unwrap().is_empty()).await);
+        t.fake.notify(&json!({"src": "agent", "evt": "speak", "what": "stop"}));
+        assert!(until(|| speech_msgs(&t.fake) == ["on", "off"]).await, "{:?}", speech_msgs(&t.fake));
+        assert!(!t.st.speaker.speaking());
+    }
+
+    #[tokio::test]
+    async fn listen_without_a_reply_says_off() {
+        let t = agent("listen-none", false).await;
+        t.fake.notify(&json!({"src": "agent", "evt": "speak", "what": "last"}));
+        assert!(until(|| speech_msgs(&t.fake) == ["off"]).await, "{:?}", speech_msgs(&t.fake));
+    }
+
+    #[tokio::test]
+    async fn listen_reads_a_long_reply_whole() {
+        let t = agent("listen-long", false).await;
+        let v = Arc::new(crate::speak::tests::FakeVoice::default());
+        *t.st.speaker.voice.lock().unwrap() = Arc::new(v.clone());
+        t.st.cfg.lock().unwrap().insert("speak_max_words".into(), json!(5));
+        tell_stick(&t.st, "done", "x", &long()).await;
+        t.fake.notify(&json!({"src": "agent", "evt": "speak", "what": "last"}));
+        assert!(until(|| speech_msgs(&t.fake) == ["on", "off"]).await);
+        let made = v.made.lock().unwrap().clone();
+        assert!(made.iter().map(|s| s.split_whitespace().count()).sum::<usize>() > 100);
+        assert!(!made.iter().any(|s| s.contains("npm run build")));
+    }
+
+    #[tokio::test]
+    async fn quitting_says_bye() {
+        let t = agent("bye-quit", false).await;
+        assert!(t.st.bye_blocking(Duration::from_secs(1))); // on the runtime: started, not waited for
+        assert!(until(|| lines(&t.fake).contains(&json!({"src": "agent", "bye": true}))).await);
     }
 }

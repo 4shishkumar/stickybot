@@ -19,6 +19,8 @@ AUDIO_IN = "6e400005-b5a3-f393-e0a9-e50e24dcca9e"  # Mac -> stick, sound clips
 OTA_DATA = "6e400006-b5a3-f393-e0a9-e50e24dcca9e"  # Mac -> stick, firmware image (stick 1.8.0+, ota.py)
 HELLO_EVERY_S = 8
 CHUNK = 180
+BYE = {"src": "agent", "bye": True}
+BYE_TIMEOUT_S = 1.0
 
 log = logging.getLogger("link")
 
@@ -55,13 +57,27 @@ class Link:
         self.target = target
         self._wake.set()
         if self.client:
-            asyncio.ensure_future(self.client.disconnect())
+            asyncio.ensure_future(self._leave(self.client))
 
     def pause(self, paused):
         self.paused = paused
         self._wake.set()
         if paused and self.client:
-            asyncio.ensure_future(self.client.disconnect())
+            asyncio.ensure_future(self._leave(self.client))
+
+    async def bye(self, timeout=BYE_TIMEOUT_S):
+        """Tells the stick we're going (paused, another stick picked, quitting): firmware 2.6.0+
+        shows "Agent offline" at once. The Bluetooth link itself stays up for the keyboard, so
+        otherwise it would only notice when the hellos stop (25 s). Older firmware takes it for a
+        hello (harmless)."""
+        try:
+            return await asyncio.wait_for(self.send(BYE), timeout)
+        except Exception:  # noqa: BLE001 — TimeoutError, the link dropped meanwhile
+            return False
+
+    async def _leave(self, client):
+        await self.bye()
+        await client.disconnect()
 
     async def send(self, msg: dict):
         if not self.connected:

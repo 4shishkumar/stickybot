@@ -4,6 +4,7 @@ import collections
 import json
 import logging
 import os
+import re
 import time
 import uuid
 
@@ -27,7 +28,7 @@ from . import (
 )
 from . import stick_mic_device as mic_device
 from .adpcm import Recording
-from .speech import Sentences, Speaker
+from .speech import Sentences, Speaker, speakable
 
 log = logging.getLogger("agent")
 
@@ -45,6 +46,41 @@ def stick_text(s):
         else:
             out.append(unicodedata.normalize("NFKD", ch).encode("ascii", "ignore").decode())
     return "".join(out)
+READER_MAX = 3000      # the reply view's text (bytes, UTF-8; the stick keeps 3072)
+PART_BYTES = 480       # ... sent in parts this long after "done"
+
+
+def reader_text(text, limit=READER_MAX):
+    """The whole reply for the stick's reply view (2.6.0): its paragraphs and list items kept,
+    markdown marks dropped, the characters the stick can draw, at most `limit` bytes."""
+    t = re.sub(r"^[ \t]*```.*$\n?", "", text or "", flags=re.M)  # code fences (the code stays)
+    t = re.sub(r"\*\*|__|`", "", t)
+    t = re.sub(r"^[ \t]*#{1,6}[ \t]*", "", t, flags=re.M)
+    t = re.sub(r"^[ \t]*>[ \t]?", "", t, flags=re.M)
+    t = re.sub(r"^([ \t]*)[-*][ \t]+", r"\1• ", t, flags=re.M)
+    t = stick_text(t)
+    t = re.sub(r"[ \t]+\n", "\n", t)
+    t = re.sub(r"\n{3,}", "\n\n", t).strip()
+    if len(t.encode()) > limit:
+        t = t.encode()[:limit - 3].decode("utf-8", "ignore").rstrip() + "…"
+    return t
+
+
+def reply_parts(text, size=PART_BYTES):
+    """`text` in pieces of at most `size` UTF-8 bytes, never splitting a character."""
+    out, cur, n = [], [], 0
+    for ch in text:
+        b = len(ch.encode())
+        if cur and n + b > size:
+            out.append("".join(cur))
+            cur, n = [], 0
+        cur.append(ch)
+        n += b
+    if cur:
+        out.append("".join(cur))
+    return out
+
+
 PROMPT_RESEND_S = 3    # the stick drops a prompt it hasn't heard about for 30 s
 PROMPT_WAIT_S = 120
 
@@ -116,6 +152,8 @@ class Agent:
         self.brain = brains.Brains(self)  # Claude Code or OpenRouter, as picked in Settings
         self.link = link.Link(self._on_message, self._on_audio, self._on_link, self._hello_extra)
         self.last_reply = None  # {"t", "text"} for the home screen
+        self.last_done = ""     # the last answer the stick showed ("done"): what "listen" reads
+        self._rid = 0           # the full reply's id (reply view, 2.6.0)
         self.weather = weather.Weather()
         self.sounds = None          # the stick's sound settings, as it last reported them
         self._sounds_seen = None    # asyncio.Event, set when a report arrives
@@ -142,7 +180,7 @@ class Agent:
         self.listeners = []  # extra callbacks for every message from the stick
         self.window = None   # (page) -> bool: shows the dashboard in the StickyBot window (menubar.py sets it)
         self.speaker = Speaker(lambda: self.link, self._speech_output,
-                                      lambda: self.cfg.get("speak_voice") or "")
+                               lambda: self.cfg.get("speak_voice") or "", on_speech=self._speech_changed)
         # A held away from USB: the stick's mic into the carrier (the Apple audio tap or BlackHole)
         self.wispr = wispr_mic.WisprMic(emit=self.emit_soon)
         self.wispr.set_enabled(self.cfg.get("wireless_mic"))
@@ -271,8 +309,26 @@ class Agent:
                         "ms": check.get("ms"), "hint": mic_device.PERMISSION_HINT}}
 
     def shutdown(self):
-        """Exit / SIGTERM / restart: never leave the device behind (it outlives us otherwise)."""
+        """Exit / SIGTERM / restart: never leave the device behind (it outlives us otherwise);
+        tell the stick we're going (it shows "Agent offline" at once)."""
+        self._bye_now()
         self.holds.shutdown()
+
+    def _bye_now(self, timeout=1.0):
+        """The stick's bye from outside the event loop (atexit, SIGTERM): waits up to `timeout`."""
+        loop = self.loop
+        if not loop or not loop.is_running() or not self.link.connected:
+            return
+        try:
+            if asyncio.get_running_loop() is loop:  # on the loop itself: can't wait for it
+                asyncio.ensure_future(self.link.bye())
+                return
+        except RuntimeError:
+            pass
+        try:
+            asyncio.run_coroutine_threadsafe(self.link.bye(), loop).result(timeout)
+        except Exception as e:  # noqa: BLE001 — timed out, loop closing
+            log.info("bye: %s", e)
 
     def restart_now(self):
         """Starts the agent again in this process (new code from disk; launchd sees the same pid).
@@ -408,6 +464,13 @@ class Agent:
             if usb:
                 asyncio.ensure_future(self.holds.drop("the stick is on USB"))
             self.emit("wispr_mic", **self.wireless_status())
+        elif msg.get("src") == "agent" and msg.get("evt") == "speak":  # the reply view's "listen" (2.6.0)
+            if msg.get("what") == "stop":
+                log.info("reading aloud: stopped on the stick")
+                self.stop_speaking()
+            else:
+                self.last_input = time.time()
+                self.speak_last()
         elif msg.get("src") == "agent" and msg.get("evt") == "cancel":
             log.info("cancelled on the stick")
             self.brain.cancel()
@@ -467,14 +530,46 @@ class Agent:
 
     def _hello_extra(self):
         # wready: we answer the stick's "prepare" with "ready" (it holds the key until then)
-        extra = {"home": self.home_card(), "wmic": self.wispr.ready, "wready": True, "world": self.world()}
+        # speak: we read the last reply aloud when the stick asks ({"evt":"speak"}, 2.6.0)
+        extra = {"home": self.home_card(), "wmic": self.wispr.ready, "wready": True, "speak": True,
+                 "world": self.world()}
         if self.weather.now:
             extra["wx"] = {**self.weather.now, "at": stick_text(self.weather.now.get("at", ""))}
         return extra
 
     async def tell_stick(self, state, heard="", text=""):
-        await self.link.send({"src": "agent", "state": state, "heard": stick_text(heard)[:200],
-                              "text": stick_text(text)[:300]})
+        msg = {"src": "agent", "state": state, "heard": stick_text(heard)[:200], "text": stick_text(text)[:300]}
+        parts = []
+        if state == "done":
+            self.last_done = text or ""
+            if len(stick_text(text)) > 300:  # the reply view gets the rest after it (firmware 2.6.0+)
+                parts = reply_parts(reader_text(text))
+                self._rid += 1
+                msg.update(rid=self._rid, parts=len(parts))
+        await self.link.send(msg)
+        for i, p in enumerate(parts):
+            if not await self.link.send({"src": "agent", "reply": {"rid": self._rid, "i": i, "t": p}}):
+                break
+
+    def speak_last(self):
+        """Reads the last answer aloud (the stick's "listen"), whatever the speak settings say."""
+        text = self.last_done or (self.last_reply or {}).get("text") or ""
+        if not speakable(text).strip():
+            log.info("reading aloud: nothing to read")
+            self._speech_changed(False)
+            return False
+        log.info("reading aloud: the last reply (%d words)", len(text.split()))
+        self.speaker.say(text)
+        self.emit("spoken", text=text)
+        return True
+
+    def _speech_changed(self, on):
+        """Tells the stick speech started / ended (its reply view shows "Reading aloud")."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        asyncio.ensure_future(self.link.send({"src": "agent", "speech": "on" if on else "off"}))
 
     # --- handling a request ---------------------------------------------------
 

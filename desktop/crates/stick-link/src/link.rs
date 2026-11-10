@@ -277,6 +277,12 @@ impl<C: Connector> Link<C> {
         true
     }
 
+    /// Tells the stick we're going ([`proto::bye`]); false if it couldn't be sent within
+    /// [`proto::BYE_TIMEOUT`]. Quitting calls it; pausing and picking another stick do it themselves.
+    pub async fn bye(&self) -> bool {
+        tokio::time::timeout(proto::BYE_TIMEOUT, self.send(&proto::bye())).await.unwrap_or(false)
+    }
+
     /// The connected stick has this characteristic (AUDIO_IN / OTA_DATA need newer firmware).
     pub fn has(&self, ch: Char) -> bool {
         self.inner.current.lock().unwrap().as_ref().is_some_and(|c| c.has(ch))
@@ -478,6 +484,7 @@ impl<C: Connector> Link<C> {
             })
         });
         let mut lines = LineDecoder::new();
+        let mut leaving = false; // paused or another stick picked (not a dropped link)
         loop {
             tokio::select! {
                 m = rx.recv() => match m {
@@ -502,6 +509,7 @@ impl<C: Connector> Link<C> {
                 r = ctl.changed() => {
                     let c = ctl.borrow_and_update().clone();
                     if r.is_err() || c.paused || c.target.as_ref() != Some(target) {
+                        leaving = true;
                         break;
                     }
                 }
@@ -509,6 +517,9 @@ impl<C: Connector> Link<C> {
         }
         if let Some(h) = hello {
             h.abort();
+        }
+        if leaving && !self.bye().await {
+            log::info!("the stick didn't take the bye; disconnecting anyway");
         }
         *self.inner.current.lock().unwrap() = None;
         self.inner.pending.lock().unwrap().clear(); // waiting requests get None now
@@ -813,6 +824,50 @@ mod tests {
         link.set_target(None);
         wait_for(&link, LinkState::NoStick).await;
         assert_eq!(fake.disconnects(), 2);
+    }
+
+    fn byes(fake: &FakeStick) -> usize {
+        String::from_utf8(fake.writes().concat())
+            .unwrap()
+            .lines()
+            .filter(|l| serde_json::from_str::<Value>(l).is_ok_and(|v| v == proto::bye()))
+            .count()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pausing_and_a_new_stick_say_bye_first_a_drop_doesnt() {
+        let fake = FakeStick::new();
+        let link = connected(&fake, quiet()).await;
+        link.pause(true);
+        wait_for(&link, LinkState::Paused).await;
+        tokio::task::yield_now().await;
+        assert_eq!(byes(&fake), 1);
+        assert_eq!(fake.disconnects(), 1);
+        link.pause(false);
+        wait_for(&link, LinkState::Connected).await;
+        let mut w = link.watch_state();
+        link.set_target(Some(Target { address: "OTHER".into(), name: "y".into() }));
+        w.wait_for(|s| *s == LinkState::Searching).await.unwrap();
+        assert_eq!(byes(&fake), 2);
+        wait_for(&link, LinkState::Connected).await;
+        fake.drop_connection(); // nobody to tell
+        let mut w = link.watch_state();
+        w.wait_for(|s| *s != LinkState::Connected).await.unwrap();
+        wait_for(&link, LinkState::Connected).await;
+        assert_eq!(byes(&fake), 2);
+        assert!(link.bye().await); // quitting: by hand
+        assert_eq!(byes(&fake), 3);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stuck_stick_doesnt_hold_the_pause_up() {
+        let fake = FakeStick::new();
+        let link = connected(&fake, quiet()).await;
+        fake.set_busy(1000, "Insufficient Resource"); // every write refused for a while
+        link.pause(true);
+        tokio::time::timeout(Duration::from_secs(3), wait_for(&link, LinkState::Paused)).await.unwrap();
+        tokio::task::yield_now().await;
+        assert!(!link.connected());
     }
 
     #[tokio::test(start_paused = true)]

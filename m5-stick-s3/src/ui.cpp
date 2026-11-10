@@ -7,6 +7,7 @@
 #include "logic/text.h"
 #include "logic/prompt.h"
 #include "logic/orientation.h"
+#include "logic/reader.h"
 
 namespace ui {
 
@@ -281,6 +282,8 @@ static void statusBar(const String& left, const Dash* d, uint16_t leftColor = IN
   r -= gap + 7;
   btIcon(r, BAR_H / 2 - 5, d->bt == 0 ? INK : d->bt == 1 ? ASK : FAINT);
 }
+
+static int hintBar(actions::Id id, uint8_t flags, uint16_t bg, uint16_t accent);  // below
 
 static void pageDots(Page p) {
   int n = (int)Page::COUNT, gap = 9, x = W / 2 - (n - 1) * gap / 2;
@@ -956,6 +959,7 @@ void drawPage(Page p, const Dash& d) {
     default: break;
   }
   pageDots(p);
+  if (p == Page::HOME && d.hints) hintBar(actions::Id::HOME, 0, blend(GROUND, PANEL, 0.6f), AGENT);
   canvas.pushSprite(0, 0);
 }
 
@@ -1031,11 +1035,60 @@ void drawHolding(const Combo& c, bool usbMic, bool wirelessMic) {
   canvas.pushSprite(0, 0);
 }
 
+// --- The hint bar (logic/actions.h): what the buttons do on this screen ------------------
+
+constexpr int HINT_ROW = 14, HINT_GAP = 12;
+
+static std::vector<std::vector<int>> hintRows(const std::vector<actions::Hint>& h) {
+  canvas.setFont(F9);
+  return actions::layout(h, W - 2 * PAD, orient_ != 0 ? 1 : 2, HINT_GAP, canvasWidth, nullptr);
+}
+
+static int hintHeight(actions::Id id, uint8_t flags) {
+  auto rows = hintRows(actions::hints(actions::screen(id), flags));
+  return rows.empty() ? 0 : (int)rows.size() * HINT_ROW + 5;
+}
+
+// Drawn last, over the bottom of the screen; returns its height.
+static int hintBar(actions::Id id, uint8_t flags, uint16_t bg = GROUND, uint16_t accent = AGENT);
+static int hintBar(actions::Id id, uint8_t flags, uint16_t bg, uint16_t accent) {
+  auto h = actions::hints(actions::screen(id), flags);
+  auto rows = hintRows(h);
+  if (rows.empty()) return 0;
+  const int hh = (int)rows.size() * HINT_ROW + 5, y0 = H - hh;
+  canvas.fillRect(0, y0, W, hh, bg);
+  canvas.drawFastHLine(PAD, y0, W - 2 * PAD, blend(bg, LINE, 0.8f));
+  canvas.setFont(F9);
+  const int sp = canvas.textWidth(" ");
+  for (size_t r = 0; r < rows.size(); r++) {
+    int total = 0;
+    for (size_t k = 0; k < rows[r].size(); k++) {
+      const actions::Hint& x = h[rows[r][k]];
+      total += canvas.textWidth((x.key + " " + x.label).c_str()) + (k ? HINT_GAP : 0);
+    }
+    int x = (W - total) / 2;
+    const int cy = y0 + 3 + (int)r * HINT_ROW + HINT_ROW / 2;
+    for (int i : rows[r]) {
+      const actions::Hint& e = h[i];
+      int kw = canvas.textWidth(e.key.c_str()), lw = canvas.textWidth(e.label.c_str());
+      if (e.accent) canvas.fillRoundRect(x - 5, cy - 7, kw + sp + lw + 10, 14, 7, blend(bg, accent, 0.32f));
+      txt(e.key.c_str(), x, cy, F9, e.accent ? blend(accent, INK, 0.35f) : INK);
+      txt(e.label.c_str(), x + kw + sp, cy, F9, e.accent ? INK : DIM);
+      x += kw + sp + lw + HINT_GAP;
+    }
+  }
+  return hh;
+}
+
 // Button B held: talking to the agent.
 void drawTalk(bool linked) {
   wide();
-  if (!linked) moodScreen(Mood::OFFLINE, "Agent offline", "start it on the Mac", "", false, "", nullptr, 0);
-  else moodScreen(Mood::LISTEN, "Listening", "release to send", "", false, "", nullptr, 0);
+  if (!linked) {
+    moodScreen(Mood::OFFLINE, "Agent offline", "start it on the Mac", "", false, "", nullptr, 0);
+  } else {
+    moodScreen(Mood::LISTEN, "Listening", "", "", false, "", nullptr, hintHeight(actions::Id::TALK, 0));
+    hintBar(actions::Id::TALK, 0);
+  }
   canvas.pushSprite(0, 0);
 }
 
@@ -1048,12 +1101,125 @@ static String dots(const String& word) {
 void drawAgent(const String& state, const String& heard, const String& text) {
   wide();
   String h = heard.length() ? "\"" + heard + "\"" : "";
-  if (state == "done") moodScreen(Mood::DONE, "", h, text, false, "", nullptr, 0);
-  else if (state == "error") moodScreen(Mood::ERROR, "Hmm", h, text, false, "", nullptr, 0);
-  else if (state == "working") moodScreen(Mood::WORK, dots("Working"), h, text, false, "", nullptr, 0);
-  else if (state == "listening") moodScreen(Mood::LISTEN, "Listening", h, "", false, "", nullptr, 0);
-  else moodScreen(Mood::THINK, dots("Thinking"), h, text, false, "", nullptr, 0);
+  // the hint bar: B cancels while the agent is on it, closes after
+  const bool busy = state != "done" && state != "error";
+  const actions::Id hid = state == "done" ? actions::Id::REPLY : actions::Id::AGENT;
+  const uint8_t flags = busy ? actions::BUSY : 0;
+  const int gap = hintHeight(hid, flags);
+  if (state == "done") moodScreen(Mood::DONE, "", h, text, false, "", nullptr, gap);
+  else if (state == "error") moodScreen(Mood::ERROR, "Hmm", h, text, false, "", nullptr, gap);
+  else if (state == "working") moodScreen(Mood::WORK, dots("Working"), h, text, false, "", nullptr, gap);
+  else if (state == "listening") moodScreen(Mood::LISTEN, "Listening", h, "", false, "", nullptr, gap);
+  else moodScreen(Mood::THINK, dots("Thinking"), h, text, false, "", nullptr, gap);
+  hintBar(hid, flags);
   canvas.pushSprite(0, 0);
+}
+
+// --- The reply view (2.6.0) ---------------------------------------------------------------
+
+// A little speaker with sound waves (they pulse while it speaks).
+static void speakerIcon(int x, int cy, uint16_t c, bool live) {
+  canvas.fillRect(x, cy - 3, 4, 6, c);
+  canvas.fillTriangle(x + 3, cy - 3, x + 8, cy - 7, x + 8, cy + 7, c);
+  canvas.fillTriangle(x + 3, cy + 3, x + 8, cy - 7, x + 8, cy + 7, c);
+  int lit = live ? (int)(millis() / 260 % 3) : 2;
+  for (int i = 0; i < 2; i++) {
+    uint16_t wc = i <= lit ? c : blend(GROUND, c, 0.3f);
+    canvas.drawArc(x + 8, cy, 5 + i * 4, 4 + i * 4, 315, 45, wc);
+  }
+}
+
+// The reader's lines, wrapped once per text and width (a long reply takes a while to wrap).
+static const std::vector<std::string>& readerLines(const std::string& text, int maxW) {
+  static std::vector<std::string> lines;
+  static std::string forText;
+  static int forW = -1;
+  if (maxW != forW || text != forText) {
+    canvas.setFont(F12);
+    lines = reader::wrapAll(text, maxW, canvasWidth, nullptr);
+    forText = text;
+    forW = maxW;
+  }
+  return lines;
+}
+
+ReplyLayout drawReply(const ReplyView& v) {
+  const bool landscape = wide();
+  static const std::string empty;
+  const std::string& text = v.text ? *v.text : empty;
+  const uint16_t c = moodColor(Mood::DONE);
+  const bool speaking = v.flags & actions::SPEAKING;
+  ReplyLayout out;
+  // Short: the done screen (big eyes, the answer in the panel), if all of it fits there
+  {
+    std::string flat = text;
+    for (char& ch : flat)
+      if (ch == '\n' || ch == '\r' || ch == '\t') ch = ' ';
+    const int inner = W - 2 * PAD - 6;
+    // the lines the done screen's panel has room for, in the font it picks (moodScreen)
+    const bool small = !landscape && flat.size() > 110;
+    canvas.setFont(small ? F9 : F12);
+    const bool fitsPanel =
+        flat.size() <= 300 && text::fits(flat, landscape ? 4 : small ? 4 : 3, inner, canvasWidth, nullptr);
+    if (fitsPanel) {
+      const uint8_t flags = v.flags & ~actions::PAGED;
+      const int gap = hintHeight(actions::Id::REPLY, flags);
+      String h = v.heard.length() ? "\"" + v.heard + "\"" : "";
+      moodScreen(Mood::DONE, speaking ? "Reading aloud" : "", h, String(flat.c_str()), false, "", nullptr, gap);
+      hintBar(actions::Id::REPLY, flags);
+      canvas.pushSprite(0, 0);
+      out.total = out.visible = 1;
+      return out;
+    }
+  }
+  // Long: the reader
+  uint8_t flags = v.flags | actions::PAGED;
+  canvas.fillScreen(GROUND);
+  const int hh = hintHeight(actions::Id::REPLY, flags);  // (the paged one: never smaller)
+  const int band = 22, top = band + 2, bottom = H - hh - 3, lh = lineH(F12);
+  const int textX = PAD, textW = W - 2 * PAD - 6;
+  const auto& lines = readerLines(text, textW);
+  reader::Pager pg{(int)lines.size(), max(1, (bottom - top - 4) / lh), v.top};
+  pg.clamp();
+  out.total = pg.total;
+  out.visible = pg.visible;
+  out.top = pg.top;
+  out.paged = pg.paged();
+  if (!out.paged) flags &= ~actions::PAGED;  // one screen: no paging hints, page number or thumb
+  // the band: what was heard (or "Reading aloud"), the page on the right
+  int pw = 0;
+  if (out.paged) {
+    String pageTxt = String(pg.page()) + "/" + String(pg.pages());
+    canvas.setFont(F9);
+    pw = canvas.textWidth(pageTxt) + 6;
+    txt(pageTxt, W - PAD, band / 2, F9, FAINT, middle_right);
+  }
+  if (speaking) {
+    speakerIcon(PAD, band / 2, AGENT, true);
+    const int room = W - PAD - pw - (PAD + 22);
+    const lgfx::IFont* f = fit("Reading aloud", room, {F12, F9});
+    txt(ellipsize("Reading aloud", f, room), PAD + 22, band / 2, f, AGENT);
+  } else {
+    canvas.fillCircle(PAD + 3, band / 2, 3, c);
+    String h = v.heard.length() ? "\"" + v.heard + "\"" : String("Reply");
+    txt(ellipsize(h, F9, W - PAD - pw - (PAD + 12)), PAD + 12, band / 2, F9, DIM);
+  }
+  // the text on a panel tinted like the done screen
+  const uint16_t pb = blend(GROUND, c, 0.08f);
+  canvas.fillRoundRect(3, top - 2, W - 6, bottom - top + 4, 10, pb);
+  for (int i = 0; i < pg.visible && pg.top + i < pg.total; i++)
+    txt(lines[pg.top + i].c_str(), textX, top + 3 + i * lh, F12, INK, top_left);
+  // the scroll thumb
+  if (out.paged) {
+    const int trackX = W - 7, trackY = top + 4, trackH = bottom - top - 8;
+    canvas.fillRoundRect(trackX, trackY, 3, trackH, 1, blend(pb, LINE, 0.9f));
+    int ty, th;
+    pg.thumb(trackH, ty, th);
+    canvas.fillRoundRect(trackX - 1, trackY + ty, 5, th, 2, c);
+  }
+  hintBar(actions::Id::REPLY, flags);
+  canvas.pushSprite(0, 0);
+  return out;
 }
 
 void drawMood(int mood, const String& label) {

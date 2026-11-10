@@ -6,6 +6,11 @@
 // Mac agent (tools/mac-agent), triple = wake the screen / open the Launcher (2.5.1: a grid
 // of app tiles, launcher_session.h; its Settings tile is the settings menu).
 //
+// Context actions (2.6.0, logic/actions.h, docs/CONTEXT-ACTIONS.md): a screen can give the
+// buttons its own meaning, shown in a hint bar at its bottom. The reply view (the agent's
+// answer): A = next page, hold A = read it aloud / stop, tilt = scroll, B = close; A is not
+// the key combo there. Hold B (talk), double B (unlock) and triple B (Launcher) stay global.
+//
 // Motion: lift = wake screen, face-down = standby, shake = Escape (or deny a
 // Claude prompt). Each can be turned off in the menu / settings page.
 //
@@ -43,6 +48,8 @@
 #include "logic/wispr.h"
 #include "logic/prompt.h"
 #include "logic/orientation.h"
+#include "logic/reader.h"
+#include "logic/actions.h"
 #include "sound.h"
 #include "events.h"
 #include "ota.h"
@@ -94,6 +101,17 @@ static int dockSide() {
   return last;
 }
 constexpr uint32_t NO_ANSWER_MS = 20000;    // "Thinking..." with no word from the agent: give up
+constexpr uint32_t REPLY_IDLE_MS = 60000;   // the reply view: back to Home after this without a touch
+constexpr uint32_t HOME_HINTS_MS = 4000;    // Home's hint bar, after the screen wakes
+
+// The reply view (2.6.0): the agent's answer ("done") to read, page and scroll, and to have read
+// aloud. Which line is at the top, the tilt that scrolls it, and A while it's the reader's.
+static reader::Pager      replyPager;
+static reader::TiltScroll replyTilt;
+static bool               replyA = false;      // this A press began on the reply view: not the key combo
+static uint32_t           replyTiltAt = 0;
+static uint32_t           homeHintsUntil = 0;
+static std::string        replyShort;          // "done"'s 300 characters, until the full reply is in
 
 static bool nightTime() { return clockfmt::isNight(buddy::hour()); }
 static uint32_t   lastPing = 0;  // approval prompt sound
@@ -189,6 +207,7 @@ static ui::Dash readDash() {
   d.cardUrgent = hc.urgent;
   d.cardIndex = hc.index;
   d.cardCount = hc.count;
+  d.hints = millis() < homeHintsUntil;
   const buddy::Weather& wx = buddy::weather();
   d.wxValid = wx.valid;
   d.wxTemp = wx.temp;
@@ -208,6 +227,25 @@ static ui::Dash readDash() {
   return d;
 }
 
+static uint8_t replyFlags() {
+  return (buddy::agentSpeaks() ? actions::SPEECH : 0) | (buddy::agentSpeaking() ? actions::SPEAKING : 0) |
+         (replyPager.paged() ? actions::PAGED : 0);
+}
+
+static void drawReplyView() {
+  ui::ReplyView v;
+  v.heard = buddy::agent().heard;
+  const std::string& full = buddy::replyFull();
+  if (full.empty()) replyShort = buddy::agent().text.c_str();
+  v.text = full.empty() ? &replyShort : &full;
+  v.top = replyPager.top;
+  v.flags = replyFlags() & ~actions::PAGED;
+  ui::ReplyLayout l = ui::drawReply(v);
+  replyPager.total = l.total;
+  replyPager.visible = l.visible;
+  replyPager.top = l.top;
+}
+
 static void render() {
   switch (mode) {
     case Mode::STATUS:
@@ -215,6 +253,7 @@ static void render() {
       else if (comboDown)                 ui::drawHolding(status.combo, aPath == wispr::Path::USB, wispr::streams(aPath));
       else if (agentTalking)              ui::drawTalk(buddy::agentLinked());
       else if (millis() < agentShowUntil && agentSeenAt < talkEndedAt) ui::drawAgent("thinking", "", "");
+      else if (millis() < agentShowUntil && buddy::agent().state == "done") drawReplyView();
       else if (millis() < agentShowUntil) ui::drawAgent(buddy::agent().state, buddy::agent().heard, buddy::agent().text);
       else                                ui::drawPage(page, readDash());
       break;
@@ -850,7 +889,12 @@ void loop() {
     } else {
       if (st == "done") sound::play(sound::Cue::ANSWER);
       else if (st == "error") sound::play(sound::Cue::ERROR);
-      uint32_t keep = st == "done" ? 15000 : st == "error" ? 6000 : 90000;  // working: Claude can take a while
+      uint32_t keep = st == "done" ? REPLY_IDLE_MS : st == "error" ? 6000 : 90000;  // working: Claude can take a while
+      if (st == "done") {  // a new answer: the reader from the top
+        replyPager = reader::Pager{};
+        replyTilt.begin();
+        replyTiltAt = 0;
+      }
       agentShowUntil = millis() + keep;
       ui::wake(keep);
       dirty = true;
@@ -918,11 +962,23 @@ void loop() {
 
   // Escape: on an agent screen, a click of B (or a shake) dismisses it and cancels
   // the request; back to Home. That click doesn't send Enter.
-  if (mode == Mode::STATUS && agentShowUntil && millis() < agentShowUntil && !agentTalking &&
-      (bSingle || (mev == motion::Event::SHAKE && settings::shakeEscapes()))) {
-    const String& st = buddy::agent().state;
-    bool busy = agentSeenAt < talkEndedAt || st == "thinking" || st == "working";
+  // (2.6.0: what B and a shake do comes from the screen's action map, logic/actions.cpp)
+  const bool agentScreen = mode == Mode::STATUS && agentShowUntil && millis() < agentShowUntil && !agentTalking;
+  const bool agentBusy = agentScreen && (agentSeenAt < talkEndedAt || buddy::agent().state == "thinking" ||
+                                         buddy::agent().state == "working");
+  const bool replyView = agentScreen && !agentBusy && !comboDown && !docked && buddy::agent().state == "done";
+  actions::Do agentAct = actions::Do::NONE;
+  if (agentScreen) {
+    const actions::Screen& scr = actions::screen(replyView ? actions::Id::REPLY : actions::Id::AGENT);
+    const uint8_t flags = replyView ? replyFlags() : agentBusy ? actions::BUSY : 0;
+    if (bSingle) agentAct = actions::lookup(scr, actions::In::B_CLICK, flags);
+    else if (mev == motion::Event::SHAKE && settings::shakeEscapes()) agentAct = actions::lookup(scr, actions::In::SHAKE, flags);
+    if (mev == motion::Event::FLICK_LEFT || mev == motion::Event::FLICK_RIGHT) mev = motion::Event::NONE;  // pages: not here
+  }
+  if (agentAct == actions::Do::CLOSE || agentAct == actions::Do::CANCEL) {
+    const bool busy = agentAct == actions::Do::CANCEL;
     if (busy) buddy::agentCancel();
+    if (replyView && buddy::agentSpeaking()) buddy::agentSpeak(false);  // closing the reply stops reading it
     Log.printf("Agent screen dismissed%s\n", busy ? " (request cancelled)" : "");
     agentShowUntil = 0;
     talkEndedAt = 0;
@@ -1133,6 +1189,51 @@ void loop() {
     dirty = true;
   }
 
+  // The reply view: A pages / reads aloud (not the key combo), tilting scrolls
+  if (replyView && millis() < agentShowUntil) {
+    const actions::Screen& scr = actions::screen(actions::Id::REPLY);
+    auto touch = [] {
+      agentShowUntil = millis() + REPLY_IDLE_MS;
+      ui::wake(REPLY_IDLE_MS);
+      lastInput = millis();
+      dirty = true;
+    };
+    auto run = [&](actions::Do act) {
+      if (act == actions::Do::NONE) return;
+      Log.printf("Reply: %s\n", actions::doName(act));
+      if (act == actions::Do::NEXT_PAGE) replyPager.next();
+      else if (act == actions::Do::LISTEN) buddy::agentSpeak(true);
+      else if (act == actions::Do::STOP_LISTEN) buddy::agentSpeak(false);
+      replyTilt.begin();  // tilt from how it's held now
+      touch();
+    };
+    if (aDown) replyA = true;  // this press is the reader's
+    if (replyA) {
+      if (A.wasHold()) run(actions::lookup(scr, actions::In::A_HOLD, replyFlags()));
+      else if (A.wasClicked()) run(actions::lookup(scr, actions::In::A_CLICK, replyFlags()));
+      if (!A.isPressed()) replyA = false;
+      aDown = aUp = false;
+    }
+    if (actions::lookup(scr, actions::In::TILT, replyFlags()) == actions::Do::SCROLL && !A.isPressed()) {
+      float ax, ay, az, gx, gy;
+      motion::accel(ax, ay, az);
+      ui::setTilt(ax, ay);
+      ui::gravity(gx, gy);
+      uint32_t now = millis();
+      float dt = replyTiltAt ? (now - replyTiltAt) / 1000.0f : 0;
+      replyTiltAt = now;
+      int n = replyTilt.feed(dt, reader::pitchDeg(gy, az));
+      if (n && replyPager.scroll(n)) touch();
+    }
+    if (buddy::agentSpeaking()) {  // reading aloud: the reply stays
+      agentShowUntil = max(agentShowUntil, millis() + 5000);
+      ui::keepAwake();
+    }
+  } else if (replyA) {
+    if (!A.isPressed()) replyA = false;
+    aDown = aUp = false;  // the rest of a press that began on the reply view
+  }
+
   if (mev == motion::Event::SHAKE && settings::shakeEscapes() && mode != Mode::MENU && mode != Mode::GAME &&
       mode != Mode::LAUNCHER && hid::connected()) {
     hid::tapEscape();
@@ -1261,17 +1362,42 @@ void loop() {
   {
     const String& st = buddy::agent().state;
     bool agentBusy = millis() < agentShowUntil && (agentSeenAt < talkEndedAt || st == "thinking" || st == "working");
+    bool speaking = mode == Mode::STATUS && !docked && st == "done" && millis() < agentShowUntil && buddy::agentSpeaking();
     bool live = mode == Mode::STATUS && !docked && (comboDown || agentTalking || agentBusy);
     bool calm = mode == Mode::STATUS && !live && !docked && millis() >= agentShowUntil;
     bool homeAnim = calm && page == ui::Page::HOME && ui::homeAnimating();  // card fade / eyes peeking
     bool idleEyes = calm && page == ui::Page::AGENT;                          // blinking, glancing
     // the face on Home asks for its own pace (0 = Classic: only on change); slower on battery
     uint32_t faceMs = calm && page == ui::Page::HOME ? faces::frameMs(!battery::usbPower(), millis() - lastInput) : 0;
-    uint32_t every = live || homeAnim ? 40 : idleEyes ? 80 : faceMs ? faceMs : docked && battery::charging() ? 150 : 0;
+    uint32_t every = live || homeAnim ? 40 : idleEyes ? 80 : speaking ? 130 : faceMs ? faceMs : docked && battery::charging() ? 150 : 0;
     if (every && ui::awake() && millis() - lastFrame >= every) {
       lastFrame = millis();
       ui::setLevel(mic::live() ? mic::peak() : 0);
       { float ax, ay, az; motion::accel(ax, ay, az); ui::setTilt(ax, ay); }
+      dirty = true;
+    }
+  }
+
+  // What the screens show changed without a new state (the full reply, speech, the agent's bye /
+  // return): redraw now, not at the next poll
+  {
+    static uint32_t seenView = 0;
+    uint32_t v = buddy::viewChanges();
+    if (v != seenView) {
+      seenView = v;
+      dirty = true;
+    }
+  }
+  // Home's hint bar for a moment after the screen wakes
+  {
+    static bool wasAwake = false;
+    if (ui::awake() && !wasAwake) {
+      homeHintsUntil = millis() + HOME_HINTS_MS;
+      dirty = true;
+    }
+    wasAwake = ui::awake();
+    if (homeHintsUntil && millis() >= homeHintsUntil) {
+      homeHintsUntil = 0;
       dirty = true;
     }
   }

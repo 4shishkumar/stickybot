@@ -15,6 +15,7 @@
 #include "faces/faces.h"
 #include "faces/pkg/install.h"
 #include "ir/ir.h"
+#include "logic/reader.h"
 
 namespace buddy {
 
@@ -192,9 +193,45 @@ static void sendUsb() {
   usbSentAt_ = millis();
 }
 
+static reader::Assembly reply_;          // the full reply, in parts after "done"
+static bool     speaks_ = false;          // the agent reads replies aloud on request (2.6.0 agents)
+static bool     speaking_ = false;
+static uint32_t speakAskedAt_ = 0;        // asked on the stick, the agent hasn't said "on" yet
+static uint32_t viewChanges_ = 0;
+
 static void handleAgent(JsonDocument& d) {
+  // Paused or quitting on the Mac (2.6.0): the Bluetooth link stays up for the keyboard, so
+  // without this the stick would only notice when the hellos stop (AGENT_TIMEOUT_MS).
+  if (d["bye"] == true) {
+    if (agentSeen) Log.println("Agent: bye (paused or quit on the Mac)");
+    agentSeen = 0;
+    wmic_ = wready_ = false;
+    speaking_ = false;
+    speakAskedAt_ = 0;
+    viewChanges_++;
+    return;
+  }
   bool fresh = !agentLinked();  // a new agent (or it was gone): tell it where we are
   agentSeen = millis();
+  if (fresh) viewChanges_++;  // back (Resume): the screens show it at once
+  if (d["reply"].is<JsonObject>()) {  // a part of the full reply (after "done")
+    JsonObject r = d["reply"];
+    reader::Assembly::Step st = reply_.add(r["rid"] | 0u, r["i"] | -1, r["t"] | "");
+    if (st == reader::Assembly::Step::COMPLETE) {
+      Log.printf("Agent: full reply, %u bytes\n", (unsigned)reply_.text().size());
+      viewChanges_++;
+    } else if (st == reader::Assembly::Step::BROKEN) {
+      Log.println("Agent: a part of the full reply was lost, the short one stays");
+    }
+    return;
+  }
+  if (d["speech"].is<const char*>()) {  // reading aloud started / stopped (any speech, not just ours)
+    bool on = d["speech"] == "on";
+    if (on != speaking_) viewChanges_++;
+    speaking_ = on;
+    speakAskedAt_ = 0;
+    return;
+  }
   if (d["wispr"] == "ready") {  // the mic device is there: the key can go down
     readyId_ = d["id"] | 0;
     readyPending_ = true;
@@ -218,7 +255,10 @@ static void handleAgent(JsonDocument& d) {
     if (on != wmic_) Log.printf("Agent: wireless Wispr mic %s\n", on ? "on" : "off");
     wmic_ = on;
   }
-  if (d["hello"].is<int>()) wready_ = d["wready"] | false;  // agents before 1.7.1 don't send it
+  if (d["hello"].is<int>()) {
+    wready_ = d["wready"] | false;  // agents before 1.7.1 don't send it
+    speaks_ = d["speak"] | false;   // ... before 2.6.0
+  }
   if (d["proto"].is<const char*>()) {  // a settings command, same as "@..." over USB
     String line = d["proto"].as<String>();
     line.trim();
@@ -280,7 +320,12 @@ static void handleAgent(JsonDocument& d) {
   agent_.state = d["state"].as<String>();
   agent_.heard = d["heard"] | "";
   agent_.text = d["text"] | "";
-  if (agent_.state == "done") lastAnswer_ = agent_;  // errors don't replace the last answer
+  if (agent_.state == "done") {
+    lastAnswer_ = agent_;  // errors don't replace the last answer
+    reply_.begin(d["rid"] | 0u, d["parts"] | 0);  // the full reply follows in this many parts
+  } else if (agent_.state == "thinking") {
+    reply_.begin(0, 0);
+  }
   agentAt = millis();
 }
 
@@ -466,6 +511,39 @@ void fastData() {
 }
 
 void agentCancel() { send("{\"src\":\"agent\",\"evt\":\"cancel\"}"); }
+
+const std::string& replyFull() {
+  static const std::string none;
+  return reply_.complete() ? reply_.text() : none;
+}
+
+bool agentSpeaks() { return speaks_ && agentLinked(); }
+
+void agentSpeak(bool start) {
+  send(start ? "{\"src\":\"agent\",\"evt\":\"speak\",\"what\":\"last\"}"
+             : "{\"src\":\"agent\",\"evt\":\"speak\",\"what\":\"stop\"}");
+  speaking_ = start;  // shown at once; the agent's "speech" says how it went
+  speakAskedAt_ = start ? millis() : 0;
+  viewChanges_++;
+}
+
+bool agentSpeaking() {
+  if (speaking_ && speakAskedAt_ && millis() - speakAskedAt_ > 8000) {  // asked, never started
+    speaking_ = false;
+    speakAskedAt_ = 0;
+    viewChanges_++;
+  }
+  return speaking_ && agentLinked();
+}
+
+uint32_t viewChanges() {
+  static bool linked = false;  // the hellos stopped (no bye: an older agent, a crash)
+  if (agentLinked() != linked) {
+    linked = !linked;
+    viewChanges_++;
+  }
+  return viewChanges_;
+}
 
 void agentTalkEvent(bool start) {
   if (start) fastLink();

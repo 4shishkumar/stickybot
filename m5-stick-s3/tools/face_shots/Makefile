@@ -9,6 +9,10 @@
 #   make -C tools/face_shots launcher   the Launcher (2.5.1): the app grid's pages, Quick settings
 #                                       and the Faces picker, portrait and landscape -> out/launcher/
 #                                       + launcher-sheet.png
+#   make -C tools/face_shots reply [REPLY_OUT=<dir>]
+#                                       the reply view (2.6.0): short, long (top, half way, end),
+#                                       reading aloud, portrait and landscape, and the hint bars of
+#                                       the agent / talk / Home screens -> out/reply/ + reply-sheet.png
 #   make -C tools/face_shots previews   the dashboard's face pictures (mac-agent static/faces/)
 #   make -C tools/face_shots pkg PKG=<dir> [PREVIEWS=1]
 #                                       a face package (docs/faces/FORMAT.md): validated and
@@ -47,7 +51,7 @@ CSRC := $(wildcard $(GFX)/lgfx/utility/*.c) fontstubs.c
 OBJ  := $(addprefix $(B)/,$(notdir $(APP:.cpp=.o) $(LGFX:.cpp=.o) $(CSRC:.c=.o)))
 VPATH := $(SRC) $(SRC)/faces $(SRC)/faces/pkg $(SRC)/logic $(SRC)/games $(GFX)/lgfx/v1 $(GFX)/lgfx/utility .
 
-.PHONY: demo previews pkg fuzz air games menu launcher clean
+.PHONY: demo previews pkg fuzz air games menu launcher reply clean
 OUT ?= out/games
 demo: $(B)/shots
 	cd $(B)/.. && $(B)/shots demo out $(FACE)
@@ -57,6 +61,9 @@ menu: $(B)/shots
 	mkdir -p out/menu && $(B)/shots menu out/menu
 launcher: $(B)/shots
 	mkdir -p out/launcher && $(B)/shots launcher out/launcher
+REPLY_OUT ?= out/reply
+reply: $(B)/shots
+	mkdir -p $(REPLY_OUT) && $(B)/shots reply $(REPLY_OUT)
 games: $(B)/shots
 	$(B)/shots games $(OUT)
 previews: $(B)/shots

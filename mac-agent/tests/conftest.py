@@ -286,6 +286,9 @@ class FakeLink:
     def pause(self, paused):
         self.paused = paused
 
+    async def bye(self):
+        return await self.send({"src": "agent", "bye": True})
+
     def states(self):
         """The agent's status messages to the stick, in order (state, text)."""
         return [(m["state"], m.get("text", "")) for m in self.sent if m.get("src") == "agent" and "state" in m]
