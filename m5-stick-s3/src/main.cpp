@@ -3,7 +3,8 @@
 // Button A (front) mirrors a key combo over Bluetooth: press = combo down,
 // release = combo up (single press = once, double = twice, hold = held).
 // Button B (side): click = Enter, double = unlock the Mac, hold = talk to the
-// Mac agent (tools/mac-agent), triple = wake the screen / open the menu.
+// Mac agent (tools/mac-agent), triple = wake the screen / open the Launcher (2.5.1: a grid
+// of app tiles, launcher_session.h; its Settings tile is the settings menu).
 //
 // Motion: lift = wake screen, face-down = standby, shake = Escape (or deny a
 // Claude prompt). Each can be turned off in the menu / settings page.
@@ -29,6 +30,7 @@
 #include "hid.h"
 #include "ui.h"
 #include "menu.h"
+#include "launcher_session.h"
 #include "faces/pkg/install.h"
 #include "faces/pkg/package.h"
 #include "web.h"
@@ -67,7 +69,9 @@ constexpr uint16_t COLOR_OK   = 0x03E0;
 constexpr uint16_t COLOR_WARN = 0xC300;
 constexpr uint16_t COLOR_DIM  = 0x2104;
 
-enum class Mode { STATUS, MENU, WEB, GAME };  // GAME: the games (games/games.h) own the screen and buttons
+// GAME: the games (games/games.h) own the screen and buttons; LAUNCHER: the app grid, Quick
+// settings and the Faces picker (launcher_session.h)
+enum class Mode { STATUS, MENU, WEB, GAME, LAUNCHER };
 
 static Mode       mode = Mode::STATUS;
 static bool       agentTalking = false;
@@ -216,6 +220,9 @@ static void render() {
       break;
     case Mode::MENU:
       ui::drawMenu(menu::view());
+      break;
+    case Mode::LAUNCHER:
+      launcher::draw();
       break;
     case Mode::GAME:  // the games draw themselves
       break;
@@ -392,7 +399,7 @@ static const char* otaBusy() {
   if (agentTalking) return "talk";
   if (buddy::hasPrompt()) return "approval";
   if (hid::pairingCode()) return "pairing";
-  if (mode == Mode::MENU) return "menu";
+  if (mode == Mode::MENU || mode == Mode::LAUNCHER) return "menu";
   if (mode == Mode::GAME) return "game";
   if (web::busy()) return "wifi-update";
   if (faces::pkg::install::receiving()) return "faces";  // a face package is arriving (one transfer at a time)
@@ -454,12 +461,6 @@ static void onMenu(menu::Action a) {
     case menu::Action::POWER_OFF:
       powerOff();
       break;
-    case menu::Action::AIR:  // air mouse / presenter / media remote (air.h)
-      ui::setBrightness(settings::brightnessPct());  // undo a brightness preview
-      air::request(menu::remoteMode() == 1 ? air::Mode::MOUSE : menu::remoteMode() == 2 ? air::Mode::PRESENTER
-                                                                                       : air::Mode::MEDIA);
-      mode = Mode::STATUS;
-      break;
     case menu::Action::VOLUME:  // takes effect (and plays a preview) right away
       settings::saveSoundVolume(menu::draft().volume);
       sound::play(sound::Cue::TEST);
@@ -491,8 +492,6 @@ static void onMenu(menu::Action a) {
       settings::saveSoundOn(d.sound);
       settings::saveSoundVolume(d.volume);
       settings::saveWirelessMic(d.wmic);
-      settings::saveFace(faces::at(d.face).id());
-      faces::select(faces::at(d.face).id());
       if (!d.autoRotate) ui::setFlipped(settings::flipped());
       settings::saveStandbyMin(d.standbyMin);
       settings::saveBrightnessPct(d.brightnessPct);
@@ -520,17 +519,58 @@ static void onMenu(menu::Action a) {
       ui::setBrightness(settings::brightnessPct());  // undo preview
       mode = Mode::STATUS;
       break;
-    case menu::Action::GAMES:  // leaves the menu like Cancel
-      ui::setBrightness(settings::brightnessPct());
+  }
+  dirty = true;
+}
+
+// The settings menu (the Launcher's Settings tile)
+static void openSettings() {
+  menu::open({settings::combo(), hid::slot(), settings::standbyMin(), settings::brightnessPct(),
+              settings::enterDelayMs(),
+              settings::liftWakes(), settings::faceDownSleeps(), settings::shakeEscapes(),
+              settings::autoRotate(), settings::landscape(), settings::clock24(), settings::devMode(), settings::soundOn(), settings::soundVolume(),
+              settings::wirelessMic()},
+             hid::state() == hid::Bt::OFF);
+  mode = Mode::MENU;
+  dirty = true;
+}
+
+// --- Launcher (launcher_session.h) ------------------------------------------------------------------
+
+// The apps it opens end at Home (as before). The B click that opened one isn't a click there
+// too (the IR remote reads B's click count; on Home a B click is Enter): it's swallowed.
+static void onLauncher(launcher::Action a, bool byHold) {
+  using A = launcher::Action;
+  if (a == A::NONE) return;
+  const bool leaves = a != A::REDRAW;
+  switch (a) {
+    case A::GAMES:
       games::open(shownScreen.flipped, dockSide());
       mode = Mode::GAME;
       break;
-    case menu::Action::REMOTE:  // the IR remote screen: the menu's drafts are dropped
-      ui::setBrightness(settings::brightnessPct());
+    case A::REMOTE:
       mode = Mode::STATUS;
       ir::screenOpen();
       break;
+    case A::AIR: case A::PRESENTER: case A::MEDIA:  // air.h; the loop takes over at its next pass
+      air::request(a == A::AIR ? air::Mode::MOUSE : a == A::PRESENTER ? air::Mode::PRESENTER : air::Mode::MEDIA);
+      mode = Mode::STATUS;
+      break;
+    case A::SETTINGS:
+      openSettings();
+      break;
+    case A::HOME:
+      mode = Mode::STATUS;
+      page = ui::Page::HOME;
+      break;
+    default:
+      break;
   }
+  if (leaves && mode != Mode::MENU && mode != Mode::GAME) {
+    if (byHold) ignoreBUntilRelease = M5.BtnB.isPressed();
+    else swallowB = true;
+  }
+  lastInput = millis();
   dirty = true;
 }
 
@@ -692,6 +732,7 @@ void setup() {
   air::begin();
   faces::begin();
   faces::select(settings::face());
+  launcher::begin();
   ui::begin();
   ui::setFlipped(settings::flipped());
   ui::setBrightness(settings::brightnessPct());
@@ -783,10 +824,11 @@ void loop() {
   bool bSingle = B.wasDecideClickCount() && B.getClickCount() == 1;
   bool bDouble = B.wasDecideClickCount() && B.getClickCount() == 2;
   bool bTriple = B.wasDecideClickCount() && B.getClickCount() >= 3;
+  bool bClick = B.wasClicked();  // released before the hold time (the Launcher: no wait for the count)
   if (aDown || bDown) lastInput = millis();
   if (ignoreBUntilRelease) {  // the hold that opened the menu
     if (!B.isPressed()) ignoreBUntilRelease = false;
-    bDown = bSingle = bDouble = bTriple = bHold = false;
+    bDown = bSingle = bDouble = bTriple = bHold = bClick = false;
   }
   if (agentTalking && !B.isPressed()) {
     agentTalking = false;
@@ -834,7 +876,7 @@ void loop() {
     swallowB = false;
     swallowBUntil = millis() + 900;
   }
-  if (swallowB || millis() < swallowBUntil) bDown = bSingle = bDouble = bTriple = bHold = false;
+  if (swallowB || millis() < swallowBUntil) bDown = bSingle = bDouble = bTriple = bHold = bClick = false;
 
   motion::Event mev = motion::poll();
   if (mev != motion::Event::NONE) {
@@ -850,7 +892,7 @@ void loop() {
       if (!airWas) {  // starting (from the menu or @mode): it takes over from whatever else is open
         if (mode == Mode::GAME) games::close();  // the CPU back to 80 MHz, the speaker released
         if (mode == Mode::MENU) ui::setBrightness(settings::brightnessPct());  // the menu's drafts are dropped
-        if (mode == Mode::GAME || mode == Mode::MENU) mode = Mode::STATUS;
+        if (mode == Mode::GAME || mode == Mode::MENU || mode == Mode::LAUNCHER) mode = Mode::STATUS;
         ir::screenClose();  // a learn from the Mac carries on and shows once the mode ends
       }
       if (comboDown) comboRelease();
@@ -866,7 +908,7 @@ void loop() {
       ui::setOrientation(shownScreen.flipped, shownScreen.side);  // as the stick is held (like games / IR)
       ignoreAUntilRelease = A.isPressed();
       swallowB = B.isPressed();
-      aDown = aUp = bDown = bSingle = bDouble = bTriple = bHold = false;
+      aDown = aUp = bDown = bSingle = bDouble = bTriple = bHold = bClick = false;
       lastInput = millis();
       page = ui::Page::HOME;
       lastFrame = 0;
@@ -1092,7 +1134,7 @@ void loop() {
   }
 
   if (mev == motion::Event::SHAKE && settings::shakeEscapes() && mode != Mode::MENU && mode != Mode::GAME &&
-      hid::connected()) {
+      mode != Mode::LAUNCHER && hid::connected()) {
     hid::tapEscape();
     Log.println("-> Escape (shake)");
   }
@@ -1129,14 +1171,9 @@ void loop() {
       if (bTriple && !comboDown) {
         if (ui::wake(B_SCREEN_MS)) {
           dirty = true;  // screen was off: this only wakes it
-        } else if (mode == Mode::STATUS) {
-          menu::open({settings::combo(), hid::slot(), settings::standbyMin(), settings::brightnessPct(),
-                      settings::enterDelayMs(),
-                      settings::liftWakes(), settings::faceDownSleeps(), settings::shakeEscapes(),
-                      settings::autoRotate(), settings::landscape(), settings::clock24(), settings::devMode(), settings::soundOn(), settings::soundVolume(),
-                      settings::wirelessMic(), (uint8_t)max(0, faces::find(settings::face()))},
-                     hid::state() == hid::Bt::OFF);
-          mode = Mode::MENU;
+        } else if (mode == Mode::STATUS) {  // the Launcher (2.5.1; Settings is one of its tiles)
+          launcher::open();
+          mode = Mode::LAUNCHER;
           dirty = true;
         } else {
           if (devActive) web::hide();  // keep Wi-Fi for OTA + logs
@@ -1160,6 +1197,19 @@ void loop() {
       }
       if (mode == Mode::MENU && menu::timedOut()) onMenu(menu::Action::CANCEL);
       break;
+
+    case Mode::LAUNCHER: {  // A next, B open / change, hold B back, flick: the next page
+      ui::keepAwake();
+      launcher::Action la = launcher::Action::NONE;
+      if (aDown) la = launcher::pressA();
+      else if (bClick) la = launcher::clickB();
+      else if (bHold) la = launcher::holdB();
+      else if (mev == motion::Event::FLICK_RIGHT || mev == motion::Event::FLICK_LEFT)
+        la = launcher::flick(mev == motion::Event::FLICK_RIGHT ? 1 : -1);
+      if (la == launcher::Action::NONE && launcher::timedOut()) la = launcher::Action::HOME;
+      onLauncher(la, bHold);
+      break;
+    }
 
     case Mode::GAME: {
       games::Input in{};

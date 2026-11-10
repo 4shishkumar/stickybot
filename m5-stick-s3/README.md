@@ -17,7 +17,7 @@ Default combo: **⌥ Option + ⌘ Command** (e.g. to trigger Wispr Flow).
 | Click | Enter |
 | Double press | unlock the Mac (types the saved Mac password + Return) |
 | Hold | talk to the StickyBot Mac app (`../mac-agent`): speak, release — works over Bluetooth, no cable |
-| Triple press | open the settings menu (wakes the screen first if it's off; closes web settings) |
+| Triple press | open the **Launcher**, the app grid (wakes the screen first if it's off; closes web settings). Its **Settings** tile is the settings menu |
 
 The stick's third button (power/reset, on the other side) is handled by the
 power chip: hold it for download mode, see "Flashing" below.
@@ -137,21 +137,22 @@ Portrait layout:
 └───────────────┘
 ```
 
-Upside down? Menu → **Flip screen** (saved).
+Upside down? Settings → **Flip screen** (saved).
 
 With **Auto-rotate** on (the default) the motion sensor turns the screen to how you
 hold the stick. Held sideways, the screens with text to read (Claude approvals and
 questions, alerts, the agent's replies, Home / Agent / Status, messages) switch to a
 landscape layout; the A answer then sits at the end of the screen next to button A,
 with an arrow. The switch waits until the stick has been still on its new side for
-about half a second, and lying flat keeps the last one. The menu and the firmware
-update screen stay portrait. Menu → **Landscape screens** turns the landscape layouts
+about half a second, and lying flat keeps the last one. The Launcher, Quick settings and
+the Faces picker turn too; the settings menu and the firmware update screen stay portrait.
+Settings → **Landscape screens** turns the landscape layouts
 off (portrait only, as before 1.9.0); with Auto-rotate off the screen stays portrait
 and follows **Flip screen**. Serial `screens` (or `screens landscape`) previews them.
 
 ### Faces (firmware 2.1.0)
 
-Home has **faces**: pick one in the menu (**Face**), on the Web settings page, or on the
+Home has **faces**: pick one on the stick (Launcher → **Faces**), on the Web settings page, or on the
 dashboard's Stick page (with pictures and a **Preview** button that plays a short demo on
 the stick). Every face keeps the time, the battery / Bluetooth and anything urgent (an
 approval or question waiting, the Mac not connected, Bluetooth off, the battery low) on
@@ -218,13 +219,65 @@ code into `tools/face_shots/out/` (PNGs and contact sheets; `SCALE=3` for big pi
   appear in the Bluetooth menu like other keyboards.
 
 
+### Launcher (firmware 2.5.1)
+
+Triple-press B opens the **Launcher**: big tiles for the stick's apps, six a page (2 x 3
+held upright, 3 x 2 held sideways), with page dots in the top bar and what the selected tile
+does under the grid.
+
+| Tile | Opens |
+|---|---|
+| **Games** | the games (below) |
+| **Remote** | the IR remote (below) |
+| **Air mouse** / **Presenter** / **Media** | that remote mode (below) |
+| **Faces** | the face picker: every face by name, the one in use ticked, a line about the selected one. A next, B uses it (saved) and shows Home, hold B back |
+| **Quick** | Quick settings (below) |
+| **Settings** | the settings menu (section 6a) |
+
+| Button / motion | |
+|---|---|
+| A | next tile (round all the pages) |
+| B (click) | open it |
+| Hold B | back to Home |
+| Flick the wrist right / left | next / previous page |
+
+It opens on the tile you opened last, and closes by itself after 60 s without a press. The
+apps go back to **Home** when they end, as before (the games' and the Remote's *hold B*, the
+remote modes' *hold A + B*, Settings' *Save & exit* / *Cancel*); Quick settings and Faces go
+back to the Launcher. Approvals, questions and pairing requests still take the screen; the
+Launcher is there again after. Started from the Mac (`@mode`, an IR learn) while the Launcher
+is open, a remote mode closes it.
+
+**Quick settings** (Android's quick toggles): two sliders and six tiles, each change applied
+and saved at once (no Save):
+
+| Item | B does |
+|---|---|
+| Brightness | 25 → 50 → 75 → 100 % |
+| Volume | 25 → 50 → 75 → 100 % (plays a test sound; turns Sounds on if they were off) |
+| Sounds | on / off (mute) |
+| Wispr mic | the wireless Wispr mic on / off |
+| 24-hour | the 24-hour clock on / off |
+| Rotate | auto-rotate on / off |
+| Gestures | lift / face-down / shake together: all off, or (all off) all on. Each one alone: Settings |
+| Settings | opens the settings menu |
+
+A next, B change, hold B back to the Launcher. Bright tiles are on.
+
+**From the dashboard:** the Stick page's *Launcher* card puts the tiles in another order and
+hides the ones you don't use (Quick settings and Settings always stay). It's kept on the
+stick (`@launcher tiles=games,air,quick,…`, PROTOCOL.md). `make -C tools/face_shots
+launcher` draws every Launcher screen, portrait and landscape; the logic (tile lists, grid,
+pages) is `src/logic/launcher.*` (tested by `test_launcher`), the session
+`src/launcher_session.*`, the drawing `src/launcher_ui.*`.
+
 ### Games (firmware 2.5.0)
 
-Menu (triple-press B) → **Games**: a picker with each game's best score (A next, B play,
+Launcher (triple-press B) → **Games**: a picker with each game's best score (A next, B play,
 hold B back to Home). Every game works the same way: a title card (A starts), **B or hold B
 pauses** (Resume / Restart / Quit: A next, B pick), game over (A again, B the picker). The
 bests are kept on the stick (`@games` lists them); with sounds on there are little effects
-at the menu's volume. StickyBot is the hero where it fits.
+at the stick's volume. StickyBot is the hero where it fits.
 
 | Game | Play | Score |
 |---|---|---|
@@ -247,10 +300,11 @@ Mac (and prints each game's frame cost); the rules are in `src/logic/games*` (te
 
 ### Air mouse, presenter, media remote (firmware 2.5.0)
 
-Menu (triple-press B) → the last three items (*Air mouse*, *Presenter*, *Media remote*), the
-dashboard's Stick page (*Mouse & presenter*) or serial `mode mouse|presenter|media|home`. Hold
-**A + B** together for a second to go back to Home. Started from the Mac while the menu, the
-games or the Remote screen are open, it closes them (the menu's unsaved changes are dropped).
+Launcher (triple-press B) → *Air mouse*, *Presenter* or *Media*, the dashboard's Stick page
+(*Mouse & presenter*) or serial `mode mouse|presenter|media|home`. Hold **A + B** together for
+a second to go back to Home (not the Launcher: you're usually done with the stick). Started
+from the Mac while the Launcher, the settings menu, the games or the Remote screen are open,
+it closes them (the menu's unsaved changes are dropped).
 
 | Mode | Buttons | Motion |
 |---|---|---|
@@ -276,7 +330,7 @@ prints the raw gyro to check the axes and signs.
 
 ### IR remote (firmware 2.5.0)
 
-Menu (triple-press B) → **Remote (IR)**: the remotes the stick has learned, then their
+Launcher (triple-press B) → **Remote**: the remotes the stick has learned, then their
 buttons (favourites first). Remotes: A opens, B next, B-B previous, hold B back to Home.
 Buttons: A sends (hold to repeat), B next, B-B previous, B-B-B favourite, hold B back to the
 remotes. Tilting sideways scrolls. **+ Learn**: point the remote at the stick's top and press
@@ -295,7 +349,7 @@ driver and the screen in `src/ir/`.
 
 The combo is saved in the stick's flash (NVS) and used immediately.
 
-### a) On the stick: triple-press B → menu
+### a) On the stick: triple-press B → Settings
 
 | Item | Button B does |
 |---|---|
@@ -308,14 +362,17 @@ The combo is saved in the stick's flash (NVS) and used immediately.
 | Flip screen | rotate the screen 180° (saved) |
 | Forget pairing | press twice to confirm; stick restarts |
 | Save & exit / Cancel | |
-| Games / Remote (IR) / Air mouse / Presenter / Media remote | open that screen (2.5.0; after Power off, before Save & exit and Cancel) |
+
+2.5.1: Games, Remote (IR), Air mouse, Presenter, Media remote and the face picker moved out
+of this menu to their own tiles in the Launcher; brightness, volume, sounds, the Wispr mic,
+the clock, auto-rotate and the gestures are in Quick settings too (applied at once there).
 
 Button A moves to the next item. The top bar shows the combo you're building.
-The menu cancels itself after 60 s without input.
+The menu cancels itself after 60 s without input (back to Home).
 
 ### b) In the browser: Web settings
 
-Turn it on from the menu (**Web settings**). Wi-Fi stays off the rest of the
+Turn it on from Settings (**Web settings**). Wi-Fi stays off the rest of the
 time to save battery, and switches itself off after 10 min with no page use.
 
 - **First time (no home Wi-Fi saved):** the stick creates its own hotspot. The
@@ -378,7 +435,7 @@ Quit with **Ctrl+C**. Opening the monitor may restart the stick.
 |---|---|
 | Port doesn't appear / upload fails | Data cable? Then download mode: hold the side power/reset button until the green LED flashes. |
 | Screen black after flashing | Press the power/reset button once. |
-| Screen upside down | Menu → **Flip screen**. |
+| Screen upside down | Settings → **Flip screen**. |
 | "Not connected" when pressing A | Pair it (step 4). If it was paired before, see "Re-pair from scratch". |
 | `stickybot.local` doesn't open | Use the IP shown on the stick's screen. |
 | Page unreachable on the hotspot | Make sure the Mac joined **stickybot-setup**, then open http://192.168.4.1. |
@@ -386,7 +443,7 @@ Quit with **Ctrl+C**. Opening the monitor may restart the stick.
 ### Re-pair from scratch
 
 1. Mac: **System Settings → Bluetooth** → **StickyBot** → **(i)** → **Forget This Device**.
-2. Stick: menu → **Forget pairing** (press B twice), or serial `forget`.
+2. Stick: Settings → **Forget pairing** (press B twice), or serial `forget`.
 3. Pair again (step 4).
 
 ---
@@ -457,7 +514,8 @@ m5-stick-s3/
     ├── air.*, air_ui.* the air mouse / presenter / media remote (2.5.0)
     ├── ir/            the IR remote (2.5.0): RMT driver, store, the Remote screen
     ├── logic/         the hardware-free logic, covered by the native tests (test/)
-    ├── menu.*         on-device settings menu
+    ├── menu.*         on-device settings menu (the Launcher's Settings tile)
+    ├── launcher_*     the Launcher: session, drawing (logic in logic/launcher.*)
     ├── web.*          Wi-Fi + settings page server
     └── web_page.h     the settings page (HTML/JS)
 ```

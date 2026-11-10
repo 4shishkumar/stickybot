@@ -24,6 +24,7 @@
 #include "air_ui.h"
 #include "menu.h"
 #include "games/draw.h"
+#include "launcher_ui.h"
 #include <chrono>
 
 // --- The bits of the firmware the screens touch -------------------------------------
@@ -423,6 +424,49 @@ static void menuShots(const std::string& dir) {
   sheet(dir + "/menu-sheet.png", first, shots.size(), 7);
 }
 
+// The Launcher (launcher_ui.cpp): the grid's pages, Quick settings and the Faces picker,
+// portrait and landscape -> <dir>/launcher-*.png + a sheet
+static void launcherShots(const std::string& dir) {
+  mkdir(dir.c_str(), 0755);
+  size_t first = shots.size();
+  for (int side : {0, 1}) {
+    ui::setOrientation(false, side);
+    const std::string w = side ? "-wide" : "";
+    launcherui::GridView g;
+    g.layout = launcher::defaults();
+    g.clock = "9:41";
+    for (int sel : {0, 3, 6, 7}) {
+      g.sel = sel;
+      launcherui::drawGrid(g);
+      savePng(dir + "/launcher-grid-" + std::to_string(sel) + w + ".png");
+    }
+    launcher::parse("faces,games,air,quick,settings", g.layout);  // the dashboard hid a few: one page
+    g.sel = 1;
+    launcherui::drawGrid(g);
+    savePng(dir + "/launcher-grid-custom" + w + ".png");
+    launcherui::QuickView q;
+    q.brightness = 75; q.volume = 192; q.sound = true; q.wmic = false; q.clock24 = true; q.rotate = true; q.gestures = true;
+    for (int sel : {0, 2, 3, 7}) {
+      q.sel = sel;
+      launcherui::drawQuick(q);
+      savePng(dir + "/launcher-quick-" + std::to_string(sel) + w + ".png");
+    }
+    q.sel = 1; q.sound = false; q.wmic = true; q.clock24 = false; q.brightness = 25; q.gestures = false;
+    launcherui::drawQuick(q);
+    savePng(dir + "/launcher-quick-muted" + w + ".png");
+    launcherui::FacesView f;
+    f.current = 1;
+    for (int sel : {0, 1, 8}) {
+      f.sel = sel;
+      launcherui::drawFaces(f);
+      savePng(dir + "/launcher-faces-" + std::to_string(sel) + w + ".png");
+    }
+  }
+  ui::setOrientation(false, 0);
+  sheet(dir + "/launcher-sheet.png", first, shots.size(), 7);
+  printf("contact sheet: %s/launcher-sheet.png\n", dir.c_str());
+}
+
 // The remote modes' screens (air_ui.cpp), portrait and landscape -> <dir>/air-*.png + a sheet
 static void airShots(const std::string& dir) {
   mkdir(dir.c_str(), 0755);
@@ -701,6 +745,7 @@ int main(int argc, char** argv) {
   }
   if (mode == "air") { airShots(dir); return 0; }
   if (mode == "menu") { menuShots(dir); return 0; }
+  if (mode == "launcher") { launcherShots(dir); return 0; }
   if (mode == "games") return gamesMode(dir);
   if (mode == "previews") previews(dir);
   else demo(dir, argc > 3 ? argv[3] : "all");

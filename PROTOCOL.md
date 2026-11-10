@@ -96,6 +96,7 @@ and can be ignored.
 | `air` | any of `sens=1..10`, `invx=0\|1`, `invy=0\|1`, `scroll=1..10`, `invscroll=0\|1`, `talk=0..600`, `keys=arrows\|pages` | StickS3 2.5.0+: the remote modes' settings (pointer speed, invert, tilt-scroll speed and direction, the presenter's talk length in minutes (0 = none), the slide keys). Replies `{"ok":true,"air":{…}}` |
 | `games` | | StickS3 2.5.0+: the games and their best scores (kept on the stick, NVS): `{"ok":true,"games":[{"id":"stack","title":"Stack","best":23,"tilt":false,"low":false},…]}` — `best` 0 = not played yet; `low`: lower is better (Reaction, milliseconds). See section 5, *Games* |
 | `ir` | `<op> ...` | StickS3 2.5.0+: the IR remote (see section 5, *IR remote*; state: `ir`) |
+| `launcher` | `tiles=<ids>` or `reset=1`, or none | StickS3 2.5.1+: the Launcher's tiles (triple-press B), in order; the ones left out are hidden. Ids: `games`, `remote`, `air`, `presenter`, `media`, `faces`, `quick`, `settings` (each id's first letter works too). `quick` and `settings` are always shown: left out, they're added at the end. Saved on the stick. Replies `{"ok":true,"launcher":"grapmfqs","tiles":"games,remote,air,presenter,media,faces,quick,settings"}`; errors `unknown tile: <name>`, `tile listed twice: <name>`, `no tiles`. Human form: `launcher [<ids>\|reset]` |
 
 Responses that end in a restart include `"restarting":true`.
 
@@ -130,6 +131,9 @@ Errors: `@{"ok":false,"error":"<message>"}`.
 - StickS3 2.4.0+: `clock24` (true: 24-hour time), `pkgFaces` (`{"n":<installed face packages>,"fmt":[1]}`;
   their list is `@faces`, section 5)
 - StickS3 2.5.0+: `ir` (`{"v":1,"n":<remotes>,"tx":46,"rx":42}`; the IR remote, section 5)
+- StickS3 2.5.1+: `launcher`: the Launcher's tiles in order, one letter each (`"grapmfqs"` =
+  games, remote, air, presenter, media, faces, quick, settings; a hidden tile is left out).
+  Letters keep `@state` short (22 bytes); `@launcher` answers with the ids too.
 
 ## 4. Wi-Fi settings page + OTA
 
@@ -299,7 +303,7 @@ session's `progress()` / `pin_home()` changes it (at most every 0.5 s); boards s
 - `nice`: a teal-to-green toast that slides in, ~4 s; default sound `confirmation_002`.
 - `headsup`: orange, pulsing; stays until any button press (that press only dismisses) or 60 s; default sound `question_001`.
 - `sound`: any event, tune or clip name the board knows (see Sounds); empty = the level's default; nothing plays if sounds are off.
-- Up to 5 are queued and shown one at a time. They wait while an approval prompt, pairing, the menu, dictation (A held) or talking (B held) is on.
+- Up to 5 are queued and shown one at a time. They wait while an approval prompt, pairing, the menu (2.5.1+: or the Launcher), dictation (A held) or talking (B held) is on.
 - Serial test: `event celebrate|nice|headsup <title>|<sub>|<icon>`; the `screens` demo shows all three.
 - `kind` (agent with faces, optional): the event's kind (`pr_merged`, `ci_failed`, `ci_fixed`, `claude_done`,
   `release`, `review_requested`, ...). Firmware 2.1.0+ lets the Home face react to it as well (once the event
@@ -381,7 +385,7 @@ Older firmware has neither, and no `…0006…` characteristic: update it over U
 | Mac → board | `{"ota":{"status":1}}` → `{"evt":"ota","state":"status","receiving":…,"offset":…,"size":…,"pending":…}` |
 | board → Mac | `{"evt":"ota","state":"confirmed","fw":"1.8.1"}` — after a reboot into a new image, once it has confirmed itself (see Rollback) |
 
-Refusal / error codes: `busy` (+ `why`: `dictation`, `talk`, `approval`, `pairing`, `menu`, `wifi-update`, `faces` (2.4.0), `game`, `remote` (an air mouse / presenter / media mode), `ir` (the Remote screen, an IR learn or send) (2.5.0)),
+Refusal / error codes: `busy` (+ `why`: `dictation`, `talk`, `approval`, `pairing`, `menu` (2.5.1+: also the Launcher), `wifi-update`, `faces` (2.4.0), `game`, `remote` (an air mouse / presenter / media mode), `ir` (the Remote screen, an IR learn or send) (2.5.0)),
 `battery` (below 30 % and not on USB power; unknown counts as low), `pending` (the running image isn't
 confirmed yet), `unsupported` (`compressed:true` — not implemented, send the raw image), `size` (0, bigger
 than the slot, or data past the end), `sha` (not 64 hex digits, or the image read back from flash doesn't

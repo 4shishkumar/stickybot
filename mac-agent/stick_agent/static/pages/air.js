@@ -31,7 +31,7 @@ export function airCard(st, send) {
       MODES.map(([id, label]) => h("button", {class: "btn sm" + (a.mode === id ? " primary" : ""), type: "button",
         onclick: () => send("mode", {name: id}, `${label} on the stick`)}, label)),
       running ? h("button", {class: "btn sm ghost", type: "button", onclick: () => send("mode", {name: "home"}, "Back to Home")}, "Stop") : null),
-      running ? `Running now: ${(MODES.find(m => m[0] === a.mode) || [, a.mode])[1]}.` : "Also in the stick's menu (triple-press B)."),
+      running ? `Running now: ${(MODES.find(m => m[0] === a.mode) || [, a.mode])[1]}.` : "Also in the stick's Launcher (triple-press B)."),
     st.connected && a.mouseKnown === false && a.mode === "mouse"
       ? h("div", {class: "notice warn"}, h("div", {class: "grow"},
           h("b", null, "The Mac hasn't picked up the mouse yet"),
