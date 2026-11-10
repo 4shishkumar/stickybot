@@ -12,6 +12,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-10
+
 ### Added
 - **Face packages, the design.** A format for Home faces made of
   data (a manifest + small pixel-art images) that anyone can publish and the dashboard will
@@ -374,7 +376,8 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/ashish-kumar-noon/stickybot/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/ashish-kumar-noon/stickybot/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.3.0
 [2.2.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.2.0
 [2.1.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.1.0
 [2.0.0]: https://github.com/ashish-kumar-noon/stickybot/releases/tag/v2.0.0
