@@ -47,9 +47,9 @@ the stick, the wireless Wispr mic, firmware updates. It needs a Mac with **Apple
      usual.
 
    macOS remembers this: later opens are a normal double-click.
-4. StickyBot lives in the **menu bar** (no Dock icon). Menu → **Open StickyBot (Rust)** opens the
-   dashboard; until you switch over from the Python app (below) it runs at
-   <http://localhost:8670> and calls itself "StickyBot (Rust)".
+4. StickyBot lives in the **menu bar** (no Dock icon). Menu → **Open StickyBot** opens the
+   dashboard at <http://localhost:8660>. (On a Mac that has the Python app, it starts next to it
+   instead, as "StickyBot (Rust)" on <http://localhost:8670>, until you switch over: see below.)
 5. **Permissions** macOS asks for, each the first time it's needed:
    - **Bluetooth**: to find and talk to the stick (the first scan or connect);
    - **System Audio Recording**: only for the wireless Wispr mic (Settings → Wireless mic): the
@@ -71,14 +71,18 @@ the stick, the wireless Wispr mic, firmware updates. It needs a Mac with **Apple
    `brew install esptool`; a new stick that has never run StickyBot is flashed this way, see
    [m5-stick-s3/](m5-stick-s3/)).
 
-**Updating**: the app doesn't update itself yet. The dashboard shows when a release has new
-firmware; for a new app, download the new zip and replace StickyBot.app in /Applications (quit it
-first; `~/.stickybot-rs/` stays). **Building it yourself** (or signing it with your own
+**Updating**: the app checks for releases (Settings → Updates). When there's a newer StickyBot,
+the menu shows **Update available: vX — download…** (it opens the release page) and the dashboard
+says so too; it can't install itself yet: download the new zip, quit StickyBot and replace
+StickyBot.app in /Applications (`~/.stickybot-rs/` stays). New stick firmware is downloaded for
+you and offered on the Stick page. **Building it yourself** (or signing it with your own
 certificate, so permissions survive updates): [desktop/README.md](desktop/README.md).
 
-**Coming from the Python app** (`install.sh`, `~/.stick-agent/`): it stays installed and keeps
-working; the two apps run side by side (the Python one on port 8660, StickyBot.app on 8670,
-holding off the stick while the Python app has it). To move over, follow
+**Coming from the Python app** (`install.sh`, `~/.stick-agent/`): StickyBot.app notices it on its
+first start (that folder, or the app answering on port 8660) and doesn't take its place. The
+Python app stays installed and keeps working; the two run side by side (the Python one on port
+8660, StickyBot.app as "StickyBot (Rust)" on 8670, holding off the stick while the Python app has
+it). To move over, follow
 [desktop/SWITCHOVER.md](desktop/SWITCHOVER.md): *Import from StickyBot* takes your settings, voice
 commands, sounds, history, events, GitHub state and the pet (merged with anything the new app
 already has; `~/.stick-agent/` is only read), then you stop the Python app, *Switch over* (the new

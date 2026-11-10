@@ -4,12 +4,14 @@
   release_tool.py current                  the version in mac-agent (stick_agent.__version__)
   release_tool.py firmware                 the firmware's FW_VERSION (m5-stick-s3/src/config.h)
   release_tool.py check VERSION            exit 1 unless VERSION is X.Y.Z or X.Y.Z-pre
-  release_tool.py bump VERSION             write VERSION into __init__.py and pyproject.toml
+  release_tool.py bump VERSION             write VERSION into __init__.py, pyproject.toml and the
+                                           Rust app (desktop/Cargo.toml + Cargo.lock)
+  release_tool.py desktop                  the Rust app's version (desktop/Cargo.toml)
   release_tool.py changelog VERSION DATE   date VERSION's entry in CHANGELOG.md (or turn
                                            [Unreleased] into it); keeps the links at the bottom
   release_tool.py notes VERSION            print VERSION's changelog entry (the release notes)
   release_tool.py check-tag TAG            the workflow's guard: TAG == v<version in mac-agent>
-                                           and CHANGELOG.md has an entry for it
+                                           == v<desktop version>, and CHANGELOG.md has an entry
   release_tool.py add-app MANIFEST ZIP PLATFORM VERSION
                                            list a Mac app download (the release asset ZIP) in
                                            the release's manifest.json, under "apps"
@@ -30,6 +32,10 @@ INIT = ROOT / "mac-agent" / "stick_agent" / "__init__.py"
 PYPROJECT = ROOT / "mac-agent" / "pyproject.toml"
 CHANGELOG = ROOT / "CHANGELOG.md"
 CONFIG_H = ROOT / "m5-stick-s3" / "src" / "config.h"
+DESKTOP_CARGO = ROOT / "desktop" / "Cargo.toml"
+DESKTOP_LOCK = ROOT / "desktop" / "Cargo.lock"
+DESKTOP_CRATES = ("stickybot-server", "stickybot-app")  # `version.workspace = true`
+DESKTOP_VERSION = re.compile(r'(\[workspace\.package\][^\[]*?^version\s*=\s*")([^"]*)(")', re.M | re.S)
 REPO_URL = "https://github.com/4shishkumar/stickybot"
 HEADING = re.compile(r"^## \[([^\]]+)\](.*)$", re.M)
 
@@ -55,15 +61,33 @@ def check(version):
         raise Fail(f"{version!r} isn't a version like 1.8.0 or 1.8.0-beta.1")
 
 
+def desktop_version():
+    """The Rust app's version: desktop/Cargo.toml [workspace.package] (CARGO_PKG_VERSION)."""
+    m = DESKTOP_VERSION.search(DESKTOP_CARGO.read_text())
+    if not m:
+        raise Fail(f"no [workspace.package] version in {DESKTOP_CARGO}")
+    return m.group(2)
+
+
 def bump(version):
+    """The release version into the Python app (__init__.py, pyproject.toml) and the Rust app
+    (desktop/Cargo.toml's [workspace.package] and the Cargo.lock entries of the crates that use it,
+    so StickyBot.app, /api/rust and the update check say this version)."""
     check(version)
-    for path, pattern, line in [(INIT, r'^__version__\s*=\s*"[^"]*"', f'__version__ = "{version}"'),
-                                (PYPROJECT, r'^version\s*=\s*"[^"]*"', f'version = "{version}"')]:
-        text = path.read_text()
-        new, n = re.subn(pattern, line, text, count=1, flags=re.M)
+    edits = [(INIT, re.compile(r'^(__version__\s*=\s*")[^"]*(")', re.M)),
+             (PYPROJECT, re.compile(r'^(version\s*=\s*")[^"]*(")', re.M)),
+             (DESKTOP_CARGO, DESKTOP_VERSION)]
+    edits += [(DESKTOP_LOCK, re.compile(rf'^(name = "{re.escape(c)}"\nversion = ")[^"]*(")', re.M))
+              for c in DESKTOP_CRATES]
+    out = {}
+    for path, pattern in edits:
+        text = out.get(path, path.read_text())
+        new, n = pattern.subn(lambda m: m.group(1) + version + m.group(m.lastindex), text, count=1)
         if n != 1:
-            raise Fail(f"no version line in {path}")
-        path.write_text(new)
+            raise Fail(f"no version line for {pattern.pattern!r} in {path}")
+        out[path] = new
+    for path, text in out.items():  # all or nothing
+        path.write_text(text)
 
 
 def sections(text):
@@ -118,6 +142,9 @@ def check_tag(tag):
     have = current()
     if have != version:
         raise Fail(f"tag {tag} but mac-agent says {have} — cut releases with tools/release.sh")
+    rust = desktop_version()
+    if rust != version:
+        raise Fail(f"tag {tag} but desktop/Cargo.toml says {rust} — cut releases with tools/release.sh")
     notes(version)
     return version
 
@@ -148,6 +175,8 @@ def main(argv):
             print(current())
         elif cmd == "firmware":
             print(firmware())
+        elif cmd == "desktop":
+            print(desktop_version())
         elif cmd == "check":
             check(args[0])
         elif cmd == "bump":

@@ -396,9 +396,7 @@ async fn voice_test(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<
     axum::Json(json!({"ok": true}))
 }
 
-fn python_port() -> u16 {
-    std::env::var("STICKYBOT_RS_PYTHON_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(crate::switch::PORT)
-}
+use crate::python_port;
 
 /// The switch-over (switch.rs): done?, this app's port, the Python app still running?
 async fn switch_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
@@ -406,7 +404,7 @@ async fn switch_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
     let python = !switched && crate::switch::listening(python_port()).await;
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
     let login_item = if st.fake { None } else { crate::switch::python_login_item(&home, st.import_from.as_deref()) };
-    axum::Json(json!({"switched": switched, "port": st.port, "python_running": python,
+    axum::Json(json!({"switched": switched, "fresh": crate::switch::fresh(&st.paths.home), "port": st.port, "python_running": python,
                       "restart_needed": switched != (st.port == crate::switch::PORT),
                       "python_login_item": login_item}))
 }

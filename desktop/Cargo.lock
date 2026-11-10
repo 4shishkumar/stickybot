@@ -3990,7 +3990,7 @@ dependencies = [
 
 [[package]]
 name = "stickybot-app"
-version = "0.1.0"
+version = "2.3.2"
 dependencies = [
  "log",
  "objc2",
@@ -4005,7 +4005,7 @@ dependencies = [
 
 [[package]]
 name = "stickybot-server"
-version = "0.1.0"
+version = "2.3.2"
 dependencies = [
  "anyhow",
  "axum",

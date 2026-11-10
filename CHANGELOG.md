@@ -24,6 +24,14 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   it on its first start. See [Install the Mac app](README.md#install-the-mac-app). The Python app
   (`install.sh`) is the legacy option for now; [desktop/SWITCHOVER.md](desktop/SWITCHOVER.md)
   moves you over.
+- **On a Mac without the Python app, StickyBot.app is StickyBot from the first start**: port 8660,
+  the name "StickyBot", its own token, no waiting for a Python app (no `~/.stick-agent/` and
+  nothing on port 8660 at its first start). With the Python app there it still starts next to it
+  on 8670 until you switch over.
+- **The Rust app knows its version and tells you about new ones.** It carries the release version
+  (`tools/release.sh` now sets it in `desktop/Cargo.toml` too; the release workflow checks it
+  against the tag), and its update check says "Update available: vX" when a newer release has
+  the Mac app; the menu item opens the release page to download it.
 - **The whole reply on the stick (firmware 2.6.0).** After the agent answers, the stick shows
   all of it (up to 3 KB), not just the first 300 characters: **A** turns the page, **tilting**
   the stick forward or back scrolls (it ignores small changes in how you hold it), a thumb on

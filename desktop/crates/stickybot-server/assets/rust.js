@@ -86,7 +86,7 @@ async function maybeAdd() {
       const c = importCard(info);
       c.id = "rsImport";
       page.appendChild(c);
-      if (!sw.error) page.appendChild(switchCard(sw));
+      if (!sw.error && !sw.fresh) page.appendChild(switchCard(sw));  // fresh: no Python app to switch from
     }
   } finally { busy = false; }
 }

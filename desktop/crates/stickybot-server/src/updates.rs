@@ -4,9 +4,11 @@
 //! downloads the latest release's firmware into `~/.stickybot-rs/firmware/<version>/` when it
 //! isn't there yet, so "Update over Bluetooth" / "Update via USB" work straight away.
 //!
-//! Not ported: the app updating itself (`selfupdate.py`: the Rust app is downloaded from a
-//! release (`StickyBot-<version>-macos-arm64.zip`) or built from the repo; `agent_update` is always false and `POST /api/update/agent` says so), and the "Update vX
-//! ready" toast on the stick (needs the events notifier). State: `~/.stickybot-rs/updates.json`.
+//! A newer StickyBot.app — the latest release is newer than this app's version (`CARGO_PKG_VERSION`,
+//! set by `tools/release_tool.py bump`) and has the `StickyBot-<version>-macos-arm64.zip` asset — is
+//! `agent_update` ("Update available: vX"), with the release page in `install.download`. The app
+//! doesn't install it itself (`selfupdate.py` isn't ported: `POST /api/update/agent` answers 409
+//! with where to download it). State: `~/.stickybot-rs/updates.json`.
 
 use crate::releases::{self, ReleaseError, Source};
 use serde_json::{Map, Value, json};
@@ -19,6 +21,13 @@ pub const FIRST_CHECK: Duration = Duration::from_secs(20);
 pub const TICK: Duration = Duration::from_secs(60);
 pub const NO_SELF_UPDATE: &str =
     "the Rust app doesn't update itself yet — download the new StickyBot-<version>-macos-arm64.zip from the release (README: Install the Mac app), or build it from the repo";
+
+/// The release asset with StickyBot.app for this Mac (the release workflow's `mac-app` job).
+pub const APP_ASSET_SUFFIX: &str = "-macos-arm64.zip";
+
+pub fn is_app_asset(name: &str) -> bool {
+    name.starts_with("StickyBot-") && name.ends_with(APP_ASSET_SUFFIX)
+}
 
 /// Where releases come from (tests swap it for a fake GitHub).
 pub type Sources = Arc<dyn Fn() -> Vec<Box<dyn Source>> + Send + Sync>;
@@ -48,6 +57,8 @@ pub struct Updates {
     path: PathBuf,
     firmware_root: PathBuf,
     repo: String,
+    /// this app's version (the release it was built for: tools/release_tool.py `bump`)
+    current: String,
     sources: Mutex<Sources>,
     s: Mutex<State>,
     lock: tokio::sync::Mutex<()>,
@@ -72,6 +83,7 @@ impl Updates {
             path,
             firmware_root: crate::firmware::firmware_root(home),
             repo,
+            current: env!("CARGO_PKG_VERSION").to_string(),
             sources: Mutex::new(Arc::new(move || releases::sources(&r2))),
             s: Mutex::new(s),
             lock: tokio::sync::Mutex::new(()),
@@ -103,7 +115,18 @@ impl Updates {
         let lat = s.latest.clone();
         let fw = lat.as_ref().and_then(|l| l.get("firmware")).and_then(Value::as_str).map(str::to_string);
         let firmware_update = fw.is_some() && s.stick_fw.is_some() && releases::newer(fw.as_deref(), s.stick_fw.as_deref());
-        let title = if firmware_update { format!("Stick firmware {} available", fw.unwrap_or_default()) } else { String::new() };
+        // a newer StickyBot.app: only when the release has the download (it can't install itself)
+        let tag = lat.as_ref().and_then(|l| l.get("tag")).and_then(Value::as_str).unwrap_or("").to_string();
+        let ver = lat.as_ref().and_then(|l| l.get("version")).and_then(Value::as_str).map(str::to_string);
+        let has_app = lat.as_ref().is_some_and(|l| l.get("app_asset").is_some_and(Value::is_string));
+        let agent_update = has_app && releases::newer(ver.as_deref(), Some(&self.current));
+        let title = if agent_update {
+            format!("Update available: {tag}")
+        } else if firmware_update {
+            format!("Stick firmware {} available", fw.unwrap_or_default())
+        } else {
+            String::new()
+        };
         let latest = lat.map(|mut l| {
             if !notes && let Some(o) = l.as_object_mut() {
                 o.remove("notes");
@@ -114,21 +137,37 @@ impl Updates {
                "channel": channel(cfg), "checking": s.checking,
                "checked_at": if s.checked_at > 0.0 { json!(s.checked_at) } else { Value::Null },
                "error": s.error, "note": s.note,
-               "current": {"agent": env!("CARGO_PKG_VERSION"), "firmware": s.stick_fw},
-               "latest": latest, "agent_update": false, "firmware_update": firmware_update,
-               "available": firmware_update, "title": title})
+               "current": {"agent": self.current, "firmware": s.stick_fw},
+               "latest": latest, "agent_update": agent_update, "firmware_update": firmware_update,
+               "available": agent_update || firmware_update, "title": title})
     }
 
     /// `GET /api/update`: the status with notes, how this app is installed, the updaters.
     pub fn full(&self, cfg: &Map<String, Value>) -> Value {
         let mut st = self.status(cfg, true);
+        let page = self.download_page(&st);
+        let file = st["latest"]["app_asset"].as_str().unwrap_or("StickyBot-<version>-macos-arm64.zip").to_string();
         st["install"] = json!({"kind": "rust", "path": std::env::current_exe().ok(), "can_update": false,
-                               "why": NO_SELF_UPDATE, "head": null, "branch": null,
-                               "instructions": [format!("https://github.com/{}/releases/latest  (StickyBot-<version>-macos-arm64.zip)", self.repo),
+                               "why": NO_SELF_UPDATE, "head": null, "branch": null, "download": page,
+                               "instructions": [format!("{page}  ({file}: unzip, quit StickyBot, replace /Applications/StickyBot.app)"),
                                                 "or from the repo: desktop/scripts/build-app.sh"]});
         // Bluetooth has its own button (POST /api/firmware/ota), USB too: no other updaters
         st["firmware_updaters"] = json!([]);
         st
+    }
+
+    /// Where to get the new app: the latest release's page, else the releases' latest page.
+    pub fn download_page(&self, status: &Value) -> String {
+        status["latest"]["url"]
+            .as_str()
+            .filter(|u| u.starts_with("https://"))
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("https://github.com/{}/releases/latest", self.repo))
+    }
+
+    /// The app's version to compare releases with (tests pretend another).
+    pub fn set_current(&mut self, v: &str) {
+        self.current = v.to_string();
     }
 
     /// A check is due: on, and not yet since start-up, or the last one was 24 h ago.
@@ -145,6 +184,8 @@ impl Updates {
         let (rel, src) = releases::latest(&srcs, repo, chan)?;
         let mut info = rel.summary();
         info["firmware"] = Value::Null;
+        // the Mac app's download (StickyBot-<version>-macos-arm64.zip), if the release has one
+        info["app_asset"] = rel.assets.keys().find(|n| is_app_asset(n)).map_or(Value::Null, |n| json!(n));
         if rel.assets.contains_key(releases::MANIFEST) {
             match releases::download_firmware(&rel, src, root, &|l| log::info!("{l}")) {
                 Ok((_, m)) => info["firmware"] = m["version"].clone(),
@@ -318,6 +359,53 @@ mod tests {
         assert_eq!(again.status(&cfg, false)["latest"]["tag"], "v2.3.0-beta.1");
         cfg.insert("update_check".into(), json!(false));
         assert!(!again.due(&cfg));
+    }
+
+    #[tokio::test]
+    async fn a_newer_release_with_the_mac_app_is_an_app_update_pointing_at_its_page() {
+        let home = tmp("app");
+        let mut u = Updates::new(&home);
+        assert_eq!(u.current, env!("CARGO_PKG_VERSION"));
+        u.set_current("2.3.2");
+        // a newer release without the app's zip: firmware only, no app update
+        u.set_sources(fake(|| {
+            let mut g = FakeGitHub::default();
+            g.add_release("v2.4.0", "2.6.0", false);
+            g
+        }));
+        let cfg = crate::config::defaults();
+        let s = u.check(&cfg).await;
+        assert_eq!(s["latest"]["app_asset"], Value::Null);
+        assert_eq!((s["agent_update"].as_bool(), s["available"].as_bool()), (Some(false), Some(false)));
+        assert_eq!(s["current"]["agent"], "2.3.2");
+
+        // with it: an app update, the release page to download it from
+        u.set_sources(fake(|| {
+            let mut g = FakeGitHub::default();
+            g.add_release("v2.4.0", "2.6.0", false);
+            g.add_app("v2.4.0");
+            g
+        }));
+        let s = u.check(&cfg).await;
+        assert_eq!(s["latest"]["app_asset"], "StickyBot-2.4.0-macos-arm64.zip");
+        assert_eq!((s["agent_update"].as_bool(), s["available"].as_bool()), (Some(true), Some(true)));
+        assert_eq!(s["title"], "Update available: v2.4.0");
+        assert_eq!(s["install"]["download"], "https://example.invalid/v2.4.0");
+        assert!(s["install"]["instructions"][0].as_str().unwrap().contains("StickyBot-2.4.0-macos-arm64.zip"));
+        assert_eq!(s["install"]["can_update"], false);
+        // the firmware still comes along; the app update's title wins over the firmware's
+        u.set_stick_fw(Some("2.5.0".into()));
+        let st = u.status(&cfg, false);
+        assert_eq!((st["firmware_update"].as_bool(), st["title"].as_str()), (Some(true), Some("Update available: v2.4.0")));
+
+        // this app is that release (or newer): nothing for the app
+        u.set_current("2.4.0");
+        let st = u.status(&cfg, false);
+        assert_eq!((st["agent_update"].as_bool(), st["title"].as_str()), (Some(false), Some("Stick firmware 2.6.0 available")));
+        u.set_current("2.5.0-beta.1");
+        assert_eq!(u.status(&cfg, false)["agent_update"], false);
+        // no release page known: the releases' latest page
+        assert_eq!(u.download_page(&json!({"latest": null})), format!("https://github.com/{}/releases/latest", u.repo));
     }
 
     #[tokio::test]

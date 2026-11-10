@@ -555,6 +555,18 @@ pub mod tests {
         }
     }
 
+    impl FakeGitHub {
+        /// Gives release `tag` the Mac app's zip (as the release workflow does).
+        pub fn add_app(&mut self, tag: &str) {
+            let v = tag.trim_start_matches('v');
+            let name = format!("StickyBot-{v}-macos-arm64.zip");
+            let r = self.releases.iter_mut().find(|r| r["tag_name"] == tag).expect("add_release first");
+            r["assets"].as_array_mut().unwrap().push(json!({"name": name, "size": 6, "digest": format!("sha256:{}", sha(b"PK zip")),
+                                                           "browser_download_url": format!("https://example.invalid/{tag}/{name}")}));
+            self.files.insert((tag.into(), name), b"PK zip".to_vec());
+        }
+    }
+
     impl Source for FakeGitHub {
         fn name(&self) -> &str {
             "fake"

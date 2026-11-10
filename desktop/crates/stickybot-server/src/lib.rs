@@ -74,16 +74,29 @@ impl Options {
     /// From `STICKYBOT_RS_PORT`, `STICKYBOT_RS_HOME`, `STICKYBOT_RS_FAKE_STICK=1`.
     pub fn from_env() -> Self {
         let mut o = Self::default();
-        if switch::switched(&o.home) {
-            o.port = switch::PORT; // switched over: the Python app's place (see switch.rs)
-        }
+        o.fake_stick = std::env::var("STICKYBOT_RS_FAKE_STICK").is_ok_and(|v| v == "1");
+        o.import_from = migrate::default_source();
+        o.port = o.start_port(python_port(), switch::listening_now);
         if let Some(p) = std::env::var("STICKYBOT_RS_PORT").ok().and_then(|p| p.parse().ok()) {
             o.port = p;
         }
-        o.fake_stick = std::env::var("STICKYBOT_RS_FAKE_STICK").is_ok_and(|v| v == "1");
-        o.import_from = migrate::default_source();
         o
     }
+
+    /// The port to serve: the Python app's (8660) once switched over — or right away on a Mac
+    /// without the Python app (`switch::adopt_if_fresh`, first start only, not with the fake
+    /// stick) — else 8670, next to it.
+    pub fn start_port(&self, python_port: u16, listening: impl Fn(u16) -> bool) -> u16 {
+        if !self.fake_stick {
+            switch::adopt_if_fresh(&self.home, self.import_from.as_deref(), python_port, listening);
+        }
+        if switch::switched(&self.home) { switch::PORT } else { DEFAULT_PORT }
+    }
+}
+
+/// The Python app's port (`$STICKYBOT_RS_PYTHON_PORT`, else 8660).
+pub fn python_port() -> u16 {
+    std::env::var("STICKYBOT_RS_PYTHON_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(python_agent::PORT)
 }
 
 /// Everything the API handlers share.
@@ -638,8 +651,7 @@ pub async fn start(opts: Options) -> Result<Running, String> {
         && !switch::switched(&state.paths.home)
         && std::env::var("STICKYBOT_RS_ALLOW_SHARED").as_deref() != Ok("1")
     {
-        let port =
-            std::env::var("STICKYBOT_RS_PYTHON_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(python_agent::PORT);
+        let port = python_port();
         state.link.set_gate(Arc::new(move || Box::pin(python_agent::check(port))));
     }
     state.link.spawn();
@@ -698,6 +710,47 @@ mod name_tests {
     fn the_name_says_rust_only_next_to_the_python_app() {
         assert_eq!(super::app_name(8670), "StickyBot (Rust)");
         assert_eq!(super::app_name(super::switch::PORT), "StickyBot");
+    }
+
+    /// A fresh Mac: no Python app folder, nothing on 8660 -> StickyBot on 8660 from the first start.
+    /// With the Python app (its folder, or it running): side by side on 8670 as before.
+    #[tokio::test]
+    async fn the_port_on_a_fresh_mac_and_next_to_the_python_app() {
+        let root = std::env::temp_dir().join(format!("stickybot-startport-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let opts = |name: &str, fake| super::Options {
+            port: 0,
+            home: root.join(name).join(".stickybot-rs"),
+            fake_stick: fake,
+            import_from: Some(root.join(name).join(".stick-agent")),
+        };
+
+        let fresh = opts("fresh", false);
+        assert_eq!(fresh.start_port(8660, |_| false), super::switch::PORT);
+        assert!(super::switch::fresh(&fresh.home));
+        let st = super::AppState::new(&super::Options { port: 8660, ..fresh.clone() }, stick_link::Backend::Fake(
+            stick_link::fake::FakeStick::new(),
+        ))
+        .unwrap();
+        assert_eq!(st.app_name(), "StickyBot");
+        assert!(!st.token.is_empty()); // its own token: there's no Python one
+        // the next start: still StickyBot (the marker), the check isn't asked again
+        assert_eq!(fresh.start_port(8660, |_| panic!("not asked once switched")), super::switch::PORT);
+
+        let with_python = opts("python", false);
+        std::fs::create_dir_all(with_python.import_from.as_ref().unwrap()).unwrap();
+        assert_eq!(with_python.start_port(8660, |_| false), super::DEFAULT_PORT);
+        assert!(!super::switch::switched(&with_python.home));
+
+        let python_running = opts("running", false);
+        assert_eq!(python_running.start_port(8660, |_| true), super::DEFAULT_PORT);
+        assert!(!super::switch::switched(&python_running.home));
+
+        // the fake stick (demos) never takes the place
+        let demo = opts("demo", true);
+        assert_eq!(demo.start_port(8660, |_| false), super::DEFAULT_PORT);
+        assert!(!super::switch::switched(&demo.home));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]

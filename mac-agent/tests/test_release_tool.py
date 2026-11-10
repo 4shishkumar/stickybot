@@ -60,6 +60,12 @@ def test_the_repo_versions_agree():
     """The agent's __version__, pyproject and the changelog: what the release workflow checks."""
     assert tool.current() == __version__
     assert f'version = "{__version__}"' in (ROOT / "mac-agent" / "pyproject.toml").read_text()
+    assert tool.desktop_version() == __version__  # the Rust app reports the same release
+    lock = (ROOT / "desktop" / "Cargo.lock").read_text()
+    for crate in tool.DESKTOP_CRATES:
+        assert f'name = "{crate}"\nversion = "{__version__}"' in lock
+        assert "version.workspace = true" in (ROOT / "desktop" / "crates" / crate / "Cargo.toml").read_text()
+    assert '"version"' not in (ROOT / "desktop/crates/stickybot-app/tauri.conf.json").read_text()  # Cargo's
     assert tool.check_tag(f"v{__version__}") == __version__
     assert tool.notes(__version__)
 
@@ -98,6 +104,29 @@ def test_check_tag_wants_the_mac_agent_version():
         tool.check_tag("latest")
 
 
+def test_bump_sets_every_version_or_none(tmp_path, monkeypatch):
+    files = {"INIT": "mac-agent/stick_agent/__init__.py", "PYPROJECT": "mac-agent/pyproject.toml",
+             "DESKTOP_CARGO": "desktop/Cargo.toml", "DESKTOP_LOCK": "desktop/Cargo.lock"}
+    for attr, rel in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / rel, tmp_path / rel)
+        monkeypatch.setattr(tool, attr, tmp_path / rel)
+    tool.bump("2.4.0")
+    assert tool.current() == "2.4.0" and tool.desktop_version() == "2.4.0"
+    assert 'version = "2.4.0"' in (tmp_path / files["PYPROJECT"]).read_text()
+    lock = (tmp_path / files["DESKTOP_LOCK"]).read_text()
+    for crate in tool.DESKTOP_CRATES:
+        assert f'name = "{crate}"\nversion = "2.4.0"' in lock
+    # the other crates and dependencies keep theirs; edition / members untouched
+    assert 'name = "stt"\nversion = "0.0.0"' in lock
+    assert 'edition = "2024"' in (tmp_path / files["DESKTOP_CARGO"]).read_text()
+    # a file without its version line: nothing is written at all
+    (tmp_path / files["DESKTOP_LOCK"]).write_text("# empty\n")
+    with pytest.raises(tool.Fail, match="no version line"):
+        tool.bump("2.5.0")
+    assert tool.current() == "2.4.0" and tool.desktop_version() == "2.4.0"
+
+
 def test_add_app_lists_the_mac_app_and_older_agents_still_read_the_manifest(tmp_path):
     import hashlib
     import json
@@ -132,7 +161,8 @@ def repo(tmp_path):
     """A minimal copy of the repo (just what release.sh touches), committed on main."""
     r = tmp_path / "repo"
     for rel in ("tools/release.sh", "tools/release_tool.py", "mac-agent/stick_agent/__init__.py",
-                "mac-agent/stick_agent/releases.py", "mac-agent/pyproject.toml", "m5-stick-s3/src/config.h"):
+                "mac-agent/stick_agent/releases.py", "mac-agent/pyproject.toml", "m5-stick-s3/src/config.h",
+                "desktop/Cargo.toml", "desktop/Cargo.lock"):
         (r / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / rel, r / rel)
     (r / "CHANGELOG.md").write_text(LOG)
@@ -156,6 +186,15 @@ def test_release_sh_bumps_commits_and_tags_without_pushing(repo):
     assert "git push origin main v1.8.0" in r.stdout
     assert '__version__ = "1.8.0"' in (repo.path / "mac-agent/stick_agent/__init__.py").read_text()
     assert 'version = "1.8.0"' in (repo.path / "mac-agent/pyproject.toml").read_text()
+    # the Rust app too, and the Cargo files are in the release commit
+    cargo = (repo.path / "desktop/Cargo.toml").read_text()
+    assert '[workspace.package]\nversion = "1.8.0"' in cargo
+    lock = (repo.path / "desktop/Cargo.lock").read_text()
+    for crate in ("stickybot-server", "stickybot-app"):
+        assert f'name = "{crate}"\nversion = "1.8.0"' in lock
+    before = (ROOT / "desktop/Cargo.lock").read_text().count('version = "1.8.0"')
+    assert lock.count('version = "1.8.0"') == before + 2  # nothing else in the lock moved
+    assert repo.git("status", "--porcelain", "--untracked-files=no").stdout == ""
     assert "## [1.8.0] - " in (repo.path / "CHANGELOG.md").read_text()
     assert repo.git("log", "-1", "--format=%s").stdout.strip() == "Release v1.8.0"
     assert repo.git("tag", "--list").stdout.split() == ["v1.8.0"]

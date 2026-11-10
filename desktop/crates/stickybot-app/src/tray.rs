@@ -159,7 +159,18 @@ pub fn check_result(s: &Value) -> String {
 
 /// The "Update available" item's title, `None` = hidden.
 pub fn update_text(title: &str) -> Option<String> {
-    (!title.is_empty()).then(|| format!("{title} — open the dashboard"))
+    (!title.is_empty()).then(|| {
+        if title.starts_with("Update available") {
+            format!("{title} — download…")
+        } else {
+            format!("{title} — open the dashboard")
+        }
+    })
+}
+
+/// Where the "Update available" item goes: the release page for a new app, `None` = the dashboard.
+pub fn update_link(status: &Value, page: &str) -> Option<String> {
+    (status["agent_update"] == true).then(|| page.to_string())
 }
 
 /// What's on screen now (only changes are sent to the menu).
@@ -384,7 +395,18 @@ impl Tray {
         let st = self.st.clone();
         match id {
             "open" => crate::show_dashboard_at(&self.app, ""),
-            "update" => crate::show_dashboard_at(&self.app, "settings"),
+            "update" => {
+                // a new StickyBot.app: its release page (the app can't install itself); firmware:
+                // the dashboard's update card
+                let cfg = st.cfg.lock().unwrap().clone();
+                let s = st.updates.status(&cfg, false);
+                match update_link(&s, &st.updates.download_page(&s)) {
+                    Some(url) => {
+                        let _ = std::process::Command::new("open").arg(url).spawn();
+                    }
+                    None => crate::show_dashboard_at(&self.app, "settings"),
+                }
+            }
             "setup" => crate::show_dashboard_at(&self.app, "install"),
             "browser" => {
                 let _ = std::process::Command::new("open").arg(st.url()).spawn();
@@ -495,5 +517,10 @@ mod tests {
             update_text("Stick firmware 2.6.0 available").as_deref(),
             Some("Stick firmware 2.6.0 available — open the dashboard")
         );
+        // a new app: the item says so and goes to the release page
+        assert_eq!(update_text("Update available: v2.5.0").as_deref(), Some("Update available: v2.5.0 — download…"));
+        let page = "https://github.com/acme/stickybot/releases/tag/v2.5.0";
+        assert_eq!(update_link(&json!({"agent_update": true}), page).as_deref(), Some(page));
+        assert_eq!(update_link(&json!({"agent_update": false, "firmware_update": true}), page), None);
     }
 }

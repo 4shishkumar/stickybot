@@ -1,7 +1,10 @@
 # Releasing
 
 StickyBot has **one release version**, `vX.Y.Z`: the Mac agent's version
-(`mac-agent/stick_agent/__init__.py` and `mac-agent/pyproject.toml`). The stick
+(`mac-agent/stick_agent/__init__.py` and `mac-agent/pyproject.toml`), which is also the Rust
+app's (`desktop/Cargo.toml` `[workspace.package] version`, used by `stickybot-server` and
+`stickybot-app`, and their `desktop/Cargo.lock` entries: `CARGO_PKG_VERSION`, StickyBot.app's
+bundle version, `/api/rust`, and what its update check compares releases with). The stick
 firmware keeps its own `FW_VERSION` (`m5-stick-s3/src/config.h`). It changes only when
 the firmware does, and each release's `manifest.json` lists both versions.
 
@@ -28,7 +31,7 @@ Ordering follows SemVer: `1.8.0-beta.2 < 1.8.0-beta.10 < 1.8.0-rc.1 < 1.8.0`.
    tools/release.sh 1.8.0-beta.1     # a beta
    tools/release.sh --dry-run 1.8.0  # show what it would do and the notes
    ```
-   It sets the version in `mac-agent`, turns `[Unreleased]` into `## [1.8.0] - <today>`
+   It sets the version in `mac-agent` and `desktop/` (`Cargo.toml` + `Cargo.lock`), turns `[Unreleased]` into `## [1.8.0] - <today>`
    (and updates the links at the bottom), commits `Release v1.8.0`, and creates the
    annotated tag `v1.8.0`. **It never pushes.** It refuses to run on a dirty tree or when
    the tag already exists.
@@ -39,7 +42,7 @@ Ordering follows SemVer: `1.8.0-beta.2 < 1.8.0-beta.10 < 1.8.0-rc.1 < 1.8.0`.
 6. The **Release** workflow ([.github/workflows/release.yml](../.github/workflows/release.yml))
    runs on the tag, in three jobs:
    - **tests** (ubuntu-latest, about 5 minutes; PlatformIO is cached):
-     - checks that the tag matches the agent version and that CHANGELOG.md has its entry
+     - checks that the tag matches the agent and Rust app versions and that CHANGELOG.md has its entry
      - runs ruff and the agent tests (without the macOS-only libraries, which the tests don't need)
      - runs the firmware's native unit tests and builds the firmware
      - `m5-stick-s3/tools/make_release.py --out dist`: `bootloader.bin`, `partitions.bin`,

@@ -66,6 +66,48 @@ pub fn python_login_item(user_home: &Path, python_home: Option<&Path>) -> Option
         .find(|p| p.exists())
 }
 
+/// The marker's note for a Mac that never had the Python app.
+pub const FRESH_NOTE: &str = "fresh install: no StickyBot (Python) app on this Mac";
+
+/// A Mac without the Python app: on this app's **first start** (no `config.json` and no marker yet
+/// in `home`), when there's no Python app folder (`python_home`, `~/.stick-agent`) and nothing
+/// answers on `python_port`, this app is *the* StickyBot right away: it writes the marker (with
+/// [`FRESH_NOTE`]; its own token stays), so it serves port 8660 as "StickyBot" without the "the
+/// Python agent has the stick" check. With the Python app there (its folder, or something on
+/// 8660) nothing changes: side by side on 8670 until the switch-over (SWITCHOVER.md). Never
+/// again after the first start, so Settings → Switch over → Undo sticks. -> it adopted.
+pub fn adopt_if_fresh(home: &Path, python_home: Option<&Path>, python_port: u16, listening: impl Fn(u16) -> bool) -> bool {
+    if switched(home) || home.join("config.json").exists() {
+        return false;
+    }
+    if python_home.is_some_and(Path::exists) || listening(python_port) {
+        return false;
+    }
+    let ok = std::fs::create_dir_all(home)
+        .and_then(|_| std::fs::write(home.join(MARKER), format!("{}\n{FRESH_NOTE}\n", crate::hub::now())));
+    match ok {
+        Ok(()) => {
+            log::info!("no StickyBot (Python) app on this Mac: this is StickyBot (port {PORT})");
+            true
+        }
+        Err(e) => {
+            log::warn!("{}: {e}", home.join(MARKER).display());
+            false
+        }
+    }
+}
+
+/// Something answers on 127.0.0.1:`port` (blocking, 500 ms; for start-up, before the runtime).
+pub fn listening_now(port: u16) -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
+}
+
+/// The marker says this app never had a Python app to take over from.
+pub fn fresh(home: &Path) -> bool {
+    std::fs::read_to_string(home.join(MARKER)).is_ok_and(|t| t.contains(FRESH_NOTE))
+}
+
 pub fn undo(paths: &Paths) -> Result<(), String> {
     match std::fs::remove_file(paths.home.join(MARKER)) {
         Ok(()) => Ok(()),
@@ -89,6 +131,67 @@ fn write_private(p: &Path, text: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fake_home(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("stickybot-fresh-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn a_mac_without_the_python_app_is_stickybot_from_the_first_start() {
+        let root = fake_home("none");
+        let (home, py) = (root.join(".stickybot-rs"), root.join(".stick-agent"));
+        assert!(adopt_if_fresh(&home, Some(&py), 8660, |_| false));
+        assert!(switched(&home) && fresh(&home));
+        // the app then starts as StickyBot on 8660 (lib.rs: Options / app_name), no Python gate
+        assert_eq!(crate::app_name(PORT), "StickyBot");
+        // once only: an undo (marker gone, config saved) stays undone
+        let paths = Paths::new(home.clone()).unwrap();
+        paths.ensure().unwrap();
+        crate::config::save(&paths, &crate::config::defaults()).unwrap();
+        undo(&paths).unwrap();
+        assert!(!adopt_if_fresh(&home, Some(&py), 8660, |_| false));
+        assert!(!switched(&home));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn with_the_python_app_nothing_changes() {
+        // its folder is there (not running)
+        let root = fake_home("py");
+        let (home, py) = (root.join(".stickybot-rs"), root.join(".stick-agent"));
+        std::fs::create_dir_all(&py).unwrap();
+        assert!(!adopt_if_fresh(&home, Some(&py), 8660, |_| false));
+        assert!(!switched(&home) && !home.join(MARKER).exists());
+        // no folder, but something answers on 8660 (a Python app with another home)
+        std::fs::remove_dir_all(&py).unwrap();
+        let asked = std::sync::Mutex::new(Vec::new());
+        assert!(!adopt_if_fresh(&home, Some(&py), 8660, |p| {
+            asked.lock().unwrap().push(p);
+            true
+        }));
+        assert_eq!(*asked.lock().unwrap(), [8660]);
+        assert!(!switched(&home));
+        // not a first start (this app ran before, side by side): never on its own
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("config.json"), "{}").unwrap();
+        assert!(!adopt_if_fresh(&home, Some(&py), 8660, |_| false));
+        // a real switch-over's marker isn't a fresh one
+        std::fs::write(home.join(MARKER), "1700000000\n").unwrap();
+        assert!(switched(&home) && !fresh(&home));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn listening_now_sees_a_listener() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        assert!(listening_now(port));
+        drop(l);
+        assert!(!listening_now(port));
+    }
 
     #[tokio::test]
     async fn takes_the_token_only_once_the_python_app_is_gone() {

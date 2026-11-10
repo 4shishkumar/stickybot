@@ -15,6 +15,17 @@ changes:
 Nothing in `~/.stick-agent/` is changed, moved or deleted by the Rust app at any step: it only
 reads. Going back is always possible (see the end).
 
+**A Mac without the Python app needs none of this.** On its first start (no `config.json` in
+`~/.stickybot-rs/` yet) the Rust app looks for the Python app: its folder `~/.stick-agent/`
+(`$STICKYBOT_RS_IMPORT_FROM`) or anything answering on port 8660 (`$STICKYBOT_RS_PYTHON_PORT`).
+When there's neither, it is StickyBot right away: it writes `~/.stickybot-rs/switched-over` with
+the note "fresh install: no StickyBot (Python) app on this Mac", serves port 8660 as "StickyBot"
+with its own token, and has no "the Python agent has the stick" check; Settings shows no
+*Switch over* card (`GET /api/switch-over` says `"fresh": true`). This is decided once, on the
+first start (never with the fake stick): when the Python app is there, everything below applies
+unchanged, and deleting the marker later (or *Undo*) puts the app on 8670 for good.
+(`switch::adopt_if_fresh`, `Options::start_port`.)
+
 ## Decisions
 
 - **Bundle id stays `com.stickybot.rs`.** Taking over `com.stickybot.app` would not carry the Python
@@ -143,7 +154,7 @@ stick. The token stays the Python one (harmless; the old Rust token is in `token
 | reopening the app shows the window | the same (`RunEvent::Reopen`) | done |
 | LaunchAgent with `KeepAlive` (restarted after a crash) | `SMAppService` login item: started at login, **not** restarted after a crash | no; reopen it from /Applications |
 | `stickybot` CLI (run/start/stop/restart/status/logs/open/install-page/app/flash/setup/mcp/uninstall) | none: the dashboard does status / logs / setup / flashing / MCP; `--hook` only | no |
-| self-update (git + venv + rebuild) | none (`NO_SELF_UPDATE`); firmware updates are ported | no: rebuild from the repo |
+| self-update (git + venv + rebuild) | none (`NO_SELF_UPDATE`): it says when a release has a newer app and opens its download page; firmware updates are ported | no: download the new zip |
 | BlackHole: downloads and installs the pkg | shows `brew install --cask blackhole-2ch` (the Apple audio tap needs no driver) | no |
 | window remembers its size and place; Dock icon while it's open | neither (menu bar only) | no |
 | first start opens the setup page by itself | the menu's *Finish setup…* | no |

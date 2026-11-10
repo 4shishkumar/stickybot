@@ -46,7 +46,7 @@ DATE="$(date +%Y-%m-%d)"
 echo "release $TAG ($KIND) on $BRANCH: agent $NOW -> $VERSION, firmware $FW, dated $DATE"
 
 if [ "$DRY" = 1 ]; then
-  echo "would: set the version in mac-agent, date CHANGELOG.md, commit \"Release $TAG\", tag $TAG"
+  echo "would: set the version in mac-agent and desktop (Cargo.toml + Cargo.lock), date CHANGELOG.md, commit \"Release $TAG\", tag $TAG"
   echo "release notes:"
   "$PY" "$TOOL" notes "$VERSION" 2>/dev/null || "$PY" "$TOOL" notes Unreleased
   exit 0
@@ -54,7 +54,7 @@ fi
 
 "$PY" "$TOOL" bump "$VERSION"
 "$PY" "$TOOL" changelog "$VERSION" "$DATE"
-git add CHANGELOG.md mac-agent/pyproject.toml mac-agent/stick_agent/__init__.py
+git add CHANGELOG.md mac-agent/pyproject.toml mac-agent/stick_agent/__init__.py desktop/Cargo.toml desktop/Cargo.lock
 if git diff --cached --quiet; then
   echo "(versions and changelog already up to date — tagging the current commit)"
 else
