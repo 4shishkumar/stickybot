@@ -1,7 +1,7 @@
 // Remote: the stick's infrared remote (stick firmware 2.5.0+). The remotes learned on the stick with
 // their buttons (send, star, rename, delete), learning a new button with live status, built-in TV
 // code sets that work without learning, and import / export of everything as JSON.
-import {h, clear, card, field, toggle, get, post, report, toast, store} from "../lib.js";
+import {h, clear, card, field, toggle, get, post, report, toast, store, ask} from "../lib.js";
 
 export const title = "Remote";
 export const subtitle = "The stick as an infrared remote: learn your TV / AC / soundbar buttons, send them from here, the stick or by voice.";
@@ -93,22 +93,22 @@ function remotesCard(r) {
         h("div", {class: "what"}, h("b", null, b.name), h("span", {class: "sub"}, b.proto)),
         h("button", {class: "btn sm primary", onclick: async () => report(await post("/api/ir/send", {dev: d.id, btn: b.name}), "Sent")}, "Send"),
         h("button", {class: "btn sm", onclick: async () => {
-          const to = prompt(`Rename “${b.name}” to:`, b.name);
+          const to = await ask(`Rename “${b.name}” to:`, {value: b.name, ok: "Rename"});
           if (to && to !== b.name && report(await post("/api/ir/rename", {dev: d.id, btn: b.name, to}), "Renamed")) load();
         }}, "Rename"),
         h("button", {class: "btn sm danger", onclick: async () => {
-          if (confirm(`Delete “${b.name}” from ${d.id}?`) && report(await post("/api/ir/remove", {dev: d.id, btn: b.name}), "Deleted")) load();
+          if (await ask(`Delete “${b.name}” from ${d.id}?`, {ok: "Delete", danger: true}) && report(await post("/api/ir/remove", {dev: d.id, btn: b.name}), "Deleted")) load();
         }}, "Delete")));
     }
     const brand = (data.mapped || {})[d.id];
     box.appendChild(h("section", {class: "cmd-card"},
       h("div", {class: "top"}, h("b", {class: "grow"}, d.id), h("span", {class: "small faint"}, `${d.buttons.length} buttons` + (brand ? ` · falls back to ${data.brands[brand]?.title || brand}` : "")),
         h("button", {class: "btn sm", onclick: async () => {
-          const to = prompt(`Rename the remote “${d.id}” to:`, d.id);
+          const to = await ask(`Rename the remote “${d.id}” to:`, {value: d.id, ok: "Rename"});
           if (to && to !== d.id && report(await post("/api/ir/rename", {dev: d.id, to}), "Renamed")) load();
         }}, "Rename"),
         h("button", {class: "btn sm danger", onclick: async () => {
-          if (confirm(`Delete the remote “${d.id}” and all its buttons?`) && report(await post("/api/ir/remove", {dev: d.id}), "Deleted")) load();
+          if (await ask(`Delete the remote “${d.id}” and all its buttons?`, {ok: "Delete", danger: true}) && report(await post("/api/ir/remove", {dev: d.id}), "Deleted")) load();
         }}, "Delete")),
       rows));
   }

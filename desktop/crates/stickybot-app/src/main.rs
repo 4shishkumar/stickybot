@@ -6,70 +6,16 @@
 //! *its* dashboard.
 
 use std::sync::Arc;
-use stick_link::LinkState;
 use stickybot_server::{AppState, Options};
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, RunEvent};
 
 mod appctl;
+mod icon;
 mod login;
+mod tray;
+mod window;
 
-const WINDOW: &str = "dashboard";
-
-fn label(state: LinkState, stick: Option<&str>, reason: Option<&str>) -> String {
-    let name = stick.unwrap_or("stick");
-    match state {
-        LinkState::Starting => "Starting…".into(),
-        LinkState::NoStick => "No stick picked yet".into(),
-        LinkState::Searching => match reason {
-            Some(why) => format!("{name}: {why}"),
-            None => format!("Looking for {name}…"),
-        },
-        LinkState::Connected => format!("{name}: connected"),
-        LinkState::Paused => "Paused".into(),
-    }
-}
-
-fn show_dashboard(app: &AppHandle) {
-    show_dashboard_at(app, "");
-}
-
-/// Shows and focuses the dashboard window (made if it was closed), at `#page` if given.
-pub(crate) fn show_dashboard_at(app: &AppHandle, page: &str) {
-    if let Some(w) = app.get_webview_window(WINDOW) {
-        if !page.is_empty() {
-            let _ = w.eval(format!("location.hash = {page:?}")); // letters, digits and - (checked)
-        }
-        let _ = w.show();
-        let _ = w.unminimize();
-        let _ = w.set_focus();
-        return;
-    }
-    let st = app.state::<Arc<AppState>>();
-    let mut url = st.url();
-    if !page.is_empty() {
-        url = format!("{url}#{page}");
-    }
-    let url = match url.parse() {
-        Ok(u) => u,
-        Err(e) => {
-            log::error!("bad dashboard url: {e}");
-            return;
-        }
-    };
-    match WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::External(url))
-        .title("StickyBot (Rust)")
-        .inner_size(1180.0, 820.0)
-        .min_inner_size(420.0, 500.0)
-        .build()
-    {
-        Ok(w) => {
-            let _ = w.set_focus();
-        }
-        Err(e) => log::error!("can't open the dashboard window: {e}"),
-    }
-}
+pub(crate) use window::show_dashboard_at;
 
 fn main() {
     // Claude Code's hooks run this program with `--hook permission|prompt|stop` (the server's
@@ -92,49 +38,8 @@ fn main() {
             *state.setup.app.lock().unwrap() = Arc::new(appctl::TauriApp(app.handle().clone()));
             app.manage(state.clone());
 
-            let status = MenuItem::with_id(app, "status", "Starting…", false, None::<&str>)?;
-            let open = MenuItem::with_id(app, "open", "Open dashboard", true, None::<&str>)?;
-            let browser = MenuItem::with_id(app, "browser", "Open in browser", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit StickyBot (Rust)", true, Some("cmd+q"))?;
-            let sep1 = PredefinedMenuItem::separator(app)?;
-            let sep2 = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&status, &sep1, &open, &browser, &sep2, &quit])?;
-
-            let mut tray = TrayIconBuilder::with_id("main")
-                .tooltip("StickyBot (Rust)")
-                .menu(&menu)
-                .show_menu_on_left_click(true)
-                .on_menu_event(|app, ev| match ev.id().as_ref() {
-                    "open" => show_dashboard(app),
-                    "browser" => {
-                        let url = app.state::<Arc<AppState>>().url();
-                        let _ = std::process::Command::new("open").arg(url).spawn();
-                    }
-                    "quit" => app.exit(0),
-                    _ => {}
-                });
-            if let Some(icon) = app.default_window_icon() {
-                tray = tray.icon(icon.clone());
-            }
-            let tray = tray.build(app)?;
-
-            // keep the status line and the tooltip in step with the link
-            let mut w = state.link.watch_state();
-            let mut why = state.link.watch_reason();
-            tauri::async_runtime::spawn(async move {
-                loop {
-                    let s = *w.borrow_and_update();
-                    let reason = why.borrow_and_update().clone();
-                    let text = label(s, state.stick().as_ref().map(|t| t.name.as_str()), reason.as_deref());
-                    let _ = status.set_text(&text);
-                    let _ = tray.set_tooltip(Some(format!("StickyBot (Rust) — {text}")));
-                    tokio::select! {
-                        r = w.changed() => if r.is_err() { break; },
-                        r = why.changed() => if r.is_err() { break; },
-                    }
-                }
-            });
-            log::info!("StickyBot (Rust) is in the menu bar; dashboard at {}", running.state.url());
+            tray::Tray::start(app.handle(), state.clone())?;
+            log::info!("{} is in the menu bar; dashboard at {}", state.app_name(), running.state.url());
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -143,6 +48,9 @@ fn main() {
     app.run(|app, event| match event {
         // closing the window keeps the menu bar app running; Quit (or cmd+q in the menu) ends it
         RunEvent::ExitRequested { api, code: None, .. } => api.prevent_exit(),
+        // the app opened again (Finder, Spotlight, `open -a`): the dashboard, like the Python app
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => show_dashboard_at(app, ""),
         // the wireless mic's device and tap outlive the process: remove them on the way out
         RunEvent::Exit => {
             if let Some(st) = app.try_state::<Arc<AppState>>() {
@@ -151,20 +59,4 @@ fn main() {
         }
         _ => {}
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn menu_labels() {
-        assert_eq!(label(LinkState::Connected, Some("Arbaaz"), None), "Arbaaz: connected");
-        assert_eq!(label(LinkState::Searching, None, None), "Looking for stick…");
-        assert_eq!(
-            label(LinkState::Searching, Some("Arbaaz"), Some(stick_link::NOT_FOUND_REASON)),
-            "Arbaaz: stick not found — is it awake?"
-        );
-        assert_eq!(label(LinkState::NoStick, Some("x"), None), "No stick picked yet");
-    }
 }

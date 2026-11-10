@@ -18,6 +18,7 @@ stickybot-server = { path = "../stickybot-server" }
 stick-link = { path = "../stick-link" }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 log = "0.4"
+serde_json = "1"
 tokio = { version = "1", features = ["macros", "sync"] }
 
 # start at login (SMAppService, login.rs)

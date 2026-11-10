@@ -115,6 +115,31 @@ export function toast(msg, kind) {
   box.appendChild(t);
   setTimeout(() => t.remove(), kind === "err" ? 6000 : 3000);
 }
+// ---------- confirm / prompt in the page ----------
+// The dashboard window's WebKit view (the Rust app's especially) has no alert / confirm / prompt
+// panels: confirm() answers false and prompt() null there. ask() works in every window and the
+// browser: -> true / false, or with `value` (a text to edit) the text / null.
+export function ask(message, {value, ok = "OK", danger = false} = {}) {
+  return new Promise(resolve => {
+    const input = value === undefined ? null : h("input", {type: "text", value, class: "ask-input"});
+    const dlg = h("dialog", {class: "ask"},
+      h("form", {method: "dialog"},
+        h("p", {class: "ask-text"}, message),
+        input,
+        h("div", {class: "ask-row"},
+          h("button", {class: "btn", value: "cancel", type: "submit"}, "Cancel"),
+          h("button", {class: "btn " + (danger ? "danger" : "primary"), value: "ok", type: "submit"}, ok))));
+    dlg.addEventListener("close", () => {
+      const yes = dlg.returnValue === "ok";
+      dlg.remove();
+      resolve(input ? (yes ? input.value : null) : yes);
+    });
+    document.body.appendChild(dlg);
+    dlg.showModal();
+    if (input) { input.focus(); input.select(); }
+  });
+}
+
 // Shows the result of an API call: a toast with `ok` text, or the error.
 export function report(res, ok) {
   if (res && res.error) toast(res.error, "err");

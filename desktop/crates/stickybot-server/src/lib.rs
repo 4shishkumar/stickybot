@@ -140,6 +140,8 @@ pub struct AppState {
     pub claude_runner: Mutex<mcp::ClaudeRunner>,
     /// when a button was last pressed on the stick (`hub::now()` seconds)
     last_input: Mutex<Option<f64>>,
+    /// the stick's sound settings as it last reported them (`{"on", "volume", …}`; the menu bar)
+    sounds: Mutex<Option<Value>>,
     /// start at login (the menu bar app sets the real one)
     pub login_item: Mutex<Arc<dyn login::LoginItem>>,
     /// API keys (the Keychain; in memory with the fake stick: tests never reach the Keychain)
@@ -223,6 +225,7 @@ impl AppState {
             mcp: mcp::McpState::default(),
             claude_runner: Mutex::new(mcp::system_claude_runner()),
             last_input: Mutex::new(None),
+            sounds: Mutex::new(None),
             login_item: Mutex::new(Arc::new(login::NoLoginItem)),
             keys: if fake { keys::Keys::new(Arc::new(keys::MemoryStore::default())) } else { keys::Keys::system() },
             faces: faces::Faces::new(fake),
@@ -405,7 +408,7 @@ impl AppState {
             "wireless_mic": wireless_mic,
             "update": self.updates.status(&cfg, false),
             "brain": brain_status,
-            "app": {"name": "StickyBot (Rust)", "window": true, "rust": true, "fake_stick": self.fake},
+            "app": {"name": self.app_name(), "window": true, "rust": true, "fake_stick": self.fake},
         })
     }
 
@@ -416,6 +419,56 @@ impl AppState {
 
     pub fn last_input(&self) -> Option<f64> {
         *self.last_input.lock().unwrap()
+    }
+
+    /// The stick's sound settings as it last reported them (core.py `agent.sounds`), `None` until
+    /// it has (asked on every connect).
+    pub fn sounds(&self) -> Option<Value> {
+        self.sounds.lock().unwrap().clone()
+    }
+
+    /// A sound report from the stick: kept, and the pages told.
+    fn sounds_seen(&self, s: &Value) {
+        *self.sounds.lock().unwrap() = Some(s.clone());
+        self.hub.emit("sounds", json!({"sounds": s}));
+    }
+
+    /// Sends `{"get":1}` / `{"set":{event: tune}}` / `{"play": name}` / `{"on"}` / `{"volume"}` to
+    /// the stick and waits up to 3 s for its report (core.py `sound`) -> its sound settings.
+    pub async fn sound(&self, payload: Value) -> Option<Value> {
+        let mut rx = self.link.messages();
+        if !self.link.send(&stick_link::proto::sound(payload)).await {
+            return None;
+        }
+        let s = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                match rx.recv().await {
+                    Ok(m) => {
+                        if let Some(s) = stick_link::proto::sounds_report(&m) {
+                            return Some(s.clone());
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => return None,
+                }
+            }
+        })
+        .await
+        .ok()
+        .flatten()?;
+        self.sounds_seen(&s);
+        Some(s)
+    }
+
+    /// Permission prompts waiting on the stick (the menu bar's "Waiting for approval (n)").
+    pub fn prompts_waiting(&self) -> usize {
+        self.approvals.list().as_array().map_or(0, Vec::len)
+    }
+
+    /// "StickyBot" once this app has taken the Python app's place (port 8660), else
+    /// "StickyBot (Rust)" (the two run side by side).
+    pub fn app_name(&self) -> &'static str {
+        app_name(self.port)
     }
 
     /// Takes over the Python app's settings (see `migrate.rs`) and applies them to the running app.
@@ -475,6 +528,33 @@ impl AppState {
     }
 }
 
+/// How long start-up waits for its port: a restart's old process (or the Python app quitting) may
+/// still hold it for a moment.
+pub const BIND_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Listens on 127.0.0.1:`port`, trying again for up to `wait` while it's taken.
+pub async fn bind(port: u16, wait: std::time::Duration) -> Result<tokio::net::TcpListener, String> {
+    let until = tokio::time::Instant::now() + wait;
+    loop {
+        match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+            Ok(l) => return Ok(l),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && tokio::time::Instant::now() < until => {
+                log::warn!("port {port} is taken; trying again");
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+            Err(e) => {
+                let who = if port == switch::PORT { " (is StickyBot (Python) running? see desktop/SWITCHOVER.md)" } else { "" };
+                return Err(format!("can't listen on 127.0.0.1:{port}: {e}{who}"));
+            }
+        }
+    }
+}
+
+/// The name to show for an app serving on `port` (see [`AppState::app_name`]).
+pub fn app_name(port: u16) -> &'static str {
+    if port == switch::PORT { "StickyBot" } else { "StickyBot (Rust)" }
+}
+
 /// A running server.
 pub struct Running {
     pub state: Arc<AppState>,
@@ -494,9 +574,7 @@ pub async fn start(opts: Options) -> Result<Running, String> {
         // the fake stick is "picked" so the pages show a connected stick right away (not saved)
         state.cfg.lock().unwrap().insert("stick".into(), json!({"address": "FAKE", "name": "StickyBot (fake)"}));
     }
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", opts.port))
-        .await
-        .map_err(|e| format!("can't listen on 127.0.0.1:{}: {e}", opts.port))?;
+    let listener = bind(opts.port, BIND_WAIT).await?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
     let weak = Arc::downgrade(&state);
     let cfg: brain::Config =
@@ -560,6 +638,8 @@ fn spawn_link_watcher(state: Arc<AppState>) {
                 st.hub.emit("link", json!({"state": s.as_str()}));
                 if s == LinkState::Connected {
                     st.brain().prewarm(); // Claude Code ready before the first request (if picked)
+                    let st2 = st.clone();
+                    tokio::spawn(async move { st2.sound(json!({"get": 1})).await }); // the menu bar's volume / sounds
                 }
                 last = Some(s);
             }
@@ -579,4 +659,27 @@ fn spawn_link_watcher(state: Arc<AppState>) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod name_tests {
+    #[test]
+    fn the_name_says_rust_only_next_to_the_python_app() {
+        assert_eq!(super::app_name(8670), "StickyBot (Rust)");
+        assert_eq!(super::app_name(super::switch::PORT), "StickyBot");
+    }
+
+    #[tokio::test]
+    async fn start_up_waits_a_moment_for_its_port() {
+        use std::time::Duration;
+        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = held.local_addr().unwrap().port();
+        let e = super::bind(port, Duration::ZERO).await.unwrap_err();
+        assert!(e.contains(&format!("127.0.0.1:{port}")), "{e}");
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(held);
+        });
+        assert!(super::bind(port, Duration::from_secs(5)).await.is_ok());
+    }
 }

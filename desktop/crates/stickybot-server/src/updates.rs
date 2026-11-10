@@ -248,6 +248,16 @@ pub async fn notify(st: &crate::AppState) -> Option<Value> {
 }
 
 /// The `update` event for the banner.
+/// "Check for updates" (the dashboard's button, the menu bar's item): the stick's version, the
+/// releases, the pages told -> the full status.
+pub async fn check_now(st: &crate::AppState) -> Value {
+    refresh_stick(st).await;
+    let cfg = st.cfg.lock().unwrap().clone();
+    let r = st.updates.check(&cfg).await;
+    emit(st);
+    r
+}
+
 pub fn emit(st: &crate::AppState) {
     let cfg = st.cfg.lock().unwrap().clone();
     let s = st.updates.status(&cfg, false);

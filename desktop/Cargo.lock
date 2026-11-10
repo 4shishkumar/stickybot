@@ -3995,6 +3995,7 @@ dependencies = [
  "log",
  "objc2",
  "objc2-foundation",
+ "serde_json",
  "stick-link",
  "stickybot-server",
  "tauri",

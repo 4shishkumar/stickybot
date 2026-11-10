@@ -1,6 +1,6 @@
 // The Rust app's own additions to the shared dashboard page (the Python app never loads this).
 // Settings → "Import from StickyBot": takes over the Python app's settings (POST /api/import).
-import {h, card, get, post, put, toast} from "/static/lib.js";
+import {h, card, get, post, put, toast, ask} from "/static/lib.js";
 
 function importCard(info) {
   const out = h("div", {class: "help", id: "rsImportOut"});
@@ -15,8 +15,9 @@ function importCard(info) {
     out.appendChild(h("div", null, `Last import: ${when}`));
   }
   const btn = h("button", {class: "btn", type: "button", disabled: !info.available, onclick: async () => {
-    if (!confirm("Take over the StickyBot (Python) app's settings, voice commands, sound packs and history?\n\n" +
-                 "This app's current settings and commands are kept as *.before-import. The Python app's files are only read.")) return;
+    if (!await ask("Take over the StickyBot (Python) app's settings, voice commands, sound packs and history?\n\n" +
+                   "This app's current settings and commands are kept as *.before-import. The Python app's files are only read.",
+                   {ok: "Import"})) return;
     btn.disabled = true;
     const r = await post("/api/import", {});
     btn.disabled = false;
@@ -53,14 +54,18 @@ function switchCard(s) {
     : s.python_running
       ? "Quit the StickyBot (Python) app first; then this app can take its place (port 8660, its token), so the Claude Code hooks and terminal stick tools keep working."
       : "Take the StickyBot (Python) app's place: port 8660 and its token, from the next start (see desktop/SWITCHOVER.md).");
+  const agent = s.python_login_item ? h("div", {class: "help"},
+    `The Python app's login item (${s.python_login_item}) is still installed: unless it's disabled ` +
+    "(launchctl disable gui/$UID/com.stickkey.agent, or System Settings → General → Login Items), it starts " +
+    "again at the next login and takes port 8660 back. See desktop/SWITCHOVER.md.") : null;
   const btn = h("button", {class: "btn", type: "button", disabled: !s.switched && s.python_running, onclick: async () => {
     const body = s.switched ? {undo: true} : {confirm: true};
-    if (!s.switched && !confirm("Take the Python app's place (port 8660 and its token) from the next start?")) return;
+    if (!s.switched && !await ask("Take the Python app's place (port 8660 and its token) from the next start?", {ok: "Switch over"})) return;
     const r = await post("/api/switch-over", body);
     if (r.error) { toast(r.error, "err"); return; }
     toast(s.switched ? "Back to port 8670 from the next start" : "Switched over: quit and reopen the app");
   }}, s.switched ? "Undo" : "Switch over");
-  return card("Switch over from StickyBot (Python)", h("div", {class: "field"}, h("label", null, "Port 8660"), h("div", {class: "row"}, btn), note));
+  return card("Switch over from StickyBot (Python)", h("div", {class: "field"}, h("label", null, "Port 8660"), h("div", {class: "row"}, btn), note, agent));
 }
 
 let busy = false;

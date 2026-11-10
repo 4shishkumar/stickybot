@@ -232,7 +232,7 @@ async fn not_ported(req: Request) -> Response {
 async fn page(State(st): State<Arc<AppState>>) -> Html<String> {
     Html(
         PAGE.replace("{{TOKEN}}", &st.token)
-            .replace("<title>StickyBot</title>", "<title>StickyBot (Rust)</title>")
+            .replace("<title>StickyBot</title>", &format!("<title>{}</title>", st.app_name()))
             .replace("</body>", "<script type=\"module\" src=\"/static-rs/rust.js\"></script>\n</body>"),
     )
 }
@@ -404,8 +404,11 @@ fn python_port() -> u16 {
 async fn switch_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
     let switched = crate::switch::switched(&st.paths.home);
     let python = !switched && crate::switch::listening(python_port()).await;
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+    let login_item = if st.fake { None } else { crate::switch::python_login_item(&home, st.import_from.as_deref()) };
     axum::Json(json!({"switched": switched, "port": st.port, "python_running": python,
-                      "restart_needed": switched != (st.port == crate::switch::PORT)}))
+                      "restart_needed": switched != (st.port == crate::switch::PORT),
+                      "python_login_item": login_item}))
 }
 
 /// `{"confirm": true}`: take the Python app's place from the next start; `{"undo": true}`: back.
@@ -568,36 +571,9 @@ async fn pause(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<Value
     axum::Json(json!({"ok": true}))
 }
 
-/// Sends a sound message and waits up to 3 s for the stick's report (core.py `sound`).
-async fn sound(st: &AppState, payload: Value) -> Option<Value> {
-    let mut rx = st.link.messages();
-    if !st.link.send(&proto::sound(payload)).await {
-        return None;
-    }
-    tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            match rx.recv().await {
-                Ok(m) => {
-                    if let Some(s) = proto::sounds_report(&m) {
-                        return Some(s.clone());
-                    }
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                Err(_) => return None,
-            }
-        }
-    })
-    .await
-    .ok()
-    .flatten()
-}
-
 async fn get_sounds(State(st): State<Arc<AppState>>) -> Response {
-    match sound(&st, json!({"get": 1})).await {
-        Some(s) => {
-            st.hub.emit("sounds", json!({"sounds": s}));
-            axum::Json(s).into_response()
-        }
+    match st.sound(json!({"get": 1})).await {
+        Some(s) => axum::Json(s).into_response(),
         None => err(StatusCode::SERVICE_UNAVAILABLE, "the stick didn't answer (connected?)"),
     }
 }
@@ -605,18 +581,15 @@ async fn get_sounds(State(st): State<Arc<AppState>>) -> Response {
 async fn put_sounds(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
     let payload: Map<String, Value> =
         body_obj(&body).into_iter().filter(|(k, _)| matches!(k.as_str(), "set" | "on" | "volume")).collect();
-    match sound(&st, Value::Object(payload)).await {
-        Some(s) => {
-            st.hub.emit("sounds", json!({"sounds": s}));
-            axum::Json(s).into_response()
-        }
+    match st.sound(Value::Object(payload)).await {
+        Some(s) => axum::Json(s).into_response(),
         None => err(StatusCode::SERVICE_UNAVAILABLE, "the stick didn't answer"),
     }
 }
 
 async fn play_sound(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<Value> {
     let name = body_obj(&body).get("name").map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string()));
-    let ok = sound(&st, json!({"play": name.unwrap_or_else(|| "test".into())})).await.is_some();
+    let ok = st.sound(json!({"play": name.unwrap_or_else(|| "test".into())})).await.is_some();
     axum::Json(json!({"ok": ok}))
 }
 
@@ -665,11 +638,7 @@ async fn update_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
 
 /// Checks now (lists releases, downloads the latest firmware) -> the same.
 async fn update_check(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
-    crate::updates::refresh_stick(&st).await;
-    let cfg = st.cfg.lock().unwrap().clone();
-    let r = st.updates.check(&cfg).await;
-    crate::updates::emit(&st);
-    axum::Json(r)
+    axum::Json(crate::updates::check_now(&st).await)
 }
 
 /// The app updating itself isn't ported (selfupdate.py).
@@ -1014,6 +983,7 @@ mod tests {
         let (app, st, _) = app("page", false).await;
         let (s, v, ctype) = call(&app, req("GET", "/", None, None)).await;
         let html = v.as_str().unwrap();
+        assert!(html.contains("<title>StickyBot (Rust)</title>")); // side by side (8670): told apart
         assert_eq!(s, StatusCode::OK);
         assert!(ctype.starts_with("text/html"));
         assert!(html.contains(&format!("window.STICK_TOKEN = \"{}\"", st.token)) && !html.contains("{{TOKEN}}"));
@@ -1096,6 +1066,7 @@ mod tests {
         assert_eq!(v["volume"], 160);
         let (_, v, _) = call(&app, req("PUT", "/api/sounds", Some(json!({"volume": 99, "bogus": 1})), tok)).await;
         assert_eq!(v["volume"], 99);
+        assert_eq!(st.sounds().unwrap()["volume"], 99); // kept for the menu bar
         let (_, v, _) = call(&app, req("POST", "/api/sounds/play", Some(json!({"name": "test"})), tok)).await;
         assert_eq!(v["ok"], true);
     }

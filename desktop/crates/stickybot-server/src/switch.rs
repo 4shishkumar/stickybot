@@ -53,6 +53,19 @@ pub async fn switch_over(paths: &Paths, from: &Path, python_port: u16) -> Result
     Ok(())
 }
 
+/// The Python app's LaunchAgent (`stickybot start` / its installer): `RunAtLoad` + `KeepAlive`, so
+/// it starts at every login and takes port 8660 back unless it's disabled (SWITCHOVER.md step 3).
+pub const PYTHON_LABEL: &str = "com.stickkey.agent";
+
+/// Where the Python app's LaunchAgent plist is, if it's installed (`~/Library/LaunchAgents`, or the
+/// Python app's folder when that wasn't writable). Only looked at, never changed.
+pub fn python_login_item(user_home: &Path, python_home: Option<&Path>) -> Option<std::path::PathBuf> {
+    let name = format!("{PYTHON_LABEL}.plist");
+    std::iter::once(user_home.join("Library/LaunchAgents").join(&name))
+        .chain(python_home.map(|p| p.join(&name)))
+        .find(|p| p.exists())
+}
+
 pub fn undo(paths: &Paths) -> Result<(), String> {
     match std::fs::remove_file(paths.home.join(MARKER)) {
         Ok(()) => Ok(()),
@@ -107,6 +120,22 @@ mod tests {
         undo(&paths).unwrap();
         assert!(!switched(&paths.home));
         undo(&paths).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn finds_the_python_launch_agent() {
+        let root = std::env::temp_dir().join(format!("stickybot-switch-la-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let py = root.join(".stick-agent");
+        std::fs::create_dir_all(&py).unwrap();
+        assert_eq!(python_login_item(&root, Some(&py)), None);
+        std::fs::write(py.join("com.stickkey.agent.plist"), "").unwrap();
+        assert_eq!(python_login_item(&root, Some(&py)), Some(py.join("com.stickkey.agent.plist")));
+        let la = root.join("Library/LaunchAgents");
+        std::fs::create_dir_all(&la).unwrap();
+        std::fs::write(la.join("com.stickkey.agent.plist"), "").unwrap();
+        assert_eq!(python_login_item(&root, Some(&py)), Some(la.join("com.stickkey.agent.plist")));
         let _ = std::fs::remove_dir_all(&root);
     }
 }
