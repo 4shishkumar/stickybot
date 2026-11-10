@@ -50,7 +50,7 @@ jobs:
       - name: Agent — install (without the macOS-only libraries)
         run: |
           python -m pip install --no-deps -e mac-agent
-          python -m pip install bleak aiohttp numpy soundfile soxr pyserial huggingface_hub \
+          python -m pip install bleak aiohttp numpy soundfile soxr pyserial huggingface_hub cryptography \
             "pytest>=8" "pytest-asyncio>=0.23" "pytest-aiohttp>=1.0" "ruff>=0.5"
 
       - name: Agent — lint and tests

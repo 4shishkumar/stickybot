@@ -12,6 +12,10 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Fixed
+- **The v2.3.0 release build failed** before publishing anything: its test machine didn't
+  install `cryptography`, which the face-package tests need. v2.3.1 is v2.3.0 with that fixed.
+
 ## [2.3.0] - 2026-11-10
 
 ### Added
