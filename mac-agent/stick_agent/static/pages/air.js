@@ -1,6 +1,6 @@
 // The Stick page's "Mouse & presenter" card (stick firmware 2.5.0+: its state has `air`).
 // Starts a remote mode on the stick (@mode) and edits its settings (@air), both saved on
-// the stick. `send(action, args, okText)` is the Stick page's own (it refreshes the page).
+// the stick. `send(action, args, okText)` is the Stick page's own (it updates this card in place).
 import {h, card, field, toggle} from "../lib.js";
 
 const MODES = [["mouse", "Air mouse"], ["presenter", "Presenter"], ["media", "Media remote"]];
@@ -22,11 +22,12 @@ export function airCard(st, send) {
       [45, "45 min"], [60, "1 hour"], [90, "1.5 hours"]]
       .concat([[a.talkMin, `${a.talkMin} min`]].filter(([v]) => ![0, 5, 10, 15, 20, 30, 45, 60, 90].includes(v)))
       .map(([v, l]) => h("option", {value: v, selected: a.talkMin === v}, l)));
-  return card("Mouse & presenter",
+  return card("Air mouse, presenter & media",
     h("p", {class: "lead"},
       "The stick as an air mouse (turn it to point; A clicks, B right-clicks, hold B and tilt to scroll), ",
       "a slide clicker with a talk timer (A next, B back, hold A for a laser pointer, double-press B for a black screen), ",
-      "or a media remote (twist for volume, flick for the next track). Hold A and B together on the stick to go back to Home."),
+      "or a media remote (twist for volume, flick for the next track). Hold A and B together on the stick to go back to Home.",
+      " The IR remote (TV, air conditioner…) has its own page: ", h("a", {href: "#remote"}, "Remote"), "."),
     field("Start", h("div", {class: "row"},
       MODES.map(([id, label]) => h("button", {class: "btn sm" + (a.mode === id ? " primary" : ""), type: "button",
         onclick: () => send("mode", {name: id}, `${label} on the stick`)}, label)),

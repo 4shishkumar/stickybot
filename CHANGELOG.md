@@ -12,6 +12,15 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Changed
+- Dashboard, Stick page: changing a setting no longer reloads the page and jumps to the top. Only the
+  cards whose settings changed are redrawn, in place; the scroll position, the focused control and the
+  folded sections stay as they were (also for Refresh and the page's own refresh every 45 s).
+- Dashboard, Stick page: a new layout in sections, most-used first: Status, Screen & look, Buttons &
+  shortcuts, Sound, Motion & gestures, Remote modes, Games, More faces, Name & Macs, Firmware & advanced.
+  A sticky bar jumps to each; sections fold (remembered in this browser) and show a one-line summary.
+  `#stick/firmware` opens the page at a section.
+
 ## [2.3.2] - 2026-11-10
 
 ### Changed

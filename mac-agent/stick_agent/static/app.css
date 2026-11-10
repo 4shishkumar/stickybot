@@ -276,6 +276,29 @@ select { padding-right: 26px; }
 .game-row b { grid-area: t; } .game-row .dim { grid-area: k; } .game-row .faint { grid-area: p; min-width: 64px; text-align: right; }
 .game-best { grid-area: b; font-variant-numeric: tabular-nums; font-weight: 600; }
 .pet-facts { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+/* Stick page layout: sections in priority order, a sticky jump bar, folding headings */
+.stick-page { display: flex; flex-direction: column; gap: 22px; }
+.stick-jump { position: sticky; top: var(--stick-top, 0px); z-index: 4; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
+  margin: -14px -28px -8px; padding: 10px 28px; background: color-mix(in srgb, var(--ground) 88%, transparent); backdrop-filter: blur(10px); }
+.stick-jump::-webkit-scrollbar { display: none; }
+.chip-btn { flex: none; font: inherit; font-size: 12.5px; font-weight: 560; padding: 5px 11px; border-radius: 99px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel); color: var(--dim); transition: background .15s, border-color .15s, color .15s; }
+.chip-btn:hover { color: var(--ink); border-color: var(--line-strong); }
+.chip-btn.on { border-color: var(--agent); background: var(--agent-soft); color: var(--ink); }
+.stick-sec { display: flex; flex-direction: column; gap: 12px; scroll-margin-top: calc(var(--stick-top, 0px) + 58px); }
+.stick-sec-body { display: flex; flex-direction: column; gap: 12px; }
+.stick-sec-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 2px 2px 0; border: 0; background: none; color: var(--ink);
+  font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.stick-sec-head h2 { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; flex: none; }
+.stick-sec-head .sum { margin-left: auto; color: var(--faint); font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stick-sec-head .chev { width: 7px; height: 7px; flex: none; border-right: 1.7px solid var(--faint); border-bottom: 1.7px solid var(--faint);
+  transform: rotate(45deg) translate(-2px, -2px); transition: transform .15s; }
+.stick-sec.closed .stick-sec-head .chev { transform: rotate(-45deg); }
+.stick-sec-head:hover h2, .stick-sec-head:hover .chev { color: var(--agent); border-color: var(--agent); }
+.stick-sec.closed .stick-sec-head { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+@media (max-width: 820px) { .stick-jump { margin: -8px -16px -8px; padding: 8px 16px; } }
+@media (max-width: 520px) { .stick-sec-head .sum { display: none; } }
+@media (prefers-reduced-motion: reduce) { .stick-sec-head .chev, .chip-btn { transition: none; } }
 /* Stick page: face packages (firmware 2.4.0+) — installed list, the catalog, filters, install progress */
 .market { display: flex; flex-direction: column; gap: 12px; }
 .market-grid { margin-top: 2px; }

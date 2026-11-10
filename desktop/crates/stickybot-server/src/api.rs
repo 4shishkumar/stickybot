@@ -2037,5 +2037,9 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         let body = body.as_str().unwrap();
         assert!(body.contains("function launcherCard()") && body.contains("send(\"launcher\""));
+        // ...and so does the page's layout (its sections), which it imports
+        let (s, body, _) = call(&app, req("GET", "/static/pages/stick_layout.js", None, None)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert!(body.as_str().unwrap().contains("export const SECTIONS"));
     }
 }
