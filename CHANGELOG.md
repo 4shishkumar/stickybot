@@ -12,6 +12,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [2.3.2] - 2026-11-10
+
 ### Changed
 - **The repo moved to [4shishkumar/stickybot](https://github.com/4shishkumar/stickybot).**
   The update check, the install command and the faces catalog use the new address. GitHub
@@ -397,7 +399,8 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/4shishkumar/stickybot/compare/v2.3.1...HEAD
+[Unreleased]: https://github.com/4shishkumar/stickybot/compare/v2.3.2...HEAD
+[2.3.2]: https://github.com/4shishkumar/stickybot/releases/tag/v2.3.2
 [2.3.1]: https://github.com/4shishkumar/stickybot/releases/tag/v2.3.1
 [2.3.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.3.0
 [2.2.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.2.0
