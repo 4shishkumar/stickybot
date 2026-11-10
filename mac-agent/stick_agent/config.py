@@ -96,6 +96,9 @@ def ensure_home():
         TOKEN.chmod(0o600)
 
 
+OLD_FACES_CATALOG_URL = "https://ashish-kumar-noon.github.io/stickybot/faces/catalog.json"
+
+
 def load():
     cfg = dict(DEFAULT_CONFIG)
     try:
@@ -103,6 +106,8 @@ def load():
     except (OSError, ValueError):
         pass
     cfg.pop("wispr_fallback_mic", None)  # the smart mic's fallback (removed)
+    if cfg.get("faces_catalog_url") == OLD_FACES_CATALOG_URL:  # the repo moved (2.3.2): its Pages too
+        cfg["faces_catalog_url"] = DEFAULT_CONFIG["faces_catalog_url"]
     return cfg
 
 
