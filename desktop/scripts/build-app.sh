@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds "StickyBot (Rust).app", signed with a stable identity so macOS keeps its permissions
+# Builds "StickyBot.app", signed with a stable identity so macOS keeps its permissions
 # (Bluetooth, System Audio Recording, the login item) across rebuilds.
 #
 #   STICKYBOT_SIGNING_IDENTITY=<SHA-1 or name> desktop/scripts/build-app.sh
@@ -20,7 +20,7 @@ else
 fi
 
 cargo tauri build --bundles app
-APP="$(cd ../.. && pwd)/target/release/bundle/macos/StickyBot (Rust).app"
+APP="$(cd ../.. && pwd)/target/release/bundle/macos/StickyBot.app"
 codesign --verify --strict --verbose=1 "$APP"
 codesign -dv "$APP" 2>&1 | grep -E "^(Identifier|Authority|TeamIdentifier|Signature)" || true
 echo "built: $APP"

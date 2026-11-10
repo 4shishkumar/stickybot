@@ -34,7 +34,7 @@ async fn main() {
     }
     let running = match start(opts).await {
         Ok(r) => {
-            println!("StickyBot (Rust) dashboard: {}", r.state.url());
+            println!("StickyBot dashboard: {}", r.state.url());
             r
         }
         Err(e) => {

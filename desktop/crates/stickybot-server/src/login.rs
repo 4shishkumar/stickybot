@@ -33,7 +33,7 @@ impl LoginState {
             LoginState::Off => ("off", false, ""),
             LoginState::On => ("on", true, ""),
             LoginState::NeedsApproval => {
-                ("needs_approval", true, "Allow StickyBot (Rust) in System Settings → General → Login Items.")
+                ("needs_approval", true, "Allow StickyBot in System Settings → General → Login Items.")
             }
             LoginState::Unavailable => {
                 ("unavailable", false, "Only the bundled app can start at login (not a binary run from a terminal).")

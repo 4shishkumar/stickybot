@@ -41,7 +41,7 @@ pub const BLACKHOLE_NAME: &str = "BlackHole 2ch";
 pub const PREFS: [&str; 3] = ["auto", "tap", "blackhole"];
 pub const TAP_MIN_MACOS: (u32, u32) = (14, 2);
 
-pub const PERMISSION_HINT: &str = "allow System Audio Recording for StickyBot (Rust) (your terminal app when it runs from a terminal): \
+pub const PERMISSION_HINT: &str = "allow System Audio Recording for StickyBot (your terminal app when it runs from a terminal): \
      System Settings → Privacy & Security → Screen & System Audio Recording → System Audio Recording Only";
 pub const NO_BLACKHOLE: &str = "BlackHole 2ch isn't installed — run: brew install --cask blackhole-2ch";
 

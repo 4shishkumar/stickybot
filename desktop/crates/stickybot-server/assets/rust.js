@@ -41,11 +41,11 @@ function loginCard(s) {
   const box = h("input", {type: "checkbox", id: "rsLogin", checked: s.on, disabled: !s.available, onchange: async () => {
     const r = await put("/api/login-item", {on: box.checked});
     if (r.error) { toast(r.error, "err"); box.checked = !box.checked; return; }
-    help.textContent = r.detail || (r.on ? "StickyBot (Rust) starts when you log in." : "Opens the menu bar app when you log in to this Mac.");
+    help.textContent = r.detail || (r.on ? "StickyBot starts when you log in." : "Opens the menu bar app when you log in to this Mac.");
   }});
   return card("Start at login",
     h("div", {class: "field"}, h("label", null, "Login item"),
-      h("label", {class: "switch"}, box, h("span", null, "Start StickyBot (Rust) when I log in")), help));
+      h("label", {class: "switch"}, box, h("span", null, "Start StickyBot when I log in")), help));
 }
 
 function switchCard(s) {

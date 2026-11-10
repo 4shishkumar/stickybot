@@ -46,7 +46,7 @@ pub const GH_DEVICE_URL: &str = "https://github.com/login/device";
 const MIN_FREE_BYTES: u64 = 1_000_000_000;
 const MIN_MACOS: (u64, u64) = (13, 0);
 const MODEL_SIZE: &str = "490 MB";
-pub const TAP_NOTE: &str = "macOS asks once to allow \"System Audio Recording\" for StickyBot (Rust): it taps only \
+pub const TAP_NOTE: &str = "macOS asks once to allow \"System Audio Recording\" for StickyBot: it taps only \
                             its own sound (the stick's audio it plays), muted, never other apps.";
 
 struct StepDef {
@@ -526,7 +526,7 @@ fn check_wispr(st: &AppState, sys: &dyn System) -> Check {
             _ => {}
         }
         if state == Some("failed") {
-            return c("todo", "on · allow System Audio Recording for StickyBot (Rust)", data);
+            return c("todo", "on · allow System Audio Recording for StickyBot", data);
         }
         let detail = tap["detail"].as_str().unwrap_or("");
         return c(
@@ -1013,7 +1013,7 @@ struct Comp {
 const COMPONENTS: &[Comp] = &[
     Comp {
         id: "core",
-        title: "StickyBot (Rust) app",
+        title: "StickyBot app",
         description: "this app: the menu bar app, the dashboard and its login item (Settings → Start at login)",
         default: true,
         from_dashboard: false,

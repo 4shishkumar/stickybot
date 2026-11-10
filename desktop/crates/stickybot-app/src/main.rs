@@ -1,4 +1,4 @@
-//! StickyBot (Rust): a menu bar app (no Dock icon) that runs the dashboard server and the stick
+//! StickyBot: a menu bar app (no Dock icon) that runs the dashboard server and the stick
 //! link, and shows the dashboard in its own window.
 //!
 //! Phase 1 runs next to the Python agent: its own port (8670), its own folder (~/.stickybot-rs),
