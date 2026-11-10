@@ -30,48 +30,115 @@ reads. Going back is always possible (see the end).
 - **Start at login**: `SMAppService.mainAppService` (Settings → *Start at login*), no LaunchAgent and
   no `launchctl`.
 
-## Steps
+## What keeps the Python app alive (and how to stop it without uninstalling)
+
+The Python app is a **LaunchAgent**, `com.stickkey.agent`
+(`~/Library/LaunchAgents/com.stickkey.agent.plist`, or `~/.stick-agent/` when that folder wasn't
+writable): `RunAtLoad` true and `KeepAlive {SuccessfulExit: false}`. So:
+
+- its menu bar **Quit** exits 0: launchd doesn't restart it, **but it starts again at the next
+  login** and takes port 8660 first;
+- `stickybot stop` is `launchctl bootout` only: same, back at the next login;
+- `stickybot start` / `restart` / `app rebuild`, its installer, and **opening the Python
+  `StickyBot.app` from Finder / Spotlight** write the plist again and `bootstrap` / `kickstart` it;
+- its dashboard has **no** start-at-login switch (Settings → Components only shows "this is what's
+  running").
+
+If both apps start at login, they race for 8660: the Rust app waits 10 s for the port and then
+quits (`app.log`: "can't listen on 127.0.0.1:8660 … is StickyBot (Python) running?"); if the Rust
+app wins, the Python app's dashboard dies in its thread and leaves a dead icon in the menu bar.
+
+**`launchctl disable`** is the one that sticks: it's kept by launchd across logins, `bootstrap`
+refuses a disabled service (so `stickybot start` and opening the Python app can't bring it back by
+accident), nothing is deleted, and `launchctl enable` undoes it. Moving the plist away also works
+but is undone by anything that writes it again. The GUI equivalent is System Settings → General →
+Login Items → *Allow in the Background* → **StickyBot** off.
+
+## Steps (in this order)
+
+Nothing here changes `~/.stick-agent/`, the Keychain, Wispr Flow or `~/.claude/settings.json`
+(except the optional step 9, which asks first and keeps a backup).
 
 1. **Build and install** the signed app: `STICKYBOT_SIGNING_IDENTITY=<SHA-1> desktop/scripts/build-app.sh`,
-   then copy `desktop/target/release/bundle/macos/StickyBot (Rust).app` to `/Applications`.
-2. **Import the settings** (if the Rust app ran before, its settings are its own): Rust dashboard →
-   Settings → *Import from StickyBot* (`POST /api/import`). It takes the stick, GitHub (primary
-   repo), brain / model, wireless mic, sounds, events and every other shared setting, the voice
-   commands, sound packs, history, the pet, the GitHub watcher's state and Claude's `CLAUDE.md`;
-   this app's replaced files are kept as `*.before-import`. On a first start with an empty
-   `~/.stickybot-rs/` this happens on its own.
-3. **Quit the Python app** (its menu bar icon → Quit). If it's set to start at login, turn that off
-   in its dashboard (Settings → Components) or System Settings → General → Login Items, so it
-   doesn't take port 8660 back at the next login. (Don't uninstall it yet.)
+   then copy `desktop/target/release/bundle/macos/StickyBot (Rust).app` to `/Applications` (the
+   hooks of step 9 point at this path; don't move it afterwards).
+2. **Import the settings** with both apps running (the Rust app on 8670, holding off the stick):
+   Rust menu bar → *Open StickyBot (Rust)* → Settings → *Import from StickyBot* (`POST /api/import`).
+   It takes the stick, GitHub (primary repo), brain / model, wireless mic, sounds, events and every
+   other shared setting, the voice commands, sound packs, history, the pet, the GitHub watcher's
+   state and Claude's `CLAUDE.md`; this app's replaced files are kept as `*.before-import`. On a
+   first start with an empty `~/.stickybot-rs/` this happens on its own.
+3. **Stop the Python app and keep it from coming back** (it stays installed):
+   1. Python menu bar icon → **Quit StickyBot** (exit 0: launchd leaves it stopped).
+   2. In a terminal:
+      ```sh
+      launchctl disable gui/$(id -u)/com.stickkey.agent     # not at the next login, not by `stickybot start`
+      launchctl bootout gui/$(id -u)/com.stickkey.agent     # unload it now ("No such process" is fine)
+      ```
+   3. Check: `launchctl print-disabled gui/$(id -u) | grep stickkey` says `=> disabled` (or `true`);
+      `curl -s -m 2 localhost:8660/api/status` gets no answer.
+   From here on don't run `stickybot start|restart|app rebuild|setup|uninstall` (the last one also
+   removes the `stick` MCP registration and the Claude Code hooks both apps use).
 4. **Switch over**: Rust dashboard → Settings → *Switch over* (or
    `curl -X POST localhost:8670/api/switch-over -H "X-Stick-Token: $(cat ~/.stickybot-rs/token)" -d '{"confirm":true}'`).
-   It refuses while anything still answers on 8660. It copies the Python app's token into
-   `~/.stickybot-rs/token` (the old one is kept as `token.before-switch`) and writes
-   `~/.stickybot-rs/switched-over`.
-5. **Restart the Rust app** (menu bar → Quit, open it again). It now serves
-   <http://localhost:8660>, and the "Python agent has the stick" check is off (it would ask itself).
-   macOS may ask for Bluetooth once more if this is the first signed build.
+   It refuses while anything still answers on 8660, and the card warns while the Python
+   LaunchAgent's plist is installed (it can't see whether it's disabled: step 3.3 is the check). It
+   copies the Python app's token into `~/.stickybot-rs/token` (the old one is kept as
+   `token.before-switch`) and writes `~/.stickybot-rs/switched-over`.
+5. **Restart the Rust app**: its menu → **Restart**. It now serves <http://localhost:8660>, the menu
+   and the window say **StickyBot** (no "(Rust)"), and the "Python agent has the stick" check is
+   off. macOS may ask for Bluetooth once more if this is the first signed build.
 6. **Start at login**: Settings → *Start at login* on. If it says "needs approval", allow
    StickyBot (Rust) in System Settings → General → Login Items.
-7. **Check**: the stick connects (*agent ready*); hold B and ask something; run a Claude Code tool
-   that needs approval in a terminal (A / B on the stick); a long Claude Code task ends with
-   "Claude finished"; `claude mcp get stick` still points at `127.0.0.1:8660/mcp`; Settings →
-   Wireless mic (the Rust app's mic has the same name, so Wispr's ranking needs no change).
+7. **Check**: the stick connects (*agent ready*; the menu says "Ready — hold B on the stick" with
+   the eyes icon); hold B and ask something (the icon fills while listening); run a Claude Code tool
+   that needs approval in a terminal (the icon gets its dot, the menu says "Waiting for approval
+   (1)"; A / B on the stick); a long Claude Code task ends with "Claude finished";
+   `claude mcp get stick` still points at `127.0.0.1:8660/mcp`; Stick volume / Sounds on the stick
+   in the menu; Settings → Wireless mic (the Rust app's mic has the same name, so Wispr's ranking
+   needs no change).
+8. **Log out and in** once: only the Rust app comes up (one icon), on 8660.
+9. *(Optional, asks before it changes `~/.claude/settings.json`; keeps a dated backup)* Setup →
+   **Claude Code hooks**: replaces the Python hooks (`<venv>/python …/hook.py`,
+   `…/claude_hooks.py`) with this app's (`'/Applications/StickyBot (Rust).app/Contents/MacOS/stickybot-rs' --hook …`).
+   Until then the Python hooks keep working (they post to 8660 with the same token), but they
+   need the Python venv: don't delete `mac-agent/.venv` (or wherever the installer put it) before
+   this step.
 
 ## Going back
 
-Rust dashboard → `POST /api/switch-over {"undo": true}` (or delete `~/.stickybot-rs/switched-over`),
-quit the Rust app, start the Python app. The Rust app goes back to port 8670 and waits for the
-Python app to pause again before it takes the stick. The token stays the Python one (harmless; the
-old Rust token is in `token.before-switch`).
+1. Rust dashboard → Settings → Switch over → **Undo** (`POST /api/switch-over {"undo": true}`, or
+   delete `~/.stickybot-rs/switched-over`), and Settings → *Start at login* off.
+2. Rust menu → **Quit StickyBot**.
+3. ```sh
+   launchctl enable gui/$(id -u)/com.stickkey.agent
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.stickkey.agent.plist   # or: stickybot start
+   ```
+4. If you did step 9, Setup → Claude Code hooks in the Python app puts its hooks back (or restore
+   the backup next to `~/.claude/settings.json`).
+
+The Rust app goes back to port 8670 and waits for the Python app to pause before it takes the
+stick. The token stays the Python one (harmless; the old Rust token is in `token.before-switch`).
+
+## Parity beyond the routes (after the switch-over)
+
+| Python | Rust | Matters for the switch-over? |
+|---|---|---|
+| menu bar menu and state icon (menubar.py) | the same items, icon states and refresh (`tray.rs`, `icon.rs`) | done |
+| `confirm()` / `prompt()` in its window (NSAlert; `prompt` never worked) | WKWebView has no panels in Tauri: the pages use `lib.js` `ask()` (in-page) | done (IR deletes / renames, Import, Switch over) |
+| links / `target=_blank` open in the browser | the same (`window.rs`) | done |
+| reopening the app shows the window | the same (`RunEvent::Reopen`) | done |
+| LaunchAgent with `KeepAlive` (restarted after a crash) | `SMAppService` login item: started at login, **not** restarted after a crash | no; reopen it from /Applications |
+| `stickybot` CLI (run/start/stop/restart/status/logs/open/install-page/app/flash/setup/mcp/uninstall) | none: the dashboard does status / logs / setup / flashing / MCP; `--hook` only | no |
+| self-update (git + venv + rebuild) | none (`NO_SELF_UPDATE`); firmware updates are ported | no: rebuild from the repo |
+| BlackHole: downloads and installs the pkg | shows `brew install --cask blackhole-2ch` (the Apple audio tap needs no driver) | no |
+| window remembers its size and place; Dock icon while it's open | neither (menu bar only) | no |
+| first start opens the setup page by itself | the menu's *Finish setup…* | no |
+| notifications | toasts on the stick only, in both | — |
+| hooks, MCP tools (12), stick USB state, Wispr warm-up, `sound get` / `@state` name on connect | at parity | — |
 
 ## Not covered yet
 
-- The Python installer's venv, `stickybot` command, LaunchAgent and BlackHole download aren't ported
-  (the Rust app has none of them; BlackHole only if you installed it with Homebrew). The Claude Code
-  hooks the Python installer registered keep working through port 8660; to use the Rust app's own
-  (`<app> --hook …`, no Python), run Setup → Claude Code hooks after step 5 (it keeps a backup of
-  `~/.claude/settings.json`).
-- Self-update: the Rust app is built from the repo (`POST /api/update/agent` says so); firmware
-  updates (Bluetooth, USB) are ported.
-- OpenRouter: the key is the same Keychain item the Python app saved (macOS asks once to let this app read it).
+- See the table: crash restart, a CLI, self-update and the BlackHole download aren't ported.
+- OpenRouter: the key is the same Keychain item the Python app saved (macOS asks once to let this
+  app read it).

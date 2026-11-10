@@ -27,7 +27,7 @@ cd desktop
 cargo run -p stickybot-server --bin stickybot-headless -- --fake-stick
 open http://localhost:8670/#stick
 
-# the menu bar app (tray icon → Open dashboard); add STICKYBOT_RS_FAKE_STICK=1 for the fake stick
+# the menu bar app (tray icon → Open StickyBot (Rust)); add STICKYBOT_RS_FAKE_STICK=1 for the fake stick
 cd crates/stickybot-app && cargo tauri dev
 
 # the bundle: target/release/bundle/macos/StickyBot (Rust).app
@@ -61,7 +61,7 @@ loads it in ~0.7 s; `GET /api/speech` and `speech` events show the progress.
 |---|---|
 | `crates/stick-link` | The Bluetooth link (port of `link.py`). `proto.rs`: the wire format, **no I/O** (compact ASCII JSON lines, 180-byte writes, line decoder, hello / `proto` / sound messages, the "Insufficient Resource" retry rule). `link.rs`: reconnect loop, hello every 8 s, `@…` requests answered by id (5 s), message + audio streams (and both in order: `incoming()`), clips (`send_audio`), OTA packets, pause, re-target, a connect gate. `adpcm.rs`: the stick's IMA-ADPCM frames. `ota.rs`: the windowed transfer (`ota.py`'s `Transfer`): firmware, and face packages with the `faces` `Family`. `corebt.rs`: CoreBluetooth through `objc2-core-bluetooth`, with write-without-response pacing. `fake.rs`: a stick in memory (answers `@state`, `@keys`, settings, sounds; holds B with any audio; plays clips; takes firmware updates and face packages (`@faces`, `put` / `rm`, one transfer at a time); `fake_ir.rs`: `@ir`, `@games`, `@air`, `@mode`; test knobs for busy / silent / absent / drops / lost packets / rollback). `examples/scan.rs`. |
 | `crates/stickybot-server` | axum: the dashboard page + `static/` from `mac-agent/stick_agent/` (rust-embed: read from disk in debug builds, embedded in release), the API slice, config + token in `~/.stickybot-rs/`, the SSE event feed, the Python-agent check. `talk.rs` (hold B: core.py's flow), `speech.rs` (model download + STT worker), `commands.rs` (quick commands), `brain.rs` (Claude Code session), `approvals.rs`, `clips.rs`, `firmware.rs`, `wmic.rs` (the wireless Wispr mic: core.py's wispr parts + `Holds`), `faces.rs` (face packages), `ir.rs` (the IR remote), `setup.rs` (setup page, components, onboarding, restart / window; tests in `setup_tests.rs`), `hooks.rs` (Claude Code's hooks: `--hook permission|prompt|stop`), `sysrun.rs` (programs the setup page runs, behind `System`), `appctl.rs` (restart / window, set by the menu bar app). Bin `stickybot-headless`. Tests `tests/talk_e2e.rs`, `tests/wmic_e2e.rs`. |
-| `crates/stickybot-app` | Tauri 2 shell: tray icon (status line, Open dashboard, Open in browser, Quit), webview window on `http://localhost:8670/`, no Dock icon (`ActivationPolicy::Accessory` + `LSUIElement`). `appctl.rs`: `/api/restart` (Tauri restart) and `/api/window` (show / focus / create the window at `#page`). `--hook …` runs Claude Code's hook and exits. |
+| `crates/stickybot-app` | Tauri 2 shell: the menu bar menu of the Python app (`tray.rs`: status line, update / *Finish setup…* items while needed, Open StickyBot, Open in browser, Check for Updates…, Stick volume, Sounds on the stick, Pause / Resume, Restart, Quit; refreshed every 0.5 s, through the server's functions) with the state icon (`icon.rs`: the brand mark as a template image, the Python states + the approval badge), webview window on `http://localhost:8670/` (`window.rs`: other links open in the browser, reopening the app shows it), no Dock icon (`ActivationPolicy::Accessory` + `LSUIElement`). `appctl.rs`: `/api/restart` (Tauri restart) and `/api/window` (show / focus / create the window at `#page`). `--hook …` runs Claude Code's hook and exits. |
 | `crates/macos-audio` | The wireless mic's audio side (`spikes/TAP.md`). Plain Rust, tested anywhere: `carrier.rs` (`pick_carrier`: tap / BlackHole), `device.rs` (`StickMicDevice`: the aggregate + tap, `recording()`, the -80 dBFS check, cleanup by *our* UID only), `jitter.rs` (sequencer, jitter buffer, resampler), `player.rs` (`WisprPlayer`: the stick's audio into the carrier, gated on the tap), `fake.rs` (Core Audio and outputs in memory), `naming.rs`. macOS: `system.rs` (the HAL + cpal backends), `hal.rs`, `tap.rs`, `mic.rs` (the live-object registry). `examples/tapmic.rs` (the spike's self-check). |
 | `crates/stt` | Speech to text: sherpa-onnx Parakeet TDT 0.6b v3 with word hints (hotwords) by default (`spikes/STT.md`; whisper behind `--features whisper`, FluidAudio behind `fluid`). `examples/hotwords.rs`. |
 
@@ -206,7 +206,7 @@ before/after.
    works too; then Bluetooth permission goes to the terminal app.)
 2. **Pause the Python agent** (not stop it, no launchctl): its dashboard
    <http://localhost:8660> → Overview → **Pause**. Its link goes to `paused` and it disconnects.
-3. Rust dashboard: menu bar icon → **Open dashboard** (or <http://localhost:8670>). The setup
+3. Rust dashboard: menu bar icon → **Open StickyBot (Rust)** (or <http://localhost:8670>). The setup
    wizard opens → *Pick your stick* → **Use this one**. macOS asks for Bluetooth the first time
    ("StickyBot (Rust)"). Or copy the Python agent's pick:
    `curl -s localhost:8660/api/config | jq .stick` and save it with
@@ -393,8 +393,7 @@ identity, and macOS asks for Bluetooth again**. See *Open decisions*.
 2. The shared `install.js` still says the speech model is "about 2.5 GB, from Hugging Face"; the Rust
    app's is 490 MB from GitHub (the static files are the Python app's: change them there or give the
    Rust app its own copy).
-3. A "Finish setup…" item in the menu bar (`setup::quick_pending()` exists, the tray doesn't use it).
-4. The fake stick reports firmware 2.3.0, so with `--fake-stick` More faces says "update to 2.4.0"
+3. The fake stick reports firmware 2.3.0, so with `--fake-stick` More faces says "update to 2.4.0"
    (tests flip `pkgFaces` themselves).
 
 ## Endpoint diff
