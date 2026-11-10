@@ -11,6 +11,7 @@
 #pragma once
 #include <Arduino.h>
 #include "logic/clock.h"
+#include <string>
 
 namespace buddy {
 
@@ -51,6 +52,15 @@ const  Agent& lastAnswer();        // the last successful exchange ("done"), for
 uint32_t agentUpdated();           // millis() of the last status, 0 = none
 void   agentTalkEvent(bool start); // tell the agent a talk press started / ended
 void   agentCancel();              // dismissed on the stick: the agent drops the request
+// The reply view (2.6.0): after "done" the agent sends the whole answer in parts
+// ({"src":"agent","reply":{...}}); empty until all of them are in (the 300 characters of
+// "done" show meanwhile).
+const std::string& replyFull();
+bool   agentSpeaks();              // the agent reads the last reply aloud on request ("speak" in its hello)
+void   agentSpeak(bool start);     // ... start / stop: {"src":"agent","evt":"speak","what":"last"|"stop"}
+bool   agentSpeaking();            // it's reading aloud now ({"speech":"on"}; asked and not yet heard back: true for a while)
+uint32_t viewChanges();            // goes up when what the screens show changed without a new state
+                                   // (the full reply arrived, speech started / stopped, the agent said bye or came back)
 bool   agentWirelessMic();         // the agent can play the mic into Wispr ("wmic" in its hello)
 void   wisprEvent(bool start);     // tell the agent a Wispr stream started (1.7.0 agents) / ended
 bool   agentPreparesMic();         // ... and makes the stick-mic-bluetooth device on "prepare" ("wready")

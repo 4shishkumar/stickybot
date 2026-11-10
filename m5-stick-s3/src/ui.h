@@ -1,6 +1,8 @@
 // Screen drawing and screen sleep.
 #pragma once
 #include "combo.h"
+#include <string>
+#include "logic/actions.h"
 
 namespace ui {
 
@@ -45,6 +47,7 @@ struct Dash {
   String   cardKind, cardA, cardB;
   bool     cardUrgent;
   int      cardIndex, cardCount;  // position in the agent's rotation (source dots)
+  bool     hints = false;         // Home: the hint bar (for a moment after the screen wakes, 2.6.0)
   // weather (from the agent)
   bool     wxValid;
   int      wxTemp, wxHi, wxLo;
@@ -91,7 +94,10 @@ void off();
 bool awake();
 
 void setLevel(int peak);
-void setTilt(float ax, float ay);   // accelerometer (g), for the eyes following the tilt            // mic level for the live screens (call ~25x/s)
+void setTilt(float ax, float ay);
+// Down on the screen now, from the last setTilt (+x right, +y down; also in ui_draw.h): the
+// reply view scrolls by the tilt along it.
+void gravity(float& gx, float& gy);   // accelerometer (g), for the eyes following the tilt            // mic level for the live screens (call ~25x/s)
 
 void drawPage(Page p, const Dash& d);
 void drawFaceDemo(const Dash& d, const String& caption);  // a face's demo frame (faces/demo.cpp), with a caption
@@ -106,6 +112,21 @@ void drawPrompt(const String& tool, const String& hint, const String& from);
 void drawAsk(const String& question, const String& from, const String& a, const String& b);
 void drawTalk(bool linked);  // B held: talking to the Mac agent
 void drawAgent(const String& state, const String& heard, const String& text);
+
+// The reply view (2.6.0): the agent's whole answer after "done". A short one is the done
+// screen (eyes + panel); a longer one a reader: the lines from `top`, a scroll thumb, the page.
+// The hint bar at the bottom comes from the reply's actions (logic/actions.h).
+struct ReplyView {
+  String             heard;
+  const std::string* text = nullptr;  // the full reply, or the short one until it has arrived
+  int                top = 0;         // first line shown (clamped here)
+  uint8_t            flags = 0;       // actions::SPEECH / SPEAKING (PAGED is worked out here)
+};
+struct ReplyLayout {
+  int  total = 0, visible = 1, top = 0;  // lines in the text, on the screen, the first one shown
+  bool paged = false;
+};
+ReplyLayout drawReply(const ReplyView& v);
 void drawMood(int mood, const String& label);  // demo: 0 idle, 1 listen, 2 think, 3 work, 4 done, 5 error, 6 ask, 7 offline, 8 party
 constexpr int MOOD_COUNT = 9;
 

@@ -4,6 +4,7 @@
 //   make -C tools/face_shots            demo frames -> tools/face_shots/out/
 //   make -C tools/face_shots FACE=aquadark   one face's demo
 //   make -C tools/face_shots previews   the dashboard's face pictures -> mac-agent/.../static/faces/
+//   make -C tools/face_shots reply     the reply view (2.6.0) + the hint bars -> out/reply/
 //   make -C tools/face_shots pkg PKG=<face package>   a face package (docs/faces/FORMAT.md) in
 //                                       several states -> out/pkg/ (and with PREVIEWS=1 its previews/)
 #include <Arduino.h>
@@ -25,6 +26,7 @@
 #include "menu.h"
 #include "games/draw.h"
 #include "launcher_ui.h"
+#include "logic/actions.h"
 #include <chrono>
 
 // --- The bits of the firmware the screens touch -------------------------------------
@@ -728,6 +730,62 @@ static int gamesMode(const std::string& dir) {
   return 0;
 }
 
+// The reply view (2.6.0, ui::drawReply) and the hint bars of the screens around it, portrait
+// and landscape -> <dir>/reply-*.png + reply-sheet.png
+static void replyShots(const std::string& dir) {
+  mkdir(dir.c_str(), 0755);
+  size_t first = shots.size();
+  const std::string shortText = "It's 28°C in Bangalore with patchy rain nearby and 54% humidity.";
+  const std::string longText =
+      "Here's what changed in the release branch since Monday:\n\n"
+      "• The login redirect bug is fixed: the session cookie now survives the OAuth round trip, and "
+      "the e2e test that was flaky for two weeks passes 50 runs in a row.\n"
+      "• Dark mode landed behind the theme toggle. The settings page has a three-way switch (light, "
+      "dark, system) and the choice is saved per device.\n"
+      "• Two dependency bumps: the date library (a security fix) and the test runner.\n\n"
+      "Still open: PR #5512 (the billing page refactor) needs one more review, and the CI cache "
+      "keeps missing on the macOS runners, which adds about four minutes to every build. I'd merge "
+      "the dark mode follow-ups first, then cut the release candidate tomorrow morning so QA has the "
+      "whole day with it. Want me to draft the release notes from the merged PR titles?";
+  const std::string speechLabel = "SPEECH";
+  auto shot = [&](const std::string& name, const std::string& text, int topFrac, uint8_t flags, int side) {
+    ui::setOrientation(false, side);
+    ui::ReplyView v;
+    v.heard = "what changed on the release branch this week";
+    if (&text == &shortText) v.heard = "what's the weather in Bangalore";
+    v.text = &text;
+    v.top = 0;
+    v.flags = flags;
+    ui::ReplyLayout l = ui::drawReply(v);  // once to learn the lines, then at the wanted line
+    if (topFrac) {
+      v.top = l.total > l.visible ? (l.total - l.visible) * topFrac / 100 : 0;
+      ui::drawReply(v);
+    }
+    savePng(dir + "/reply-" + name + (side ? "-wide" : "") + ".png");
+  };
+  for (int side : {0, 1}) {
+    shot("short", shortText, 0, actions::SPEECH, side);
+    shot("long-top", longText, 0, actions::SPEECH, side);
+    shot("long-mid", longText, 50, actions::SPEECH, side);
+    now_ += 300;  // the speaker's waves move
+    shot("listening", longText, 50, actions::SPEECH | actions::SPEAKING, side);
+    shot("short-listening", shortText, 0, actions::SPEECH | actions::SPEAKING, side);
+    shot("long-end", longText, 100, 0, side);  // an agent that can't speak: no listen hint
+    ui::setOrientation(false, side);
+    ui::drawAgent("working", "what changed on the release branch this week", "Running: git log --since=monday");
+    savePng(dir + "/reply-agent-working" + std::string(side ? "-wide" : "") + ".png");
+    ui::drawTalk(true);
+    savePng(dir + "/reply-talk" + std::string(side ? "-wide" : "") + ".png");
+    ui::Dash h = base();
+    h.hints = true;
+    ui::drawPage(ui::Page::HOME, h);
+    savePng(dir + "/reply-home-hints" + std::string(side ? "-wide" : "") + ".png");
+  }
+  ui::setOrientation(false, 0);
+  sheet(dir + "/reply-sheet.png", first, shots.size(), 9);
+  printf("contact sheet: %s/reply-sheet.png\n", dir.c_str());
+}
+
 int main(int argc, char** argv) {
   ui::begin();
   std::string mode = argc > 1 ? argv[1] : "demo";
@@ -746,6 +804,7 @@ int main(int argc, char** argv) {
   if (mode == "air") { airShots(dir); return 0; }
   if (mode == "menu") { menuShots(dir); return 0; }
   if (mode == "launcher") { launcherShots(dir); return 0; }
+  if (mode == "reply") { replyShots(dir); return 0; }
   if (mode == "games") return gamesMode(dir);
   if (mode == "previews") previews(dir);
   else demo(dir, argc > 3 ? argv[3] : "all");
