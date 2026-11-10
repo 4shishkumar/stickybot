@@ -110,15 +110,23 @@ def version_tuple(v):
     return tuple(int(p) for p in parts[:3])
 
 
-def espressif_ports():
-    """[{"port", "serial", "product", "pid"}] for Espressif USB devices only."""
+def espressif_ports(sticks_only=True):
+    """[{"port", "serial", "product", "pid"}] for Espressif USB devices. sticks_only: just ours (the
+    firmware names its USB device "StickyBot") and chips in download mode — another ESP32 board on
+    the Mac (a MicroPython dev board…) is never talked to or flashed as "the stick"."""
     from serial.tools import list_ports
     out = []
     for p in list_ports.comports():
         if p.vid == ESPRESSIF_VID:
-            out.append({"port": p.device, "serial": p.serial_number or "", "product": p.product or p.description or "",
-                        "pid": p.pid})
+            info = {"port": p.device, "serial": p.serial_number or "", "product": p.product or p.description or "",
+                    "pid": p.pid}
+            if not sticks_only or is_stick(info) or in_bootloader(info):
+                out.append(info)
     return out
+
+
+def is_stick(info):
+    return "stickybot" in (info.get("product") or "").lower()
 
 
 def in_bootloader(info):
@@ -128,7 +136,7 @@ def in_bootloader(info):
 
 
 def check_port(port):
-    for info in espressif_ports():
+    for info in espressif_ports(sticks_only=False):  # a port picked by hand: any Espressif device
         if info["port"] == port:
             return info
     raise FlashError(f"{port} isn't an Espressif USB device (not a stick) — refusing")

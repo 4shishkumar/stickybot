@@ -173,7 +173,10 @@ class Link:
                     continue
                 disconnected = asyncio.Event()
                 # bind this connection's event now: an old connection's late callback mustn't end the next one
-                async with BleakClient(dev, disconnected_callback=lambda _, ev=disconnected: ev.set()) as c:
+                # only our service: firmware 2.5.0's HID makes macOS hand back the Battery service in a
+                # way bleak can't read ("'CBService' object has no attribute 'handle'"), and we need nothing else
+                async with BleakClient(dev, services=[NUS],
+                                       disconnected_callback=lambda _, ev=disconnected: ev.set()) as c:
                     self.client = c
                     self.mtu = c.mtu_size
                     await c.start_notify(TX, self._on_tx)

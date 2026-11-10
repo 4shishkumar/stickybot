@@ -121,6 +121,11 @@ void saveClock24(bool on)     { prefs.putBool("clock24", on); }
 String face()                 { return getStr("face", "classic"); }
 void saveFace(const String& id) { prefs.putString("face", id); }
 
+String launcherTiles()                   { return getStr("lnch"); }
+void   saveLauncherTiles(const String& l) { prefs.putString("lnch", l); }
+char   launcherLast()                    { return (char)prefs.getUChar("lnch_last", 'g'); }
+void   saveLauncherLast(char t)          { if (launcherLast() != t) prefs.putUChar("lnch_last", (uint8_t)t); }
+
 String macPassword() { return getStr("macpass"); }
 void saveMacPassword(const String& p) {
   if (p.isEmpty()) prefs.remove("macpass");

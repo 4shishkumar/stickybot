@@ -121,8 +121,10 @@ bool Stillness::feed(uint32_t now, const float a[3], const float g[3], float dt)
 
 float gainFor(uint8_t sensitivity) {
   int s = sensitivity < 1 ? 1 : sensitivity > 10 ? 10 : sensitivity;
-  return 6.0f * powf(1.25f, (float)(s - 5));
+  return 4.0f * powf(1.25f, (float)(s - 5));  // 4 counts/° at 5 (6 was too fast on a real Mac)
 }
+
+constexpr float Y_GAIN = 1.5f;
 
 float accelFactor(float speedDps) { return 1.0f + 2.5f * clampf((speedDps - 15.0f) / 200.0f, 0.0f, 1.0f); }
 
@@ -167,7 +169,7 @@ void Pointer::feed(uint32_t now, float dt, float yaw, float pitch, int& dx, int&
   float sp = sqrtf(sx * sx + sy * sy);
   float g = gainFor(sens) * accelFactor(sp);
   accX += sx * g * dt;
-  accY += sy * g * dt;
+  accY += sy * g * dt * Y_GAIN;  // a wrist tips through less than it turns: up/down goes further
   accX = clampf(accX, -400, 400);  // a stall (screen redraw) can't fling the pointer
   accY = clampf(accY, -400, 400);
   dx = (int)clampf(truncf(accX), -127, 127);

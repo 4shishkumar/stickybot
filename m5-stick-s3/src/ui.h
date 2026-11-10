@@ -62,7 +62,7 @@ struct Dash {
 
 struct MenuView {
   const char* title;
-  String      lines[40];  // the menu has 34 items (2.5.0); menu.cpp static_asserts they fit
+  String      lines[32];  // the menu has 28 items (2.5.1); menu.cpp static_asserts they fit
   int         count;
   int         selected;
   const char* hint;
