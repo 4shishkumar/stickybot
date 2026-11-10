@@ -10,9 +10,14 @@
   release_tool.py notes VERSION            print VERSION's changelog entry (the release notes)
   release_tool.py check-tag TAG            the workflow's guard: TAG == v<version in mac-agent>
                                            and CHANGELOG.md has an entry for it
+  release_tool.py add-app MANIFEST ZIP PLATFORM VERSION
+                                           list a Mac app download (the release asset ZIP) in
+                                           the release's manifest.json, under "apps"
 
 Standard library only (runs with the system python3).
 """
+import hashlib
+import json
 import re
 import sys
 from pathlib import Path
@@ -117,6 +122,22 @@ def check_tag(tag):
     return version
 
 
+def add_app(manifest_path, zip_path, platform, version):
+    """Lists ZIP (a release asset next to the manifest) in manifest.json's "apps": file, size,
+    sha256, platform, version. The firmware part of the manifest is left as it is: agents read
+    only "version", "parts", "sha256" and "flash" and ignore other keys."""
+    check(version)
+    manifest_path, zip_path = Path(manifest_path), Path(zip_path)
+    m = json.loads(manifest_path.read_text())
+    data = zip_path.read_bytes()
+    entry = {"name": "StickyBot", "platform": platform, "version": version, "file": zip_path.name,
+             "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    apps = [a for a in m.get("apps") or [] if a.get("platform") != platform]
+    m["apps"] = apps + [entry]
+    manifest_path.write_text(json.dumps(m, indent=2) + "\n")
+    return entry
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__)
@@ -137,6 +158,8 @@ def main(argv):
             print(notes(args[0]))
         elif cmd == "check-tag":
             print(check_tag(args[0]))
+        elif cmd == "add-app":
+            print(json.dumps(add_app(args[0], args[1], args[2], args[3])))
         else:
             print(__doc__)
             return 2

@@ -1,31 +1,56 @@
 # Publishes a GitHub release when a version tag is pushed (made by tools/release.sh):
 #   v1.8.0          a stable release
 #   v1.8.0-beta.1   a prerelease (the agent's "beta" update channel)
-# Runs the agent and firmware tests, builds the M5StickS3 firmware, and attaches its
-# four flash parts + manifest.json (versions, offsets, sizes, sha256, flash params) to
-# the release, with the notes from CHANGELOG.md. The agent downloads these assets
-# (stick_agent/releases.py) and checks every part's sha256 against the manifest.
 #
-# One Linux job (cheap minutes): the agent's tests don't need its macOS-only libraries
-# (rumps, MLX, PortAudio), so they're left out here; CI on pull requests (ci.yml) runs
-# the full set on macOS. Only the built-in GITHUB_TOKEN is used.
+# Three jobs:
+#   tests    (ubuntu)    the tag check, the agent's lint + tests, the firmware's native tests and
+#                        build, the firmware bundle: four flash parts + manifest.json (versions,
+#                        offsets, sizes, sha256, flash params)
+#   mac-app  (macos-15,  the Rust Mac app (desktop/): cargo test + clippy, StickyBot.app built and
+#             arm64)     signed ad hoc (no Apple identity: unsigned for Gatekeeper, see README.md
+#                        "Install the Mac app"), zipped as StickyBot-<version>-macos-arm64.zip
+#   publish  (ubuntu)    adds the zip to manifest.json ("apps"), creates the release with the
+#                        firmware parts, the zip and the notes from CHANGELOG.md
+# The agent downloads the firmware assets (stick_agent/releases.py) and checks every part's sha256
+# against the manifest; it ignores "apps", so older agents read the new manifest as before.
+#
+# Run it by hand (Actions → Release → Run workflow, on any branch) to try the Mac app build before
+# tagging: only mac-app runs, nothing is published, and the zip is a workflow artifact.
+#
+# The agent's tests here leave out its macOS-only libraries (rumps, MLX, PortAudio), which they
+# don't need; CI on pull requests (ci.yml) runs the full set on macOS. Only GITHUB_TOKEN is used.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
-  contents: write   # create the release and upload its assets
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  # sherpa-onnx's prebuilt static libraries (speech to text, linked into the app). Its build script
+  # downloads them unchecked; we fetch the same archive ourselves, check it, and hand it over
+  # (SHERPA_ONNX_ARCHIVE_DIR). Moving sherpa-onnx (desktop/crates/stt/Cargo.toml): update all three.
+  SHERPA_ONNX_VERSION: "2.0.1"
+  SHERPA_ONNX_ARCHIVE: sherpa-onnx-v2.0.1-osx-arm64-static-lib.tar.bz2
+  SHERPA_ONNX_SHA256: d7a9b14f337958e7373c8c650f046df33d210bbaff2f33cb8322dda663ee5e1c
+  # the Tauri CLI that bundles the app (made for tauri 2.12.5, desktop/Cargo.lock)
+  TAURI_CLI_VERSION: "2.12.4"
+
 jobs:
-  release:
+  tests:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +69,6 @@ jobs:
             *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
             *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
           esac
-          python tools/release_tool.py notes "$version" > "$RUNNER_TEMP/notes.md"
           echo "firmware $(python tools/release_tool.py firmware), agent $version"
 
       - name: Agent — install (without the macOS-only libraries)
@@ -87,12 +111,155 @@ jobs:
           cat dist/manifest.json
           (cd dist && sha256sum ./*)
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  mac-app:
+    needs: tests
+    # after the tests on a tag; on its own when run by hand (the tests job is skipped then)
+    if: >-
+      !cancelled() && (needs.tests.result == 'success' ||
+      (github.event_name == 'workflow_dispatch' && needs.tests.result == 'skipped'))
+    runs-on: macos-15   # Apple silicon (arm64)
+    timeout-minutes: 60
+    outputs:
+      zip: ${{ steps.names.outputs.zip }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version and file name
+        id: names
+        env:
+          TAG_VERSION: ${{ needs.tests.outputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            version="$TAG_VERSION"; label="$TAG_VERSION"
+          else   # a test build: the repo's version, the commit in the file name
+            version="$(python3 ../tools/release_tool.py current)"; label="$version-dev.${GITHUB_SHA::7}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "zip=StickyBot-$label-macos-arm64.zip" >> "$GITHUB_OUTPUT"
+          echo "StickyBot $version -> StickyBot-$label-macos-arm64.zip"
+
+      - name: Rust (stable, with clippy)
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+          rustc --version && cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop -> target
+          cache-bin: "false"   # the Tauri CLI has its own cache (below)
+          cache-on-failure: true
+
+      - name: Cache the Tauri CLI
+        id: tauri-cli
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri
+          key: tauri-cli-${{ env.TAURI_CLI_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install the Tauri CLI
+        if: steps.tauri-cli.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+
+      - name: Cache the sherpa-onnx libraries
+        uses: actions/cache@v4
+        with:
+          path: ~/sherpa-onnx-archive
+          key: sherpa-onnx-${{ env.SHERPA_ONNX_SHA256 }}
+
+      - name: Fetch and check the sherpa-onnx libraries
+        run: |
+          dir="$HOME/sherpa-onnx-archive"
+          mkdir -p "$dir"
+          if [ ! -f "$dir/$SHERPA_ONNX_ARCHIVE" ]; then
+            curl -fsSL --retry 3 -o "$dir/$SHERPA_ONNX_ARCHIVE" \
+              "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$SHERPA_ONNX_VERSION/$SHERPA_ONNX_ARCHIVE"
+          fi
+          echo "$SHERPA_ONNX_SHA256  $dir/$SHERPA_ONNX_ARCHIVE" | shasum -a 256 -c -
+          echo "SHERPA_ONNX_ARCHIVE_DIR=$dir" >> "$GITHUB_ENV"
+
+      - name: Tests
+        run: cargo test --workspace --locked
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Build StickyBot.app (ad-hoc signature)
+        env:
+          STICKYBOT_VERSION: ${{ steps.names.outputs.version }}
+        run: |
+          unset APPLE_SIGNING_IDENTITY STICKYBOT_SIGNING_IDENTITY
+          scripts/build-app.sh
+          app=target/release/bundle/macos/StickyBot.app
+          codesign -dv "$app" 2>&1 | grep -q '^Signature=adhoc' || { echo "not signed ad hoc"; exit 1; }
+          # the speech model is downloaded by the app on first start, never bundled
+          find "$app" -type f -exec ls -l {} +
+          du -sh "$app"
+
+      - name: Zip
+        env:
+          ZIP: ${{ steps.names.outputs.zip }}
+        run: |
+          mkdir -p ../dist-app
+          ditto -c -k --keepParent target/release/bundle/macos/StickyBot.app "../dist-app/$ZIP"
+          ls -l ../dist-app && shasum -a 256 "../dist-app/$ZIP"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-app
+          path: dist-app/${{ steps.names.outputs.zip }}
+          if-no-files-found: error
+          compression-level: 0   # already a zip
+          retention-days: 14
+
+  publish:
+    needs: [tests, mac-app]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write   # create the release and upload its assets
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-app
+          path: dist
+
+      - name: List the Mac app in manifest.json
+        env:
+          VERSION: ${{ needs.tests.outputs.version }}
+          ZIP: ${{ needs.mac-app.outputs.zip }}
+        run: |
+          python3 tools/release_tool.py add-app dist/manifest.json "dist/$ZIP" macos-arm64 "$VERSION"
+          cat dist/manifest.json
+          (cd dist && sha256sum ./*)
+
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          VERSION: ${{ needs.tests.outputs.version }}
+          PRERELEASE: ${{ needs.tests.outputs.prerelease }}
+          ZIP: ${{ needs.mac-app.outputs.zip }}
         run: |
+          python3 tools/release_tool.py notes "$VERSION" > "$RUNNER_TEMP/notes.md"
           set -- --title "StickyBot $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
           if [ "$PRERELEASE" = true ]; then set -- "$@" --prerelease; fi
           gh release create "$GITHUB_REF_NAME" "$@" \
-            dist/manifest.json dist/bootloader.bin dist/partitions.bin dist/boot_app0.bin dist/app.bin
+            dist/manifest.json dist/bootloader.bin dist/partitions.bin dist/boot_app0.bin dist/app.bin "dist/$ZIP"

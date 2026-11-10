@@ -98,6 +98,33 @@ def test_check_tag_wants_the_mac_agent_version():
         tool.check_tag("latest")
 
 
+def test_add_app_lists_the_mac_app_and_older_agents_still_read_the_manifest(tmp_path):
+    import hashlib
+    import json
+    part = b"\xe9" + b"\0" * 63
+    m = {"version": "2.6.0", "board": "m5-sticks3", "release": "v2.4.0", "agent_version": "2.4.0",
+         "sha256": hashlib.sha256(part).hexdigest(), "size": 64,
+         "parts": [{"offset": "0x10000", "file": "app.bin", "size": 64, "sha256": hashlib.sha256(part).hexdigest()}],
+         "flash": {"chip": "esp32s3", "mode": "dio", "freq": "80m", "size": "8MB"}}
+    (tmp_path / "manifest.json").write_text(json.dumps(m))
+    z = tmp_path / "StickyBot-2.4.0-macos-arm64.zip"
+    z.write_bytes(b"PK zip")
+    entry = tool.add_app(tmp_path / "manifest.json", z, "macos-arm64", "2.4.0")
+    got = json.loads((tmp_path / "manifest.json").read_text())
+    assert got["apps"] == [entry]
+    assert entry == {"name": "StickyBot", "platform": "macos-arm64", "version": "2.4.0",
+                     "file": "StickyBot-2.4.0-macos-arm64.zip", "size": 6,
+                     "sha256": hashlib.sha256(b"PK zip").hexdigest()}
+    # the firmware part is as it was, and the agent's check (older agents' too) still accepts it
+    assert {k: v for k, v in got.items() if k != "apps"} == m
+    releases.check_manifest(got, {"tag": "v2.4.0", "assets": {"app.bin": 1, "manifest.json": 1, z.name: 1}})
+    # again (a re-run): one entry per platform
+    tool.add_app(tmp_path / "manifest.json", z, "macos-arm64", "2.4.0")
+    assert len(json.loads((tmp_path / "manifest.json").read_text())["apps"]) == 1
+    with pytest.raises(tool.Fail):
+        tool.add_app(tmp_path / "manifest.json", z, "macos-arm64", "v2.4.0")
+
+
 # --- tools/release.sh -------------------------------------------------------------------
 
 @pytest.fixture
