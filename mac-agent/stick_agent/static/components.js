@@ -26,7 +26,7 @@ export function componentsPanel() {
       if (c.status !== "installed") actions.appendChild(h("button", {class: "btn sm primary", type: "button", onclick: () => run(c, "install")}, c.status === "partial" ? "Fix" : "Install"));
       if (c.removable && c.status !== "missing") actions.appendChild(h("button", {class: "btn sm", type: "button", onclick: () => run(c, "uninstall")}, "Remove"));
     } else if (!c.from_dashboard && c.id === "firmware") {
-      actions.appendChild(h("a", {class: "btn sm", href: "#stick"}, "Stick → Firmware"));
+      actions.appendChild(h("a", {class: "btn sm", href: "#stick/firmware"}, "Stick → Firmware"));
     } else if (!c.from_dashboard && c.id === "core") {
       actions.appendChild(h("span", {class: "small dim"}, "this is what's running"));
     }

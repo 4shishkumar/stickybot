@@ -1,68 +1,248 @@
 // Stick: the stick's own settings (sent over Bluetooth, or USB when plugged in)
 // and its firmware.
-import {h, clear, card, field, toggle, proto, get, put, post, report, toast, store, fmtAgo, recall, remember} from "../lib.js";
+//
+// The page is laid out in sections (stick_layout.js: most-used first, a jump bar to each,
+// folding remembered per browser). Saving a setting never redraws the whole page: the stick's
+// state is asked again and only the cards whose data changed are redrawn in place, keeping
+// the scroll position and the focused control (keepView).
+import {h, $, clear, card, field, toggle, proto, get, put, post, report, toast, store, fmtAgo, recall, remember} from "../lib.js";
 import {firmwarePanel} from "../firmware.js";
 import {airCard} from "./air.js";
+import {layout, structureKey, slicesOf, changedCards, openSections, summary} from "./stick_layout.js";
 
 export const title = "Stick";
 export const subtitle = "The stick's own settings. They're saved on the stick, so they stay with it.";
 
 // Fallback for older firmware; newer sticks send their own list (with Fn) in `keys`.
 const MODS = [["Ctrl", 1], ["Option", 4], ["Shift", 2], ["Cmd", 8]];
-let root = null, st = null, keys = null, via = null, snd = null, petInfo = null, gamesInfo = null;
+const REFRESH_MS = 45000;  // battery and anything changed on the stick itself
+let root = null, wrap = null, st = null, keys = null, via = null, snd = null, petInfo = null, gamesInfo = null, lastRes = null;
+let structure = null, slices = {}, nodes = {}, secs = {}, jump = null, seq = 0, timer = null, lastCard = null;
+let headObs = null, onScroll = null, spyFrame = 0, unsub = null;
 
 export function actions() {
-  return [h("button", {class: "btn", type: "button", onclick: load}, "Refresh"),
+  return [h("button", {class: "btn", type: "button", onclick: () => load()}, "Refresh"),
     h("button", {class: "btn", type: "button", title: "Tap the combo once on the Mac", onclick: async () => report(await proto("test"), "Combo sent to the Mac")}, "Test combo")];
 }
 
-export function render(el) { root = el; load(); }
-export function leave() { root = null; }
+export function render(el) {
+  root = el;
+  structure = null; slices = {}; nodes = {}; secs = {};
+  wrap = h("div", {class: "stick-page"}, h("div", {class: "empty"}, "Asking the stick…"));
+  // which card a click or change came from: a save that fails puts that card's controls back
+  const mark = e => { const c = e.target.closest && e.target.closest("[data-card]"); if (c) lastCard = c.dataset.card; };
+  wrap.addEventListener("click", mark, true);
+  wrap.addEventListener("change", mark, true);
+  root.appendChild(wrap);
+  const head = $(".page-head");
+  const setTop = () => { if (wrap) wrap.style.setProperty("--stick-top", (head ? head.offsetHeight : 0) + "px"); };
+  setTop();
+  if (head && window.ResizeObserver) { headObs = new ResizeObserver(setTop); headObs.observe(head); }
+  onScroll = () => { if (!spyFrame) spyFrame = requestAnimationFrame(() => { spyFrame = 0; spy(); }); };
+  window.addEventListener("scroll", onScroll, {passive: true});
+  timer = setInterval(() => { if (!document.hidden) load(); }, REFRESH_MS);
+  unsub = store.on(type => { if (type === "status" && structure) update(); });  // the hero's name before the stick answers
+  load(true);
+}
 
-async function load() {
-  if (!root) return;
-  clear(root).appendChild(h("div", {class: "empty"}, "Asking the stick…"));
-  const [r, k, s, pt, gm] = await Promise.all([proto("state"), keys ? Promise.resolve(null) : proto("keys"), get("/api/sounds"),
-    get("/api/pet").catch(() => null), proto("games").catch(() => null)]);
-  petInfo = pt && pt.pet ? pt.pet : null;
-  launcherDraft = null;  // the stick's order again
-  gamesInfo = gm && gm.ok && gm.reply && Array.isArray(gm.reply.games) ? gm.reply.games : null;  // firmware 2.5.0+
+export function leave() {
+  root = wrap = null;
+  clearInterval(timer);
+  if (headObs) headObs.disconnect();
+  if (unsub) unsub();
+  if (onScroll) window.removeEventListener("scroll", onScroll);
+  headObs = onScroll = unsub = null;
+}
+
+// Asks the stick (and the agent) again and updates the page in place. `full`: also the
+// sounds, StickyBot and the games; a save only needs the stick's state.
+async function load(full = true) {
+  if (!wrap) return;
+  const my = ++seq;
+  const none = Promise.resolve(undefined);
+  const [r, k, s, pt, gm] = await Promise.all([proto("state"), full && !keys ? proto("keys") : none,
+    full ? get("/api/sounds") : none, full ? get("/api/pet").catch(() => null) : none,
+    full ? proto("games").catch(() => null) : none]);
+  if (!wrap || my !== seq) return;  // left the page, or a newer answer is on its way
+  if (pt !== undefined) petInfo = pt && pt.pet ? pt.pet : null;
+  if (gm !== undefined) gamesInfo = gm && gm.ok && gm.reply && Array.isArray(gm.reply.games) ? gm.reply.games : null;  // firmware 2.5.0+
   if (k && k.ok && k.reply) keys = k.reply;
+  if (s !== undefined) snd = s && !s.error ? s : null;
+  const before = st;
   st = r.ok && r.reply ? r.reply : null;
+  if (!st || !before || st.launcher !== before.launcher) launcherDraft = null;  // the stick's order again
   via = r.via;
-  snd = s && !s.error ? s : null;
-  paint(r);
+  lastRes = r;
+  update();
 }
 
 async function send(action, args, okText, restarts) {
+  const from = lastCard;
   const r = await proto(action, args);
-  if (!report(r, okText)) return false;
+  if (!report(r, okText)) { update(from ? [from] : []); return false; }  // put the control back
   if (r.reply && r.reply.restarting || restarts) {
     toast(r.reply && r.reply.repair
       ? "The stick is restarting with a new keyboard identity (for Fn): forget it in the Mac's Bluetooth settings and pair again."
       : "The stick is restarting…");
-    setTimeout(load, 6000);
-  } else load();
+    setTimeout(() => load(false), 6000);
+  } else await load(false);
   return true;
 }
 
-function paint(res) {
-  if (!root) return;
-  clear(root);
-  root.appendChild(hero());
-  if (!st) {
-    root.appendChild(h("div", {class: "notice " + (res && res.missing ? "" : "warn")}, h("div", {class: "grow"},
-      h("b", null, res && res.missing ? "Stick settings aren't available yet" : "Can't reach the stick"),
-      h("span", {class: "dim"}, res && res.missing
-        ? "This version of the agent can't change the stick's settings yet. The stick's own menu (triple-press B) still works."
-        : (res && res.error) || "Check it's switched on and connected (Overview shows the link)."))));
+// ---------- drawing: whole layout once, then only what changed ----------
+
+function context() {
+  const s = store.status || {};
+  return {st, gamesInfo, snd, petInfo, keys, via, stickName: s.stick && s.stick.name};
+}
+
+// Redraws the cards whose data changed (plus `force`), or lays the page out again when
+// cards came or went. Never jumps: see keepView.
+function update(force = []) {
+  if (!wrap) return;
+  const ctx = context();
+  const key = structureKey(ctx);
+  const next = slicesOf(ctx);
+  if (key !== structure) {
+    keepView(() => build(ctx));
+    structure = key;
   } else {
-    root.append(identityCard(), ...(st.launcher !== undefined ? [launcherCard()] : []),  // firmware 2.5.1+
-      ...(st.faces ? [faceCard(), marketCard()] : []), ...(gamesInfo ? [gamesCard()] : []),
-      comboCard(), unlockCard(), slotsCard(), screenCard(), motionCard(),
-      ...(st.air ? [airCard(st, send)] : []), soundCard());  // games, air: firmware 2.5.0+
+    const todo = [...new Set([...changedCards(slices, next), ...force])].filter(k => nodes[k]);
+    if (todo.length) keepView(() => { for (const k of todo) redraw(k); });
   }
-  root.appendChild(card("Firmware", firmwarePanel()));
+  slices = next;
+  for (const [id, s] of Object.entries(secs)) if (s.sum) s.sum.textContent = summary(id, ctx);
+}
+
+const BUILD = {
+  hero, screen: screenCard, face: faceCard, combo: comboCard, unlock: unlockCard, launcher: launcherCard,
+  sounds: soundCard, gestures: motionCard, air: () => airCard(st, send), games: gamesCard, market: marketCard,
+  name: identityCard, slots: slotsCard, firmware: () => card("Firmware", firmwarePanel()), dev: devCard,
+};
+const REPAINT = {market: paintMarketNow};  // cards that update themselves instead of being rebuilt
+
+function buildCard(k) {
+  const el = BUILD[k]();
+  el.dataset.card = k;
+  nodes[k] = el;
+  return el;
+}
+
+function redraw(k) {
+  if (REPAINT[k]) { REPAINT[k](); return; }
+  const old = nodes[k];
+  old.replaceWith(buildCard(k));
+}
+
+function build(ctx) {
+  clear(wrap);
+  nodes = {}; secs = {};
+  const open = openSections(recall("stickSections", null));
+  const sections = layout(ctx);
+  jump = h("nav", {class: "stick-jump", "aria-label": "Stick sections"},
+    sections.map(s => h("button", {type: "button", class: "chip-btn", "data-jump": s.id, title: s.title, onclick: () => jumpTo(s.id)}, s.short)));
+  wrap.appendChild(jump);
+  for (const s of sections) {
+    const body = h("div", {class: "stick-sec-body", id: "secbody-" + s.id, hidden: !open[s.id]});
+    for (const k of s.cards) body.appendChild(buildCard(k));
+    if (s.id === "status" && !st) body.appendChild(unreachable());
+    let sum = null, headEl = null;
+    if (!s.fixed) {
+      sum = h("span", {class: "sum"}, summary(s.id, ctx));
+      headEl = h("button", {type: "button", class: "stick-sec-head", "aria-expanded": String(open[s.id]), "aria-controls": body.id,
+        onclick: () => setOpen(s.id, body.hidden)},
+        h("span", {class: "chev", "aria-hidden": "true"}), h("h2", null, s.title), sum);
+    }
+    const el = h("section", {class: "stick-sec" + (open[s.id] ? "" : " closed"), id: "stick-" + s.id, "data-sec": s.id}, headEl, body);
+    secs[s.id] = {el, body, head: headEl, sum};
+    wrap.appendChild(el);
+  }
+  const deep = location.hash.split("/")[1];  // #stick/firmware
+  if (deep && secs[deep]) {
+    requestAnimationFrame(() => {
+      jumpTo(deep, true);
+      const y = window.scrollY;  // again once the cards below have loaded (the page may have been too short), unless you scrolled
+      setTimeout(() => { if (wrap && window.scrollY === y) jumpTo(deep, true); }, 800);
+    });
+  }
+  requestAnimationFrame(spy);
+}
+
+function unreachable() {
+  const res = lastRes;
+  return h("div", {class: "notice " + (res && res.missing ? "" : "warn")}, h("div", {class: "grow"},
+    h("b", null, res && res.missing ? "Stick settings aren't available yet" : "Can't reach the stick"),
+    h("span", {class: "dim"}, res && res.missing
+      ? "This version of the agent can't change the stick's settings yet. The stick's own menu (triple-press B) still works."
+      : (res && res.error) || "Check it's switched on and connected (Overview shows the link).")));
+}
+
+function setOpen(id, on) {
+  const s = secs[id];
+  if (!s) return;
+  s.body.hidden = !on;
+  s.el.classList.toggle("closed", !on);
+  if (s.head) s.head.setAttribute("aria-expanded", String(on));
+  const saved = recall("stickSections", {}) || {};
+  remember("stickSections", {...saved, [id]: on});
+  requestAnimationFrame(spy);
+}
+
+function jumpTo(id, instant) {
+  const s = secs[id];
+  if (!s) return;
+  if (s.body.hidden) setOpen(id, true);
+  const behavior = instant || window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+  if (id === "status") window.scrollTo({top: 0, behavior});
+  else s.el.scrollIntoView({behavior, block: "start"});
+}
+
+// Highlights the jump-bar chip of the section at the top of the view.
+function spy() {
+  if (!jump || !jump.isConnected) return;
+  const line = jump.getBoundingClientRect().bottom + 12;
+  let cur = null;
+  for (const [id, s] of Object.entries(secs)) if (s.el.getBoundingClientRect().top <= line) cur = id;
+  if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) {
+    const ids = Object.keys(secs);
+    cur = ids[ids.length - 1];  // at the very bottom the last section counts, however short
+  }
+  cur = cur || Object.keys(secs)[0];
+  for (const b of jump.children) {
+    const on = b.dataset.jump === cur;
+    if (on && !b.classList.contains("on")) jump.scrollTo({left: b.offsetLeft - 16, behavior: "smooth"});
+    b.classList.toggle("on", on);
+  }
+}
+
+// Runs `fn` (which replaces parts of the page) without moving what's on screen: the focused
+// control (or else the first card in view) stays at the same height, and focus stays put.
+function keepView(fn) {
+  const active = document.activeElement;
+  const focusId = active && wrap && wrap.contains(active) && active.id ? active.id : null;
+  let selection = null;
+  try { if (focusId && typeof active.selectionStart === "number") selection = [active.selectionStart, active.selectionEnd]; } catch (e) { /* not a text field */ }
+  const top = jump && jump.isConnected ? jump.getBoundingClientRect().bottom : 0;
+  let anchor = null;
+  if (focusId) anchor = {find: () => document.getElementById(focusId)};
+  if (!anchor || !anchor.find() || anchor.find().getBoundingClientRect().bottom < top) {
+    const first = wrap ? [...wrap.querySelectorAll("[data-card]")].find(c => c.getBoundingClientRect().bottom > top) : null;
+    const key = first && first.dataset.card;
+    anchor = key ? {find: () => wrap && wrap.querySelector(`[data-card="${key}"]`)} : null;
+  }
+  const was = anchor && anchor.find() ? anchor.find().getBoundingClientRect().top : null;
+  const y = window.scrollY;
+  fn();
+  const now = anchor && anchor.find();
+  const shift = now && was !== null ? now.getBoundingClientRect().top - was : y - window.scrollY;
+  if (Math.abs(shift) >= 1) window.scrollTo(0, window.scrollY + shift);  // (only then: a jump's smooth scroll goes on)
+  if (focusId) {
+    const el = document.getElementById(focusId);
+    if (el && el !== document.activeElement) {
+      el.focus({preventScroll: true});
+      if (selection) try { el.setSelectionRange(selection[0], selection[1]); } catch (e) { /* not a text field */ }
+    }
+  }
 }
 
 function hero() {
@@ -80,6 +260,15 @@ function hero() {
       h("h2", {style: "font-size:20px"}, name),
       h("div", {class: "dim"}, facts.filter(Boolean).join(" · ") || "—"),
       via ? h("div", {class: "small faint"}, via === "usb" ? "Talking to it over USB" : "Talking to it over Bluetooth") : null));
+}
+
+// Wi-Fi on the stick (developer mode keeps it on while on USB, for wireless updates and logs).
+function devCard() {
+  const w = st.web;
+  return card("Wi-Fi & developer",
+    field("Developer mode", toggle("devMode", "Keep Wi-Fi on while on USB (for wireless updates and logs)", st.devMode,
+      e => send("devmode", {on: e.target.checked ? 1 : 0}, "Saved"))),
+    w ? field("Wi-Fi now", h("span", {class: "small"}, w.on ? [w.ssid || "on", w.url ? ` · ${w.url}` : ""].join("") : "off")) : null);
 }
 
 function identityCard() {
@@ -151,11 +340,13 @@ function launcherCard() {
   const box = h("div", {class: "list"});
   const letters = () => launcherDraft.filter(x => x.shown).map(x => x.tile[0]).join("");
   const save = h("button", {class: "btn primary", type: "button", onclick: async () => {
-    const ok = await send("launcher", {tiles: launcherDraft.filter(x => x.shown).map(x => x.tile[1]).join(",")}, "Launcher saved");
-    if (ok) launcherDraft = null;
+    if (await send("launcher", {tiles: launcherDraft.filter(x => x.shown).map(x => x.tile[1]).join(",")}, "Launcher saved")) {
+      launcherDraft = null;
+      update(["launcher"]);
+    }
   }}, "Save");
   const reset = h("button", {class: "btn ghost", type: "button", onclick: async () => {
-    if (await send("launcher", {reset: 1}, "Launcher reset")) launcherDraft = null;
+    if (await send("launcher", {reset: 1}, "Launcher reset")) { launcherDraft = null; update(["launcher"]); }
   }}, "Reset");
   const move = (i, d) => {
     const j = i + d;
@@ -232,7 +423,9 @@ async function loadMarket(refresh) {
   paintMarket();
 }
 
-function paintMarket() {
+function paintMarket() { keepView(paintMarketNow); }
+
+function paintMarketNow() {
   if (!marketBox || !marketBox.isConnected) return;
   const m = market;
   clear(marketBox);
@@ -244,7 +437,7 @@ function paintMarket() {
   if (s.connected && !s.supported && s.fw) {
     marketBox.appendChild(h("div", {class: "notice warn"}, h("div", {class: "grow"},
       h("b", null, `Update the stick to ${MIN_FACES_FW} to add faces`),
-      h("span", {class: "dim"}, `It runs ${s.fw}. The Firmware section below updates it over Bluetooth or USB; you can look through the faces meanwhile.`))));
+      h("span", {class: "dim"}, `It runs ${s.fw}. Firmware & advanced, below, updates it over Bluetooth or USB; you can look through the faces meanwhile.`))));
   } else if (!s.connected) {
     marketBox.appendChild(h("div", {class: "notice"}, h("div", {class: "grow"},
       h("b", null, "The stick isn't connected"), h("span", {class: "dim"}, "Faces go on over Bluetooth. You can still look through them."))));
@@ -407,7 +600,7 @@ async function useFace(f) {
   const r = await post("/api/faces/use", {id: f.id});
   if (!report(r, `Face: ${f.name || f.id}`)) return;
   if (st) st.face = f.id;
-  load();
+  load(false);
 }
 
 async function removeFace(f) {
@@ -490,7 +683,7 @@ function screenCard() {
   const out = h("span", {class: "num small", style: "width:44px"}, (st.brightness || 50) + "%");
   bright.addEventListener("input", () => { out.textContent = bright.value + "%"; });
   bright.addEventListener("change", () => send("brightness", {pct: bright.value}, "Brightness saved"));
-  return card("Screen & power",
+  return card("Screen",
     field("Brightness", h("div", {class: "row"}, bright, out)),
     field("Standby on battery", h("select", {id: "standby", onchange: e => send("standby", {min: e.target.value}, "Saved")},
       [[0, "Never"], [5, "after 5 min idle"], [10, "after 10 min idle"], [30, "after 30 min idle"], [60, "after 1 hour idle"]]
@@ -502,9 +695,7 @@ function screenCard() {
         st.landscape, e => send("landscape", {on: e.target.checked ? 1 : 0}, "Saved"))),
     st.clock24 === undefined ? null :  // firmware 2.4.0+
       field("24-hour clock", toggle("clock24", "Show the time as 15:05 instead of 3:05 PM (on every face that shows the time)",
-        st.clock24, e => send("clock24", {on: e.target.checked ? 1 : 0}, "Saved"))),
-    field("Developer mode", toggle("devMode", "Keep Wi-Fi on while on USB (for wireless updates and logs)", st.devMode,
-      e => send("devmode", {on: e.target.checked ? 1 : 0}, "Saved"))));
+        st.clock24, e => send("clock24", {on: e.target.checked ? 1 : 0}, "Saved"))));
 }
 
 function motionCard() {
@@ -524,8 +715,16 @@ function soundCard() {
   const vol = h("input", {type: "range", id: "stickVol", min: 0, max: 255, value: snd.volume});
   const out = h("span", {class: "num small", style: "width:44px"}, Math.round(snd.volume / 2.55) + "%");
   vol.addEventListener("input", () => { out.textContent = Math.round(vol.value / 2.55) + "%"; });
-  vol.addEventListener("change", async () => { report(await put("/api/sounds", {volume: +vol.value})); post("/api/sounds/play", {name: "test"}); });
+  vol.addEventListener("change", async () => {
+    if (report(await put("/api/sounds", {volume: +vol.value}))) { snd = {...snd, volume: +vol.value}; update(); } else update(["sounds"]);
+    post("/api/sounds/play", {name: "test"});
+  });
+  const setOn = async e => {
+    if (report(await put("/api/sounds", {on: e.target.checked}), "Saved")) { snd = {...snd, on: e.target.checked}; update(); } else update(["sounds"]);
+  };
   return card(h("div", {class: "row grow"}, h("h2", null, "Sounds"), h("a", {class: "btn sm", href: "#sounds", style: "margin-left:auto"}, "Choose sounds")),
-    field("Sounds", toggle("stickSnd", "Play cues on the stick's speaker", snd.on, async e => report(await put("/api/sounds", {on: e.target.checked}), "Saved"))),
-    field("Volume", h("div", {class: "row"}, vol, out)));
+    field("Sounds", toggle("stickSnd", "Play cues on the stick's speaker", snd.on, setOn)),
+    field("Volume", h("div", {class: "row"}, vol, out)),
+    h("p", {class: "small faint", style: "margin-top:12px"}, "The stick's microphone for Wispr Flow is under ",
+      h("a", {href: "#settings"}, "Settings → Wireless Wispr mic"), "."));
 }
