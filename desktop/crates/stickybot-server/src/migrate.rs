@@ -4,6 +4,9 @@
 //! URLs), the sound packs (`sounds/<pack>/`), the request history (`history.jsonl`, same format)
 //! and Claude's workspace notes (`workspace/CLAUDE.md`), the faces' pet (`pet.json`), the GitHub
 //! watcher's state (`github_state.json`, so nothing replays) and the events log (`events.jsonl`).
+//! The history, the events and the pet are *merged* with this app's own (both apps may have run
+//! for a while): logs by entry, no duplicates; the pet's counters added up (see `merge_pet`), so
+//! importing again later only brings what happened in the Python app since.
 //!
 //! **Read-only** on the Python folder: files are read and copied, never written, moved or
 //! deleted there. Runs on its own on the first start (no `config.json` and no earlier import in
@@ -51,11 +54,11 @@ impl Report {
 /// How to import.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// the first start: fill an empty app (commands only if still the defaults, history only if
-    /// there's none yet)
+    /// the first start: fill an empty app (commands and the GitHub state only if still the
+    /// defaults / none); sound packs, history, events and the pet are merged
     FirstRun,
     /// the user asked: the Python app's settings and commands win (this app's are kept as
-    /// `*.before-import`), sound packs and history are merged
+    /// `*.before-import`); sound packs, history, events and the pet are merged
     Explicit,
 }
 
@@ -237,6 +240,16 @@ fn history_entry(line: &str) -> Option<(f64, String)> {
     Some((t, line.trim().to_string()))
 }
 
+/// What makes two log lines the same entry: an event's `id`, else the time (`t`, to the
+/// microsecond: the two apps format the same line differently, e.g. `{"t": 1.5}` and `{"t":1.5}`).
+fn entry_key(line: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    if let Some(id) = v.get("id").and_then(Value::as_str) {
+        return Some(format!("id:{id}"));
+    }
+    v.get("t").and_then(Value::as_f64).map(|t| format!("t:{}", (t * 1e6).round() as i64))
+}
+
 fn import_history(from: &Path, paths: &Paths, r: &mut Report) {
     merge_jsonl(&from.join("history.jsonl"), &paths.history(), "history", "requests", r);
 }
@@ -254,52 +267,203 @@ fn valid_state(file: &str, v: &Value) -> bool {
     }
 }
 
-/// The pet's progress (`pet.json`) and the GitHub watcher's state (`github_state.json`): taken
-/// over on an explicit import, and on the first start unless this app already has its own; the
-/// events log (`events.jsonl`) merged like the history.
+/// The pet's progress (`pet.json`), merged with this app's (see [`merge_pet`]); the GitHub
+/// watcher's state (`github_state.json`): taken over on an explicit import, and on the first start
+/// unless this app already has its own; the events log (`events.jsonl`) merged like the history.
 fn import_state(from: &Path, paths: &Paths, mode: Mode, r: &mut Report) {
-    for (file, what) in [("pet.json", "pet"), ("github_state.json", "github")] {
-        let Some(v) = read_json(&from.join(file)) else { continue };
-        if !v.is_object() || !valid_state(file, &v) {
-            r.skipped.push(format!("{what}: {file} in an unknown format"));
-            continue;
-        }
+    import_pet(from, paths, r);
+    let (file, what) = ("github_state.json", "github");
+    if let Some(v) = read_json(&from.join(file)) {
         let dst = paths.home.join(file);
         let mine = read_json(&dst);
-        if mine.as_ref() == Some(&v) {
-            continue;
-        }
-        let replaceable = match &mine {
-            None => true,
-            Some(m) => file == "pet.json" && untouched_pet(m),
-        };
-        if mode == Mode::FirstRun && !replaceable {
+        if !v.is_object() || !valid_state(file, &v) {
+            r.skipped.push(format!("{what}: {file} in an unknown format"));
+        } else if mine.as_ref() == Some(&v) {
+        } else if mode == Mode::FirstRun && mine.is_some() {
             r.skipped.push(format!("{what}: this app's own {file} was kept"));
-            continue;
-        }
-        backup(&dst);
-        match fs::write(&dst, v.to_string()) {
-            Ok(()) => r.imported.push(if what == "pet" {
-                format!("pet: level {} ({} XP)", crate::pet::level_for(v["xp"].as_i64().unwrap_or(0)).0, v["xp"])
-            } else {
-                format!("github: {} PRs watched", v["prs"].as_object().map_or(0, Map::len))
-            }),
-            Err(e) => r.skipped.push(format!("{what}: {e}")),
+        } else {
+            backup(&dst);
+            match fs::write(&dst, v.to_string()) {
+                Ok(()) => r.imported.push(format!("github: {} PRs watched", v["prs"].as_object().map_or(0, Map::len))),
+                Err(e) => r.skipped.push(format!("{what}: {e}")),
+            }
         }
     }
     merge_jsonl(&from.join("events.jsonl"), &paths.home.join("events.jsonl"), "events", "events", r);
 }
 
-/// Merges a JSON-lines log (`{"t": …, …}` per line) into ours: in time order, no duplicates.
+/// Where a pet remembers the Python pet's counters at the last import (so the next import adds
+/// only what happened in the Python app since). The Python app ignores the key.
+const PET_BASE: &str = "python_import";
+/// The pet's counters that only grow: an import adds the Python app's to this app's.
+const PET_COUNTERS: &[&str] = &["xp", "merged", "greens", "claude", "releases"];
+
+fn import_pet(from: &Path, paths: &Paths, r: &mut Report) {
+    let Some(py) = read_json(&from.join("pet.json")) else { return };
+    if !py.is_object() || !valid_state("pet.json", &py) {
+        r.skipped.push("pet: pet.json in an unknown format".into());
+        return;
+    }
+    let dst = paths.home.join("pet.json");
+    let mine = read_json(&dst).filter(|m| valid_state("pet.json", m));
+    let (merged, how) = match &mine {
+        Some(m) if !untouched_pet(m) => (merge_pet(m, &py), "merged with this app's"),
+        _ => (merge_pet(&json!({}), &py), "taken over"),
+    };
+    if mine.as_ref() == Some(&merged) {
+        return; // nothing new in the Python app's pet since the last import
+    }
+    if mine.as_ref().is_some_and(|m| !untouched_pet(m)) {
+        backup(&dst);
+    }
+    let mut tmp = dst.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    match fs::write(&tmp, merged.to_string()).and_then(|_| fs::rename(&tmp, &dst)) {
+        Ok(()) => {
+            let xp = merged["xp"].as_i64().unwrap_or(0);
+            r.imported.push(format!("pet: level {} ({xp} XP), {how}", crate::pet::level_for(xp).0));
+        }
+        Err(e) => r.skipped.push(format!("pet: {e}")),
+    }
+}
+
+fn int(v: &Value, k: &str) -> i64 {
+    v.get(k).and_then(Value::as_i64).unwrap_or(0)
+}
+
+/// This app's pet (`mine`, `{}` for none) with the Python app's (`py`) added in:
+/// - the counters (XP, merged PRs, green builds, Claude tasks, releases, today's merges, game
+///   plays) add up. `mine[PET_BASE]` has the Python pet's counters at the last import, so only
+///   what happened there since is added and importing again changes nothing. A pet without that
+///   record but with the Python pet's `seed` came from an older import that copied the whole file:
+///   then each counter is the larger of the two (no progress counted twice);
+/// - the towers: this app's plus the Python pet's newer releases (the last [`MAX_TOWERS`]);
+/// - the streak: the one that reached the later day (joined with the other when it ended the day
+///   before that one began), the best of the two bests; game bests: the higher;
+/// - the city's `seed`: the Python pet's (the city the stick has been drawing).
+///
+/// [`MAX_TOWERS`]: crate::pet::MAX_TOWERS
+pub fn merge_pet(mine: &Value, py: &Value) -> Value {
+    if !mine.get("xp").is_some_and(Value::is_i64) {
+        // no pet of our own: the Python one, remembering its counters
+        let mut out = py.clone();
+        out[PET_BASE] = counters(py);
+        return out;
+    }
+    let base = match mine.get(PET_BASE).filter(|b| b.is_object()) {
+        Some(b) => b.clone(),
+        None if mine.get("seed") == py.get("seed") => min_counters(mine, py),
+        None => json!({}),
+    };
+    let mut out = mine.clone();
+    for k in PET_COUNTERS {
+        out[*k] = json!(int(mine, k) + (int(py, k) - int(&base, k)).max(0));
+    }
+    // towers: the Python pet's releases since the base
+    let new_releases = (int(py, "releases") - int(&base, "releases")).max(0) as usize;
+    let py_towers = py["towers"].as_array().cloned().unwrap_or_default();
+    let mut towers = mine["towers"].as_array().cloned().unwrap_or_default();
+    towers.extend(py_towers[py_towers.len().saturating_sub(new_releases)..].iter().cloned());
+    let skip = towers.len().saturating_sub(crate::pet::MAX_TOWERS);
+    out["towers"] = Value::Array(towers.split_off(skip));
+    // today's merges
+    let (pd, md) = (int(&py["today"], "day"), int(&mine["today"], "day"));
+    let since = int(&py["today"], "merged")
+        - if int(&base["today"], "day") == pd { int(&base["today"], "merged") } else { 0 };
+    if pd == md {
+        out["today"]["merged"] = json!(int(&mine["today"], "merged") + since.max(0));
+    } else if pd > md {
+        out["today"] = py["today"].clone();
+    }
+    out["streak"] = merge_streak(&mine["streak"], &py["streak"]);
+    if mine.get("games").is_some_and(Value::is_object) || py.get("games").is_some_and(Value::is_object) {
+        out["games"] = merge_games(mine.get("games"), py.get("games"), base.get("plays"));
+    }
+    if py.get("seed").is_some() {
+        out["seed"] = py["seed"].clone();
+    }
+    out[PET_BASE] = counters(py);
+    out
+}
+
+/// The Python pet's counters (what [`PET_BASE`] records).
+fn counters(p: &Value) -> Value {
+    let mut c: Map<String, Value> = PET_COUNTERS.iter().map(|k| (k.to_string(), json!(int(p, k)))).collect();
+    c.insert("today".into(), json!({"day": int(&p["today"], "day"), "merged": int(&p["today"], "merged")}));
+    c.insert("plays".into(), p["games"].get("plays").filter(|v| v.is_object()).cloned().unwrap_or(json!({})));
+    Value::Object(c)
+}
+
+/// The base for a pet copied whole by an older import: the smaller of each counter.
+fn min_counters(mine: &Value, py: &Value) -> Value {
+    let mut c: Map<String, Value> = PET_COUNTERS.iter().map(|k| (k.to_string(), json!(int(mine, k).min(int(py, k))))).collect();
+    let (pd, md) = (int(&py["today"], "day"), int(&mine["today"], "day"));
+    let today = if pd == md { int(&py["today"], "merged").min(int(&mine["today"], "merged")) } else { 0 };
+    c.insert("today".into(), json!({"day": pd, "merged": today}));
+    let mut plays = Map::new();
+    if let Some(p) = py["games"].get("plays").and_then(Value::as_object) {
+        for (g, n) in p {
+            plays.insert(g.clone(), json!(n.as_i64().unwrap_or(0).min(int(&mine["games"]["plays"], g))));
+        }
+    }
+    c.insert("plays".into(), Value::Object(plays));
+    Value::Object(c)
+}
+
+fn merge_streak(a: &Value, b: &Value) -> Value {
+    let last = |s: &Value| s.get("last").and_then(Value::as_i64).unwrap_or(-1);
+    let (win, other) = if last(b) > last(a) || (last(b) == last(a) && int(b, "days") > int(a, "days")) { (b, a) } else { (a, b) };
+    let mut days = int(win, "days");
+    if last(other) >= 0 && last(other) != last(win) && last(other) == last(win) - days {
+        days += int(other, "days"); // the other streak ended the day before this one began
+    }
+    let best = int(a, "best").max(int(b, "best")).max(days);
+    json!({"days": days, "best": best, "last": last(win)})
+}
+
+fn merge_games(mine: Option<&Value>, py: Option<&Value>, base_plays: Option<&Value>) -> Value {
+    let empty = json!({});
+    let (m, p) = (mine.filter(|v| v.is_object()).unwrap_or(&empty), py.filter(|v| v.is_object()).unwrap_or(&empty));
+    let base = base_plays.unwrap_or(&empty);
+    let mut out = m.clone();
+    let (pd, md) = (p.get("day").and_then(Value::as_i64), m.get("day").and_then(Value::as_i64));
+    if pd.is_some() && (md.is_none() || pd > md) {
+        out["day"] = json!(pd);
+        out["xp"] = json!(int(p, "xp"));
+    } else if pd == md && pd.is_some() {
+        out["xp"] = json!(int(m, "xp").max(int(p, "xp")));
+    }
+    for k in ["best", "plays"] {
+        if !out.get(k).is_some_and(Value::is_object) {
+            out[k] = json!({});
+        }
+        let Some(theirs) = p.get(k).and_then(Value::as_object) else { continue };
+        for (g, n) in theirs {
+            let (n, have) = (n.as_i64().unwrap_or(0), int(&out[k], g));
+            out[k][g] = json!(if k == "best" { have.max(n) } else { have + (n - int(base, g)).max(0) });
+        }
+    }
+    out
+}
+
+/// Merges a JSON-lines log (`{"t": …, …}` per line) into ours: in time order, no duplicates (the
+/// same line, or the same entry: [`entry_key`]).
 fn merge_jsonl(src: &Path, dst: &Path, what: &str, unit: &str, r: &mut Report) {
     let Ok(py) = fs::read_to_string(src) else { return };
     let mine = fs::read_to_string(dst).unwrap_or_default();
-    let have: std::collections::HashSet<&str> = mine.lines().map(str::trim).collect();
+    let mut have: std::collections::HashSet<String> = mine.lines().map(|l| l.trim().to_string()).collect();
+    have.extend(mine.lines().filter_map(entry_key));
     let (mut entries, mut unknown) = (Vec::new(), 0);
     for line in py.lines().filter(|l| !l.trim().is_empty()) {
         match history_entry(line) {
-            Some(e) if !have.contains(e.1.as_str()) => entries.push(e),
-            Some(_) => {}
+            Some(e) => {
+                let key = entry_key(line).unwrap_or_default();
+                if !have.contains(&e.1) && !have.contains(&key) {
+                    have.insert(key);
+                    entries.push(e);
+                }
+            }
             None => unknown += 1,
         }
     }
@@ -600,28 +764,143 @@ mod tests {
         crate::pet::Pet::load(&f.paths.home.join("pet.json"), 0);
         let before = f.python_files();
         let r = f.import(Mode::FirstRun);
-        assert_eq!(read_json(&f.paths.home.join("pet.json")).unwrap(), pet);
+        let mut got = read_json(&f.paths.home.join("pet.json")).unwrap();
+        assert_eq!(got[PET_BASE]["xp"], 125);
+        got.as_object_mut().unwrap().remove(PET_BASE);
+        assert_eq!(got, pet);
         assert_eq!(read_json(&f.paths.home.join("github_state.json")).unwrap(), gh);
         assert_eq!(fs::read_to_string(f.paths.home.join("events.jsonl")).unwrap().lines().count(), 2);
-        assert!(r.imported.contains(&"pet: level 4 (125 XP)".to_string()), "{r:?}");
+        assert!(r.imported.contains(&"pet: level 4 (125 XP), taken over".to_string()), "{r:?}");
         assert!(r.imported.contains(&"github: 1 PRs watched".to_string()), "{r:?}");
         assert!(r.imported.contains(&"events: 2 events".to_string()), "{r:?}");
         assert_eq!(f.python_files(), before);
+        // the running app's pet reads it like its own
+        assert_eq!(crate::pet::Pet::load(&f.paths.home.join("pet.json"), 0).pet_json()["xp"], 125);
 
-        // a pet with progress of its own is kept on a first run, replaced on an explicit import
-        let mut mine = pet.clone();
-        mine["claude"] = json!(99);
-        fs::write(f.paths.home.join("pet.json"), mine.to_string()).unwrap();
+        // importing again changes nothing (no counter twice), on a first run or an explicit import
         let r = f.import(Mode::FirstRun);
-        assert!(r.skipped.contains(&"pet: this app's own pet.json was kept".to_string()), "{r:?}");
-        f.import(Mode::Explicit);
-        assert_eq!(read_json(&f.paths.home.join("pet.json")).unwrap(), pet);
-        assert_eq!(read_json(&f.paths.home.join("pet.json.before-import")).unwrap(), mine);
+        assert!(!r.imported.iter().any(|s| s.starts_with("pet")), "{r:?}");
+        let r = f.import(Mode::Explicit);
+        assert!(!r.imported.iter().any(|s| s.starts_with("pet") || s.starts_with("events")), "{r:?}");
+        assert_eq!(read_json(&f.paths.home.join("pet.json")).unwrap()["xp"], 125);
         assert_eq!(fs::read_to_string(f.paths.home.join("events.jsonl")).unwrap().lines().count(), 2);
 
         // unknown formats are skipped
         fs::write(f.py.join("pet.json"), "[1, 2]").unwrap();
         let r = f.import(Mode::Explicit);
         assert!(r.skipped.contains(&"pet: pet.json in an unknown format".to_string()), "{r:?}");
+    }
+
+    fn py_pet() -> Value {
+        json!({"xp": 125, "merged": 9, "greens": 4, "claude": 7, "releases": 1, "towers": [8], "seed": 4242,
+               "streak": {"days": 3, "best": 6, "last": 739000}, "today": {"day": 739000, "merged": 1},
+               "games": {"day": 739000, "xp": 4, "best": {"dino": 900}, "plays": {"dino": 5}}})
+    }
+
+    fn rust_pet() -> Value {
+        // this app's own pet, with progress of its own since an earlier start (another seed)
+        json!({"xp": 40, "merged": 2, "greens": 2, "claude": 5, "releases": 1, "towers": [2], "seed": 77,
+               "streak": {"days": 2, "best": 2, "last": 739002}, "today": {"day": 739002, "merged": 1},
+               "games": {"day": 739002, "xp": 2, "best": {"dino": 1200, "maze": 30}, "plays": {"dino": 1, "maze": 2}}})
+    }
+
+    #[test]
+    fn a_pet_with_progress_of_its_own_is_merged_not_replaced_or_kept() {
+        for mode in [Mode::FirstRun, Mode::Explicit] {
+            let f = Fake::new(&format!("petmerge-{mode:?}"));
+            fs::write(f.py.join("config.json"), "{}").unwrap();
+            fs::write(f.py.join("pet.json"), py_pet().to_string()).unwrap();
+            fs::write(f.paths.home.join("pet.json"), rust_pet().to_string()).unwrap();
+
+            let r = f.import(mode);
+            let p = read_json(&f.paths.home.join("pet.json")).unwrap();
+            // counters add up
+            assert_eq!((p["xp"].as_i64(), p["merged"].as_i64(), p["greens"].as_i64()), (Some(165), Some(11), Some(6)));
+            assert_eq!((p["claude"].as_i64(), p["releases"].as_i64()), (Some(12), Some(2)));
+            assert_eq!(p["towers"], json!([2, 8]));
+            // the streaks join (Python's 738998..739000, then this app's 739001..739002); the
+            // Python pet's city
+            assert_eq!(p["streak"], json!({"days": 5, "best": 6, "last": 739002}));
+            assert_eq!(p["seed"], 4242);
+            assert_eq!(p["today"], json!({"day": 739002, "merged": 1}));
+            assert_eq!(p["games"]["best"], json!({"dino": 1200, "maze": 30}));
+            assert_eq!(p["games"]["plays"], json!({"dino": 6, "maze": 2}));
+            assert_eq!((p["games"]["day"].as_i64(), p["games"]["xp"].as_i64()), (Some(739002), Some(2)));
+            assert!(r.imported.contains(&"pet: level 5 (165 XP), merged with this app's".to_string()), "{r:?}");
+            // this app's pet before the import is kept
+            assert_eq!(read_json(&f.paths.home.join("pet.json.before-import")).unwrap(), rust_pet());
+
+            // again: nothing counted twice
+            let r = f.import(mode);
+            assert!(!r.imported.iter().any(|s| s.starts_with("pet")), "{r:?}");
+            assert_eq!(read_json(&f.paths.home.join("pet.json")).unwrap(), p);
+
+            // the Python app went on (a merged PR, a Claude task): only that is added next time
+            let mut py = py_pet();
+            py["xp"] = json!(137);
+            py["merged"] = json!(10);
+            py["claude"] = json!(8);
+            py["today"] = json!({"day": 739002, "merged": 1});
+            py["streak"] = json!({"days": 1, "best": 6, "last": 739002});
+            fs::write(f.py.join("pet.json"), py.to_string()).unwrap();
+            f.import(mode);
+            let p2 = read_json(&f.paths.home.join("pet.json")).unwrap();
+            assert_eq!((p2["xp"].as_i64(), p2["merged"].as_i64(), p2["claude"].as_i64()), (Some(177), Some(12), Some(13)));
+            assert_eq!(p2["today"], json!({"day": 739002, "merged": 2}));
+            assert_eq!(p2["towers"], json!([2, 8]));
+            assert_eq!(p2["streak"], json!({"days": 5, "best": 6, "last": 739002}));
+        }
+    }
+
+    #[test]
+    fn a_pet_copied_whole_by_an_older_import_isnt_counted_twice() {
+        // the older import wrote the Python pet as it was (same seed, no record of it); both apps
+        // went on since: each counter is the larger one
+        let mut mine = py_pet();
+        mine["xp"] = json!(135);
+        mine["claude"] = json!(12);
+        let mut py = py_pet();
+        py["merged"] = json!(10);
+        py["xp"] = json!(135);
+        let p = merge_pet(&mine, &py);
+        assert_eq!((p["xp"].as_i64(), p["merged"].as_i64(), p["claude"].as_i64()), (Some(135), Some(10), Some(12)));
+        assert_eq!(p["towers"], json!([8]));
+        assert_eq!(p["games"]["plays"], json!({"dino": 5}));
+        assert_eq!(p["today"], json!({"day": 739000, "merged": 1}));
+        // and from now on it knows
+        assert_eq!(merge_pet(&p, &py), p);
+    }
+
+    #[test]
+    fn streaks_join_when_one_ended_the_day_before_the_other_began() {
+        let a = json!({"days": 3, "best": 3, "last": 100}); // 98, 99, 100
+        let b = json!({"days": 2, "best": 4, "last": 102}); // 101, 102
+        assert_eq!(merge_streak(&a, &b), json!({"days": 5, "best": 5, "last": 102}));
+        assert_eq!(merge_streak(&b, &a), json!({"days": 5, "best": 5, "last": 102}));
+        let c = json!({"days": 1, "best": 1, "last": 102}); // the same day: the longer one
+        assert_eq!(merge_streak(&b, &c), json!({"days": 2, "best": 4, "last": 102}));
+        let none = json!({"days": 0, "best": 0, "last": -1});
+        assert_eq!(merge_streak(&none, &a), a);
+    }
+
+    #[test]
+    fn history_is_merged_by_time_whichever_app_formatted_the_line() {
+        let f = Fake::new("histdup");
+        fs::write(f.py.join("config.json"), "{}").unwrap();
+        // Python's json.dumps puts spaces in; this app writes compact lines
+        fs::write(
+            f.py.join("history.jsonl"),
+            "{\"t\": 100.25, \"heard\": \"one\"}\n{\"t\": 300.0, \"heard\": \"three\"}\n{\"t\": 300.0, \"heard\": \"three\"}\n",
+        )
+        .unwrap();
+        fs::write(f.paths.history(), "{\"t\":100.25,\"heard\":\"one\"}\n{\"t\":200.0,\"heard\":\"two\"}\n").unwrap();
+        let r = f.import(Mode::Explicit);
+        let h: Vec<Value> =
+            fs::read_to_string(f.paths.history()).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(h.iter().map(|v| v["heard"].as_str().unwrap()).collect::<Vec<_>>(), ["one", "two", "three"]);
+        assert!(r.imported.contains(&"history: 1 requests".to_string()), "{r:?}");
+        let r = f.import(Mode::Explicit);
+        assert!(!r.imported.iter().any(|s| s.starts_with("history")), "{r:?}");
+        assert_eq!(fs::read_to_string(f.paths.history()).unwrap().lines().count(), 3);
     }
 }
