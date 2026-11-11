@@ -644,7 +644,7 @@ async fn event(st: &Arc<AppState>, level: &str, text: &str, who: &str, sound: bo
     }
     let (title, rest) = split_title(&stick_text(text), 40);
     let sub = if rest.is_empty() { format!("from {who}") } else { rest };
-    let ev = crate::events::notify(st, "claude_tool", &title, &sub, Some("claude"), Some(level), if sound { "" } else { "off" })
+    let ev = crate::events::notify(st, "claude_tool", &title, &sub, Some("claude"), Some(level), (!sound).then_some("off"))
         .await
         .ok_or_else(|| NOT_CONNECTED.to_string())?;
     let quiet = ev["sound"] == "off" && sound;

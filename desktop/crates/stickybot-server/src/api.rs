@@ -523,7 +523,11 @@ async fn get_config(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
 async fn put_config(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
     let known = crate::config::defaults();
     let allowed: Map<String, Value> = body_obj(&body).into_iter().filter(|(k, _)| known.contains_key(k)).collect();
-    let bad = crate::config::invalid(&allowed);
+    let mut bad = crate::config::invalid(&allowed);
+    if bad.is_empty() {
+        let tunes = crate::events::tune_list(st.sounds().as_ref());
+        bad = crate::events::invalid_sounds(&allowed, tunes.as_deref(), &st.cfg.lock().unwrap());
+    }
     if !bad.is_empty() {
         return err(StatusCode::BAD_REQUEST, &bad);
     }
@@ -602,11 +606,13 @@ async fn pet_status(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
     axum::Json(json!({"pet": pet, "world": crate::home::world(&st)}))
 }
 
-/// The Events page's Test button: `{"kind"}` -> the kind's sample on the stick.
+/// The Events page's ▶: `{"kind", "level"?, "sound"?}` -> the kind's sample on the stick, with the
+/// level and sound the page shows (saved or not).
 async fn event_test(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<Value> {
     let b = body_obj(&body);
     let kind = b.get("kind").map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string()));
-    let ev = crate::events::test(&st, &kind.unwrap_or_else(|| "test".into())).await;
+    let (level, sound) = (b.get("level").and_then(Value::as_str), b.get("sound").and_then(Value::as_str));
+    let ev = crate::events::test(&st, &kind.unwrap_or_else(|| "test".into()), level, sound).await;
     axum::Json(json!({"ok": true, "event": ev}))
 }
 
@@ -616,7 +622,7 @@ async fn event_history(State(st): State<Arc<AppState>>, Query(q): Query<HistoryQ
 
 async fn event_kinds(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
     let cfg = st.cfg.lock().unwrap().clone();
-    axum::Json(crate::events::kinds_json(&cfg))
+    axum::Json(crate::events::kinds_json(&cfg, st.sounds().as_ref()))
 }
 
 /// The Claude Code Stop hook (`claude_hooks.py`): `{"elapsed_s", "cwd", "prompt"}`.
@@ -1631,7 +1637,7 @@ mod tests {
         assert_eq!(
             sent,
             vec![json!({"src": "agent", "event": {"id": "e1", "level": "celebrate", "title": "PR #5507 merged!",
-                        "sub": "web - Add stick agent", "icon": "merge", "sound": "", "kind": "pr_merged"}})]
+                        "sub": "web - Add stick agent", "icon": "merge", "sound": "applause", "kind": "pr_merged"}})]
         );
         let (_, h, _) = call(&app, req("GET", "/api/events/history?n=5", None, None)).await;
         assert_eq!((h[0]["kind"].as_str(), h[0]["sent"].as_bool(), h[0]["quiet"].as_bool()), (Some("pr_merged"), Some(true), Some(false)));
@@ -1673,6 +1679,48 @@ mod tests {
         assert_eq!(p1["pet"]["xp"], p0["pet"]["xp"].as_i64().unwrap() + 4);
         assert_eq!(p1["pet"]["streak"], 1);
         assert!(p1["world"]["pet"]["seed"].as_i64().unwrap() > 0);
+    }
+
+    // the Events page: ▶ plays what the page shows; a sound per kind, checked against the stick's list
+    #[tokio::test]
+    async fn event_test_takes_the_pages_level_and_sound_and_event_sounds_are_checked() {
+        let (app, st, fake) = app("evsounds", true).await;
+        let tok = Some(st.token.as_str());
+        let last_event = || stick_lines(&fake).into_iter().rev().find_map(|l| l.get("event").cloned()).unwrap();
+        // the stick hasn't told us its sounds yet: the kind's own goes out (2.7.0 falls back by itself)
+        let (_, v, _) = call(&app, req("GET", "/api/events/kinds", None, None)).await;
+        assert_eq!((v["sounds"]["pr_merged"].as_str(), v["tunes_known"].as_bool()), (Some("applause"), Some(false)));
+        let (_, v, _) =
+            call(&app, req("POST", "/api/events/test", Some(json!({"kind": "ci_failed", "level": "celebrate", "sound": "cheer"})), tok))
+                .await;
+        assert_eq!((v["event"]["level"].as_str(), v["event"]["sound"].as_str()), (Some("celebrate"), Some("cheer")));
+        assert_eq!(last_event()["sound"], "cheer");
+        assert_eq!(st.cfg.lock().unwrap()["event_rules"], json!({})); // ▶ saves nothing
+        // the fake stick is older firmware (no celebration clips): a name it lacks goes as "" (its level's)
+        let (_, s, _) = call(&app, req("GET", "/api/sounds", None, None)).await;
+        assert!(s["tunes"].as_array().is_some_and(|t| !t.contains(&json!("applause"))));
+        let (_, v, _) = call(&app, req("POST", "/api/events/test", Some(json!({"kind": "pr_merged"})), tok)).await;
+        assert_eq!((v["event"]["level"].as_str(), v["event"]["sound"].as_str()), (Some("celebrate"), Some("")));
+        let (_, v, _) = call(&app, req("GET", "/api/events/kinds", None, None)).await;
+        assert_eq!(v["tunes_known"], true);
+        assert!(v["tunes"].as_array().unwrap().contains(&json!("beep")));
+        // junk level / sound: the saved ones
+        let (_, v, _) =
+            call(&app, req("POST", "/api/events/test", Some(json!({"kind": "ci_failed", "level": "loud", "sound": "../x"})), tok)).await;
+        assert_eq!((v["event"]["level"].as_str(), v["event"]["sound"].as_str()), (Some("headsup"), Some("")));
+        // saving: only names the stick has
+        let (code, v, _) = call(&app, req("PUT", "/api/config", Some(json!({"event_sounds": {"pr_merged": "coins"}})), tok)).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(v["error"].as_str().unwrap().contains("no sound 'coins'"), "{v}");
+        let (code, _, _) =
+            call(&app, req("PUT", "/api/config", Some(json!({"event_sounds": {"pr_merged": "beep", "ci_failed": "off"}})), tok)).await;
+        assert_eq!(code, StatusCode::OK);
+        let (_, v, _) = call(&app, req("POST", "/api/events/test", Some(json!({"kind": "pr_merged"})), tok)).await;
+        assert_eq!(v["event"]["sound"], "beep");
+        let (_, v, _) = call(&app, req("POST", "/api/events/test", Some(json!({"kind": "ci_failed"})), tok)).await;
+        assert_eq!(v["event"]["sound"], "off");
+        let (_, v, _) = call(&app, req("GET", "/api/events/kinds", None, None)).await;
+        assert_eq!((v["sounds"]["pr_merged"].as_str(), v["sounds"]["release"].as_str()), (Some("beep"), Some("party_horn")));
     }
 
     #[tokio::test]

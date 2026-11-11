@@ -4,6 +4,13 @@
 //! set in the dashboard (Events): `celebrate` (confetti + fanfare), `nice` (toast + chime),
 //! `headsup` (orange, stays until a button), `off`. During quiet hours events still show, silently.
 //!
+//! Each kind can have its own sound too (settings `event_sounds` {kind: name | "off"}): a clip or
+//! tune the stick has (`applause`), `off`, or `""` for its level's default (picked on the stick:
+//! celebrate `jingle_win`, nice `confirmation_002`, headsup `question_001`). PR merged, release and
+//! CI fixed have their own by default ([`DEFAULT_SOUNDS`], firmware 2.7.0's celebration clips). A
+//! name the stick doesn't list goes out as `""` (2.7.0 falls back by itself; older firmware would
+//! play nothing).
+//!
 //! To the stick: `{"src":"agent","event":{"id","level","title","sub","icon","sound","kind"}}`; it
 //! answers `{"src":"agent","evt":"event_shown","id"}`. Logged to `<home>/events.jsonl`.
 
@@ -34,6 +41,70 @@ pub const KINDS: &[(&str, &str, &str, &str, &str)] = &[
     ("update", "nice", "star", "Update v1.8.0 ready", "see the dashboard"),
     ("test", "nice", "bell", "Test event", "from the dashboard"),
 ];
+
+/// kind -> its own sound (the rest: `""` = the level's default, chosen on the stick).
+pub const DEFAULT_SOUNDS: &[(&str, &str)] = &[("pr_merged", "applause"), ("release", "party_horn"), ("ci_fixed", "cheer")];
+/// The stick's sound per level (events.cpp `defaultSound`).
+pub const LEVEL_SOUNDS: &[(&str, &str)] =
+    &[("celebrate", "jingle_win"), ("nice", "confirmation_002"), ("headsup", "question_001")];
+/// Firmware 2.7.0's celebration clips: offered while the stick hasn't told us its list.
+pub const CELEBRATION_SOUNDS: &[&str] = &["applause", "clap", "cheer", "party_horn", "tada", "drumroll", "level_up", "coins"];
+
+fn sound_ok(v: &str) -> bool {
+    v.is_empty()
+        || v == "off"
+        || (v.len() <= 32 && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+}
+
+/// kind -> its sound: a name, `"off"`, or `""` (the level's default).
+pub fn sounds(cfg: &Map<String, Value>) -> Map<String, Value> {
+    let mut s: Map<String, Value> = KINDS
+        .iter()
+        .map(|k| (k.0.to_string(), json!(DEFAULT_SOUNDS.iter().find(|d| d.0 == k.0).map(|d| d.1).unwrap_or(""))))
+        .collect();
+    if let Some(Value::Object(user)) = cfg.get("event_sounds") {
+        for (k, v) in user {
+            if kind(k).is_some() && v.as_str().is_some_and(sound_ok) {
+                s.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    s
+}
+
+/// The stick's tunes from its last sound report, `None` if it hasn't sent one.
+pub fn tune_list(stick_sounds: Option<&Value>) -> Option<Vec<String>> {
+    let t = stick_sounds?.get("tunes")?.as_array()?;
+    Some(t.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+}
+
+/// The sound to send: a name the stick doesn't have becomes `""` (its level's default).
+pub fn for_stick(name: &str, tunes: Option<&[String]>) -> String {
+    match tunes {
+        Some(t) if !name.is_empty() && name != "off" && !t.iter().any(|x| x == name) => String::new(),
+        _ => name.to_string(),
+    }
+}
+
+/// What's wrong with `event_sounds` in a `PUT /api/config` body, or "". New names must be ones the
+/// stick has (when it has told us); a kind's current one (saved or default) may stay, as the page
+/// sends them all (another stick, older firmware: they go out as `""` then).
+pub fn invalid_sounds(body: &Map<String, Value>, tunes: Option<&[String]>, current: &Map<String, Value>) -> String {
+    let Some(es) = body.get("event_sounds") else { return String::new() };
+    let Some(es) = es.as_object() else { return "event_sounds must map event kinds to sound names".into() };
+    let now = sounds(current);
+    for (k, v) in es {
+        if kind(k).is_none() {
+            return format!("event_sounds: no event kind '{k}'");
+        }
+        let Some(v) = v.as_str().filter(|v| sound_ok(v)) else { return format!("event_sounds.{k}: not a sound name") };
+        let unknown = tunes.is_some_and(|t| !v.is_empty() && v != "off" && !t.iter().any(|x| x == v));
+        if unknown && now.get(k).and_then(Value::as_str) != Some(v) {
+            return format!("event_sounds.{k}: the stick has no sound '{v}'");
+        }
+    }
+    String::new()
+}
 
 pub fn kind(k: &str) -> Option<&'static (&'static str, &'static str, &'static str, &'static str, &'static str)> {
     KINDS.iter().find(|x| x.0 == k)
@@ -90,7 +161,8 @@ fn cut(s: &str, n: usize) -> String {
     stick_text(s).chars().take(n).collect()
 }
 
-/// Fires an event of `kind` (its level from the rules unless given). `None` if this kind is off.
+/// Fires an event of `kind` (its level and sound from the settings unless given; sound `""` = the
+/// level's default, `"off"` = silent). `None` if this kind is off.
 pub async fn notify(
     st: &AppState,
     kind_: &str,
@@ -98,7 +170,7 @@ pub async fn notify(
     sub: &str,
     icon: Option<&str>,
     level: Option<&str>,
-    sound: &str,
+    sound: Option<&str>,
 ) -> Option<Value> {
     let cfg = st.cfg.lock().unwrap().clone();
     let rule = rules(&cfg).get(kind_).and_then(Value::as_str).unwrap_or("nice").to_string();
@@ -109,9 +181,14 @@ pub async fn notify(
     }
     let id = format!("e{}", st.home.notifier.n.fetch_add(1, Ordering::Relaxed) + 1);
     let quiet = quiet_now(&cfg);
+    let sound = match sound {
+        Some(s) => s.to_string(),
+        None => sounds(&cfg).get(kind_).and_then(Value::as_str).unwrap_or("").to_string(),
+    };
+    let sound = for_stick(&sound, tune_list(st.sounds().as_ref()).as_deref());
     let icon = icon.map(str::to_string).unwrap_or_else(|| kind(kind_).map(|k| k.2).unwrap_or("bell").to_string());
     let ev = json!({"id": id, "level": level, "title": cut(title, 40), "sub": cut(sub, 90), "icon": icon,
-                    "sound": if quiet { "off" } else { sound }, "kind": kind_});
+                    "sound": if quiet { "off" } else { &sound }, "kind": kind_});
     let sent = st.link.send(&json!({"src": "agent", "event": ev})).await;
     let mut entry = Map::new();
     entry.insert("t".into(), json!(crate::hub::now()));
@@ -138,11 +215,14 @@ pub async fn notify(
     Some(ev)
 }
 
-/// The dashboard's Test button: the kind's sample.
-pub async fn test(st: &AppState, k: &str) -> Option<Value> {
+/// The dashboard's ▶: the kind's sample, with the level / sound picked on the page if given (saved
+/// or not; ones that aren't valid are ignored).
+pub async fn test(st: &AppState, k: &str, level: Option<&str>, sound: Option<&str>) -> Option<Value> {
     let (name, _, icon, title, sub) = *kind(k).unwrap_or_else(|| kind("test").expect("test kind"));
     let name = if kind(k).is_some() { name } else { k };
-    notify(st, name, title, sub, Some(icon), None, "").await
+    let level = level.filter(|l| LEVELS.contains(l));
+    let sound = sound.filter(|s| sound_ok(s));
+    notify(st, name, title, sub, Some(icon), level, sound).await
 }
 
 /// The last `n` events, newest first.
@@ -152,11 +232,18 @@ pub fn history(st: &AppState, n: usize) -> Vec<Value> {
     lines[lines.len().saturating_sub(n)..].iter().rev().filter_map(|l| serde_json::from_str(l).ok()).collect()
 }
 
-/// `GET /api/events/kinds`.
-pub fn kinds_json(cfg: &Map<String, Value>) -> Value {
+/// `GET /api/events/kinds`; `stick_sounds` is the stick's last sound report.
+pub fn kinds_json(cfg: &Map<String, Value>, stick_sounds: Option<&Value>) -> Value {
     let kinds: Map<String, Value> =
         KINDS.iter().map(|k| (k.0.to_string(), json!({"default": k.1, "icon": k.2, "title": k.3}))).collect();
-    json!({"kinds": kinds, "rules": rules(cfg), "levels": LEVELS})
+    let level_sounds: Map<String, Value> = LEVEL_SOUNDS.iter().map(|(l, s)| (l.to_string(), json!(s))).collect();
+    let known = tune_list(stick_sounds);
+    // until the stick has told us its list: the level defaults + the celebrations
+    let tunes = known.clone().unwrap_or_else(|| {
+        LEVEL_SOUNDS.iter().map(|x| x.1).chain(CELEBRATION_SOUNDS.iter().copied()).map(str::to_string).collect()
+    });
+    json!({"kinds": kinds, "rules": rules(cfg), "levels": LEVELS, "sounds": sounds(cfg), "level_sounds": level_sounds,
+           "tunes": tunes, "tunes_known": known.is_some()})
 }
 
 #[cfg(test)]
@@ -187,5 +274,61 @@ mod tests {
         assert!(quiet_at(&day, 12 * 60 + 5) && !quiet_at(&day, 13 * 60));
         assert!(!quiet_at(&cfg(json!({"quiet_hours": {"on": false}})), 23 * 60));
         assert!(!quiet_at(&cfg(json!({"quiet_hours": {"on": true, "from": "x"}})), 23 * 60));
+    }
+
+    #[test]
+    fn sounds_have_defaults_and_take_valid_user_ones() {
+        let s = sounds(&cfg(json!({})));
+        assert_eq!((&s["pr_merged"], &s["release"], &s["ci_fixed"]), (&json!("applause"), &json!("party_horn"), &json!("cheer")));
+        assert_eq!((&s["ci_failed"], &s["claude_done"]), (&json!(""), &json!("")));
+        assert_eq!(s.len(), KINDS.len());
+        let s = sounds(&cfg(json!({"event_sounds": {"pr_merged": "off", "ci_failed": "tada", "release": "",
+                                                     "nope": "tada", "claude_done": "bad name!", "pr_created": 3}})));
+        assert_eq!((&s["pr_merged"], &s["ci_failed"], &s["release"]), (&json!("off"), &json!("tada"), &json!("")));
+        assert_eq!((&s["claude_done"], &s["pr_created"]), (&json!(""), &json!("")));
+        assert!(!s.contains_key("nope"));
+    }
+
+    #[test]
+    fn a_sound_the_stick_lacks_goes_out_as_the_level_default() {
+        let old: Vec<String> = ["jingle_win", "confirmation_002", "question_001"].map(String::from).to_vec();
+        assert_eq!(for_stick("applause", Some(&old)), "");
+        assert_eq!(for_stick("jingle_win", Some(&old)), "jingle_win");
+        assert_eq!((for_stick("off", Some(&old)), for_stick("", Some(&old))), ("off".into(), "".into()));
+        assert_eq!(for_stick("applause", None), "applause"); // not known yet: the stick falls back itself
+        assert_eq!(tune_list(Some(&json!({"tunes": ["a", 1, "b"]}))), Some(vec!["a".to_string(), "b".to_string()]));
+        assert_eq!(tune_list(Some(&json!({"on": true}))), None);
+        assert_eq!(tune_list(None), None);
+    }
+
+    #[test]
+    fn event_sounds_are_checked_against_the_sticks_list() {
+        let tunes: Vec<String> = ["jingle_win", "tada"].map(String::from).to_vec();
+        let none = Map::new();
+        let bad = |b: Value, t: Option<&[String]>, cur: &Map<String, Value>| invalid_sounds(&cfg(b), t, cur);
+        assert_eq!(bad(json!({}), Some(&tunes), &none), "");
+        assert_eq!(bad(json!({"event_sounds": {"pr_merged": "tada", "ci_failed": "off", "release": ""}}), Some(&tunes), &none), "");
+        assert_eq!(bad(json!({"event_sounds": {"pr_merged": "anything_newer"}}), None, &none), "");
+        assert!(bad(json!({"event_sounds": {"pr_merged": "coins"}}), Some(&tunes), &none).contains("no sound 'coins'"));
+        let saved = cfg(json!({"event_sounds": {"pr_merged": "coins"}}));
+        assert_eq!(bad(json!({"event_sounds": {"pr_merged": "coins"}}), Some(&tunes), &saved), ""); // kept as it was
+        // the page sends every kind: a default the (older) stick lacks may stay too
+        assert_eq!(bad(json!({"event_sounds": {"pr_merged": "applause", "ci_failed": "tada"}}), Some(&tunes), &none), "");
+        assert!(bad(json!({"event_sounds": {"ci_failed": "applause"}}), Some(&tunes), &none).contains("no sound"));
+        assert!(bad(json!({"event_sounds": ["tada"]}), None, &none).contains("must map"));
+        assert!(bad(json!({"event_sounds": {"bogus": "tada"}}), None, &none).contains("no event kind"));
+        assert!(bad(json!({"event_sounds": {"pr_merged": "../x"}}), None, &none).contains("not a sound name"));
+        assert!(bad(json!({"event_sounds": {"pr_merged": 5}}), None, &none).contains("not a sound name"));
+    }
+
+    #[test]
+    fn kinds_json_lists_sounds_and_tunes() {
+        let v = kinds_json(&cfg(json!({})), None);
+        assert_eq!(v["sounds"]["pr_merged"], "applause");
+        assert_eq!(v["level_sounds"]["headsup"], "question_001");
+        assert_eq!(v["tunes_known"], false);
+        assert!(v["tunes"].as_array().unwrap().contains(&json!("coins")));
+        let v = kinds_json(&cfg(json!({})), Some(&json!({"tunes": ["jingle_win", "beep-1"]})));
+        assert_eq!((v["tunes"].clone(), v["tunes_known"].clone()), (json!(["jingle_win", "beep-1"]), json!(true)));
     }
 }

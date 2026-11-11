@@ -156,6 +156,8 @@ pub fn defaults() -> Map<String, Value> {
             // ({"tv": "samsung"}), and whether the TV phrases were added to commands.json
             m.insert("ir_brands".into(), json!({}));
             m.insert("ir_voice_added".into(), json!(false));
+            // a sound per event kind (events.rs; "" = the level's, "off"); unlisted: DEFAULT_SOUNDS
+            m.insert("event_sounds".into(), json!({}));
             m
         }
         _ => unreachable!(),

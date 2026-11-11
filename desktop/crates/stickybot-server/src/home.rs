@@ -310,7 +310,7 @@ pub async fn claude_finished(st: &AppState, elapsed_s: i64, cwd: &str, prompt: &
     let took = if elapsed_s >= 60 { format!("{} min", elapsed_s / 60) } else { format!("{elapsed_s} s") };
     let p: String = prompt.chars().take(60).collect();
     let sub = format!("took {took}{}", if p.is_empty() { String::new() } else { format!(" - {p}") });
-    events::notify(st, "claude_done", &format!("Claude finished in {project}"), &sub, None, None, "").await
+    events::notify(st, "claude_done", &format!("Claude finished in {project}"), &sub, None, None, None).await
 }
 
 /// One GitHub poll (github.py `poll`): the query, the events, the pet, the saved state.
@@ -333,7 +333,7 @@ pub async fn github_poll(st: &AppState) -> Result<(), String> {
             github::Change::PetGreen => st.home.pet.lock().unwrap().green(),
             github::Change::PetRelease => st.home.pet.lock().unwrap().release(),
             github::Change::Event(k, t, s) => {
-                events::notify(st, k, t, s, None, None, "").await;
+                events::notify(st, k, t, s, None, None, None).await;
             }
         }
     }

@@ -375,7 +375,7 @@ class StickTools:
         title, rest = split_title(stick_text(text))
         sub = rest or f"from {who}"
         ev = await self.agent.notifier.notify("claude_tool", title, sub, icon="claude", level=level,
-                                              sound="" if sound else "off")
+                                              sound=None if sound else "off")
         if not ev:
             raise ToolError(NOT_CONNECTED)
         return "shown" + (" (quiet hours: no sound)" if ev.get("sound") == "off" and sound else "")

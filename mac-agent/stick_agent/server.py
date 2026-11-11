@@ -131,7 +131,8 @@ def make_app(agent):
     async def put_config(request):
         body = await request.json()
         allowed = {k: v for k, v in body.items() if k in config.DEFAULT_CONFIG}
-        bad = brain_api.valid_config(allowed) or faces.valid_config(allowed)
+        bad = (brain_api.valid_config(allowed) or faces.valid_config(allowed)
+               or evmod.valid_config(allowed, evmod.tune_list(agent.sounds), agent.cfg))
         if bad:
             return web.json_response({"error": bad}, status=400)
         agent.update_config(allowed)
@@ -223,8 +224,9 @@ def make_app(agent):
         return web.json_response({"ok": err is None, "error": err})
 
     async def event_test(request):
+        """{"kind", "level"?, "sound"?}: the kind's sample, as the page has it set (saved or not)."""
         body = await request.json()
-        ev = await agent.notifier.test(str(body.get("kind", "test")))
+        ev = await agent.notifier.test(str(body.get("kind", "test")), body.get("level"), body.get("sound"))
         return web.json_response({"ok": True, "event": ev})
 
     async def event_history(request):
@@ -233,7 +235,12 @@ def make_app(agent):
     async def event_kinds(_):
         return web.json_response({"kinds": {k: {"default": v[0], "icon": v[1], "title": v[2]}
                                             for k, v in evmod.KINDS.items()},
-                                  "rules": evmod.rules(agent.cfg), "levels": evmod.LEVELS})
+                                  "rules": evmod.rules(agent.cfg), "levels": evmod.LEVELS,
+                                  "sounds": evmod.sounds(agent.cfg), "level_sounds": evmod.LEVEL_SOUNDS,
+                                  # the stick's list; until it has told us, the defaults + celebrations
+                                  "tunes": evmod.tune_list(agent.sounds) or
+                                  list(dict.fromkeys([*evmod.LEVEL_SOUNDS.values(), *evmod.CELEBRATION_SOUNDS])),
+                                  "tunes_known": evmod.tune_list(agent.sounds) is not None})
 
     async def claude_event(request):
         body = await request.json()
