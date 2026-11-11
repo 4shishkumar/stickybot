@@ -18,7 +18,7 @@
 # tagging: only mac-app runs, nothing is published, and the zip is a workflow artifact.
 #
 # The agent's tests here leave out its macOS-only libraries (rumps, MLX, PortAudio), which they
-# don't need; CI on pull requests (ci.yml) runs the full set on macOS. Only GITHUB_TOKEN is used.
+# don't need, as CI on pull requests does (ci.yml). Only GITHUB_TOKEN is used.
 name: Release
 
 on:
