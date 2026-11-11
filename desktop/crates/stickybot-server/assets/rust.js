@@ -1,6 +1,26 @@
 // The Rust app's own additions to the shared dashboard page (the Python app never loads this).
 // Settings → "Import from StickyBot": takes over the Python app's settings (POST /api/import).
+// Settings → Dock: "Always show in the Dock" (config dock_always; the app's dock.rs).
+// The Feedback page ("Report an issue", feedback.js) in the nav, before Logs.
 import {h, card, get, post, put, toast, ask} from "/static/lib.js";
+import * as feedback from "/static-rs/feedback.js";
+
+if (window.stickyAddPage) {
+  window.stickyAddPage("feedback", "Feedback", feedback,
+    '<path d="M4 4h16v12H8l-4 4z"/><path d="M12 7.5v4M12 13.8v.2"/>', "logs");
+}
+
+function dockCard(cfg) {
+  const box = h("input", {type: "checkbox", id: "rsDock", checked: !!cfg.dock_always, onchange: async () => {
+    const r = await put("/api/config", {dock_always: box.checked});
+    if (r.error) { toast(r.error, "err"); box.checked = !box.checked; return; }
+    toast(box.checked ? "StickyBot stays in the Dock" : "In the Dock only while this window is open");
+  }});
+  return card("Dock",
+    h("div", {class: "field"}, h("label", null, "Dock icon"),
+      h("label", {class: "switch"}, box, h("span", null, "Always show in the Dock")),
+      h("div", {class: "help"}, "Otherwise StickyBot is in the Dock and in ⌘-Tab only while this window is open; the menu bar icon is always there.")));
+}
 
 function importCard(info) {
   const out = h("div", {class: "help", id: "rsImportOut"});
@@ -76,12 +96,17 @@ async function maybeAdd() {
   if (document.getElementById("rsImport") || !page.querySelector(".card")) return;
   busy = true;
   try {
-    const [info, login, sw] = await Promise.all([get("/api/import"), get("/api/login-item"), get("/api/switch-over")]);
+    const [info, login, sw, cfg] = await Promise.all([get("/api/import"), get("/api/login-item"), get("/api/switch-over"), get("/api/config")]);
     if (!info.error && !document.getElementById("rsImport") && title.textContent === "Settings") {
       if (!login.error) {
         const l = loginCard(login);
         l.id = "rsLogin-card";
         page.appendChild(l);
+      }
+      if (!cfg.error) {
+        const d = dockCard(cfg);
+        d.id = "rsDock-card";
+        page.appendChild(d);
       }
       const c = importCard(info);
       c.id = "rsImport";

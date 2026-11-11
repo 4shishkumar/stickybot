@@ -40,16 +40,38 @@ const byName = Object.fromEntries(PAGES.map(([n, , m]) => [n, m]));
 byName.install = install;  // the setup page (#install/<step>): not in the nav, shown on its own
 let currentName = null, current = null;
 
+function navItems(name, label) {
+  return [
+    h("a", {href: "#" + name, "data-page": name},
+      h("span", {html: `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON[name] || ""}</svg>`, style: "display:contents"}),
+      h("span", null, label),
+      name === "overview" || name === "activity" ? h("span", {class: "badge", "data-badge": "", hidden: true}) : null),
+    h("a", {href: "#" + name, "data-page": name}, label),
+  ];
+}
+
 function buildNav() {
   const nav = $("#nav"), mob = $("#mobileNav");
   for (const [name, label] of PAGES) {
-    nav.appendChild(h("a", {href: "#" + name, "data-page": name},
-      h("span", {html: `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`, style: "display:contents"}),
-      h("span", null, label),
-      name === "overview" || name === "activity" ? h("span", {class: "badge", "data-badge": "", hidden: true}) : null));
-    mob.appendChild(h("a", {href: "#" + name, "data-page": name}, label));
+    const [side, top] = navItems(name, label);
+    nav.appendChild(side);
+    mob.appendChild(top);
   }
 }
+
+// A page another script adds to the nav (the Rust app's Feedback page, from /static-rs/):
+// stickyAddPage("feedback", "Feedback", module, '<path …/>', "logs") puts it before Logs.
+window.stickyAddPage = (name, label, mod, icon, before) => {
+  if (byName[name]) return;
+  byName[name] = mod;
+  ICON[name] = icon || "";
+  const [side, top] = navItems(name, label);
+  const at = sel => (before ? $(`${sel} [data-page="${before}"]`) : null);
+  $("#nav").insertBefore(side, at("#nav"));
+  $("#mobileNav").insertBefore(top, at("#mobileNav"));
+  side.classList.toggle("on", currentName === name);
+  if (currentName !== name && (location.hash.slice(1).split("/")[0] || recall("page", "overview")) === name) route();
+};
 
 function setHead(page) {
   $("#pageTitle").textContent = page.title || "";

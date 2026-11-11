@@ -14,6 +14,7 @@ pub mod commands;
 pub mod config;
 pub mod events;
 pub mod feed;
+pub mod feedback;
 pub mod faces;
 pub mod firmware;
 pub mod github;
@@ -171,6 +172,8 @@ pub struct AppState {
     /// the setup page, the components, restart / window (`setup.rs`); with the fake stick a
     /// pretend Mac (`sysrun::FakeSystem`: tests never run gh / claude or touch ~/.claude)
     pub setup: setup::Setup,
+    /// "Report an issue": the rate limit and the form poster (`feedback.rs`; fake: never posts)
+    pub feedback: feedback::Feedback,
     me: OnceLock<Weak<AppState>>,
 }
 
@@ -257,6 +260,7 @@ impl AppState {
             } else {
                 Arc::new(sysrun::MacSystem)
             }),
+            feedback: feedback::Feedback::new(fake),
             me: OnceLock::new(),
         });
         let _ = st.me.set(Arc::downgrade(&st));

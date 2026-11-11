@@ -31,6 +31,21 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   saved level, not the one just chosen; it now sends the level and sound shown. And a changed
   level is saved at once (it used to wait for the Save button, and was lost on leaving the page),
   without redrawing the page.
+- **StickyBot.app in the Dock and ⌘-Tab while its window is open.** The Mac app (Rust) is a menu
+  bar app as before, but while the dashboard window is open it has a Dock icon, is in ⌘-Tab and has
+  an app menu (Quit, Settings…, Edit with Copy / Paste, Reload, Window, Help → Report an Issue…),
+  like the Python app. Closing the window takes it back to the menu bar only (the app keeps
+  running). Settings → Dock → **Always show in the Dock** keeps the icon; then a click on it, or
+  switching to StickyBot with ⌘-Tab, shows the window.
+- **Report an issue.** A **Feedback** page in the Mac app's dashboard (and *Report an issue…* in the
+  menu bar menu): a bug, an idea or a question, with what you expected, steps and an optional
+  contact. **Attach diagnostics** is opt-in and shows exactly what is sent, redacted on the Mac
+  first (keys and tokens, emails, user and Mac names, GitHub repos and PR titles, what you said and
+  Claude's replies, Wi-Fi names, Bluetooth addresses and serials); you can edit or untick it.
+  Reports get an ID (`SB-XXXXXX`), are kept under *My reports* (unsent ones can be retried or
+  copied), at most 5 an hour. They go to the team's Google Sheet through a small Apps Script web app
+  (`docs/feedback/apps-script.gs`, setup in [docs/FEEDBACK.md](docs/FEEDBACK.md)); until its address
+  is set, the page offers **Copy report** and **Email it instead**.
 
 ## [2.4.0] - 2026-11-11
 

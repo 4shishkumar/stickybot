@@ -124,6 +124,13 @@ pub const PORTED: &[&str] = &[
     "GET /api/components/jobs/{job}",
     "POST /api/restart",
     "POST /api/window",
+    // "Report an issue" (feedback.rs)
+    "GET /api/feedback",
+    "POST /api/feedback",
+    "GET /api/feedback/diagnostics",
+    "GET /api/feedback/reports",
+    "GET /api/feedback/reports/{id}",
+    "POST /api/feedback/reports/{id}/retry",
 ];
 
 /// The Python agent's endpoints that aren't here yet, by the phase that brings them.
@@ -188,6 +195,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(crate::ir::routes())
         .merge(crate::faces::routes())
         .merge(crate::setup::routes())
+        .merge(crate::feedback::routes())
         .fallback(not_ported)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -238,7 +246,10 @@ async fn page(State(st): State<Arc<AppState>>) -> Html<String> {
 }
 
 /// This app's own additions to the shared page (`assets/`): e.g. Settings → Import from StickyBot.
-const RUST_ASSETS: &[(&str, &str, &str)] = &[("rust.js", "text/javascript", include_str!("../assets/rust.js"))];
+const RUST_ASSETS: &[(&str, &str, &str)] = &[
+    ("rust.js", "text/javascript", include_str!("../assets/rust.js")),
+    ("feedback.js", "text/javascript", include_str!("../assets/feedback.js")),
+];
 
 async fn rust_static(Path(path): Path<String>) -> Response {
     match RUST_ASSETS.iter().find(|(p, _, _)| *p == path) {
