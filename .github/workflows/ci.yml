@@ -248,7 +248,11 @@ jobs:
     steps:
       - name: All jobs passed or were skipped
         env:
-          RESULTS: ${{ toJSON(needs.*.result) }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          echo "$RESULTS"
-          if echo "$RESULTS" | grep -qE '"(failure|cancelled)"'; then exit 1; fi
+          echo "results: $RESULTS"
+          # anything but success / skipped fails: failure, cancelled, and states like "abandoned"
+          # (a macOS runner GitHub never handed out), so a job that didn't run can't count as passed
+          for r in $RESULTS; do
+            case "$r" in success|skipped) ;; *) echo "::error::a job ended '$r' — re-run it"; exit 1 ;; esac
+          done
