@@ -322,7 +322,10 @@ before 1.7: the key at once, no `prepare`, no Bluetooth audio. The USB mic is na
 | board → Mac | `{"src":"agent","evt":"sounds","sounds":{"tunes":[…],"map":{event: tune},"on":…,"volume":…}}` after each of those |
 
 Events: sent, answer, approval, approved, denied, error, connected, disconnected, unlock, charging, lowbattery.
-Tunes: built-in Kenney clips (CC0, `tools/make_sounds.py`) and synthesized beeps; `off` = silent.
+Tunes: built-in Kenney clips (CC0, `tools/make_sounds.py`), the celebration clips (firmware 2.7.0+:
+`applause`, `clap`, `cheer`, `party_horn`, `tada`, `drumroll`, `level_up`, `coins`; synthesized by
+`tools/synth_sounds.py`, sources in [m5-stick-s3/SOUNDS.md](m5-stick-s3/SOUNDS.md)) and synthesized beeps; `off` = silent.
+They're listed in `tunes` (clips first), so the dashboard offers whatever the board has.
 The agent's hello may also carry `"home":{"k","a","b","u"}` (home screen card) and `"wx":{"t","hi","lo","i","c","day","at"}` (weather).
 `{"src":"agent","home":{…}}` on its own (no `hello`) updates the card at once — the agent sends it when a Claude
 session's `progress()` / `pin_home()` changes it (at most every 0.5 s); boards since the home card handle it.
@@ -337,7 +340,12 @@ session's `progress()` / `pin_home()` changes it (at most every 0.5 s); boards s
 - `celebrate`: confetti, a colour pulse, the happy face and the big icon, ~6 s; default sound `jingle_win` (Kenney Music Jingles, CC0).
 - `nice`: a teal-to-green toast that slides in, ~4 s; default sound `confirmation_002`.
 - `headsup`: orange, pulsing; stays until any button press (that press only dismisses) or 60 s; default sound `question_001`.
-- `sound`: any event, tune or clip name the board knows (see Sounds); empty = the level's default; nothing plays if sounds are off.
+- `sound`: any event, tune or clip name the board knows (see Sounds); empty = the level's default; `off` = silent
+  (quiet hours); nothing plays if sounds are off. Firmware 2.7.0+: a name the board doesn't know plays the
+  level's default (older firmware played nothing). The Mac picks it per event kind (dashboard → Events,
+  settings `event_sounds` {kind: name | `off` | `""`}; defaults: `pr_merged` → `applause`, `release` →
+  `party_horn`, `ci_fixed` → `cheer`, the rest `""`), and sends `""` for a name missing from the board's
+  last `tunes` list, so older firmware still plays the level's sound.
 - Up to 5 are queued and shown one at a time. They wait while an approval prompt, pairing, the menu (2.5.1+: or the Launcher), dictation (A held) or talking (B held) is on.
 - Serial test: `event celebrate|nice|headsup <title>|<sub>|<icon>`; the `screens` demo shows all three.
 - `kind` (agent with faces, optional): the event's kind (`pr_merged`, `ci_failed`, `ci_fixed`, `claude_done`,

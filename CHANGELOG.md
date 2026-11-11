@@ -12,6 +12,26 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- **Celebration sounds on the stick (firmware 2.7.0).** Eight new built-in clips: `applause`,
+  `clap`, `cheer`, `party_horn`, `tada`, `drumroll` (a snare roll and a crash), `level_up` and
+  `coins`, 0.7–1.9 s each (92 KB of flash in all). They're synthesized from scratch by
+  `m5-stick-s3/tools/synth_sounds.py` (no recordings, so no licence to track); every clip's source
+  is listed in [m5-stick-s3/SOUNDS.md](m5-stick-s3/SOUNDS.md). They show up in the Sounds tab's
+  lists like the others.
+- **A sound per event** (dashboard → Events). Each event kind now has a sound next to its level:
+  the level's default, off, or any clip or tune the stick has, with ▶ to try it. PR merged plays
+  applause, a release the party horn and CI green again a cheer by default; the others keep their
+  level's sound. Saved in the settings as `event_sounds` (both Mac apps), checked against the
+  stick's own list. A stick without the new clips (firmware before 2.7.0) gets its level's sound
+  instead, and firmware 2.7.0 falls back to it by itself for a name it doesn't know.
+
+### Fixed
+- **Events page: ▶ plays what you picked.** It sent only the event kind, so the sample used the
+  saved level, not the one just chosen; it now sends the level and sound shown. And a changed
+  level is saved at once (it used to wait for the Save button, and was lost on leaving the page),
+  without redrawing the page.
+
 ## [2.4.0] - 2026-11-11
 
 ### Added
