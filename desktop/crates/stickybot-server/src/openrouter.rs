@@ -838,7 +838,7 @@ pub(crate) mod tests {
     use crate::talk::tests::{T, agent};
     use std::sync::atomic::AtomicUsize;
 
-    pub const KEY: &str = concat!("sk-or-v1-", "0123456789abcdef", "0123456789abcdef", "0123456789abcdef", "0123456789abcdef");
+    pub const KEY: &str = concat!("sk-or-v1-", "0123456789abcdef", "0123456789abcdef", "0123456789abcdef", "0123456789abcdef"); // a made-up key, split so secret scanners don't flag it
     pub const MODEL: &str = "test/fast-model";
 
     pub fn text_chunk(t: &str) -> Value {

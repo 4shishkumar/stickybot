@@ -175,7 +175,7 @@ impl Keys {
 mod tests {
     use super::*;
 
-    const KEY: &str = concat!("sk-or-v1-", "0123456789abcdef", "0123456789abcdef");
+    const KEY: &str = concat!("sk-or-v1-", "0123456789abcdef", "0123456789abcdef"); // made up, split for secret scanners
 
     #[test]
     fn status_never_has_the_key() {
