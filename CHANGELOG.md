@@ -12,6 +12,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-11
+
 ### Added
 - **StickyBot.app, the Mac app in Rust, as a download.** Each release now carries
   `StickyBot-<version>-macos-arm64.zip` (Apple silicon, macOS 13+), built by the release workflow
@@ -460,7 +462,8 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/4shishkumar/stickybot/compare/v2.3.2...HEAD
+[Unreleased]: https://github.com/4shishkumar/stickybot/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.4.0
 [2.3.2]: https://github.com/4shishkumar/stickybot/releases/tag/v2.3.2
 [2.3.1]: https://github.com/4shishkumar/stickybot/releases/tag/v2.3.1
 [2.3.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.3.0
