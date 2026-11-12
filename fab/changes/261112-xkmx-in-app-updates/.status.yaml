@@ -8,8 +8,8 @@ progress:
     intake: done
     apply: done
     review: done
-    hydrate: active
-    ship: pending
+    hydrate: done
+    ship: active
     review-pr: pending
 plan:
     generated: true
@@ -32,24 +32,26 @@ stage_metrics:
     intake: {started_at: "2026-11-12T17:12:31Z", driver: fab-new, iterations: 1, completed_at: "2026-11-12T17:14:58Z"}
     apply: {started_at: "2026-11-12T19:45:03Z", driver: fab-fff, iterations: 2, completed_at: "2026-11-12T19:50:20Z"}
     review: {started_at: "2026-11-12T19:50:20Z", driver: fab-fff, iterations: 2, completed_at: "2026-11-12T19:57:48Z"}
-    hydrate: {started_at: "2026-11-12T19:57:48Z", driver: fab-fff, iterations: 1}
+    hydrate: {started_at: "2026-11-12T19:57:48Z", driver: fab-fff, iterations: 1, completed_at: "2026-11-12T20:00:02Z"}
+    ship: {started_at: "2026-11-12T20:00:02Z", driver: fab-fff, iterations: 1}
 prs: []
 change_type_source: explicit
 base_branch: main
 true_impact:
-    added: 4769
-    deleted: 102
-    net: 4667
+    added: 4886
+    deleted: 105
+    net: 4781
     excluding:
-        added: 3444
-        deleted: 86
-        net: 3358
+        added: 3529
+        deleted: 89
+        net: 3440
     tests:
-        added: 1488
+        added: 1534
         deleted: 0
-        net: 1488
-    computed_at: "2026-11-12T19:50:20Z"
-    computed_at_stage: apply
+        net: 1534
+    computed_at: "2026-11-12T20:00:02Z"
+    computed_at_stage: hydrate
+summary: 'In-app updates: signed updater tarball and latest.json on tag releases, Installer trait with update state machine, busy gate and update_auto, install/cancel API, menu and dashboard install flow'
 # base_branch: written by /git-branch or /fab-new when the change's branch is created (no placeholder here).
 # true_impact: lazily created on first stage-finish that computes it (no placeholder here).
-last_updated: 2026-11-12T19:57:48Z
+last_updated: 2026-11-12T20:00:02Z

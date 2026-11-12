@@ -1,6 +1,6 @@
 ---
 type: memory
-description: "Releases: one version vX.Y.Z for the Mac apps set by tools/release.sh, a separate FW_VERSION for the firmware, both in manifest.json; a tag runs the release workflow (tests, firmware parts, StickyBot.app zip); CHANGELOG.md is the release notes."
+description: "Releases: one version vX.Y.Z for the Mac apps set by tools/release.sh, a separate FW_VERSION for the firmware, both in manifest.json; a tag runs the release workflow (tests, firmware parts, StickyBot.app zip, signed updater tarball and latest.json); CHANGELOG.md is the release notes."
 ---
 # Releases
 
@@ -34,6 +34,29 @@ StickyBot.app on macOS (tests, clippy, ad-hoc signed, zipped as
 `StickyBot-X.Y.Z-macos-arm64.zip`), lists the zip under `apps` in the manifest and creates the
 GitHub release with the changelog entry as notes.
 
+### Requirement: A tag also publishes the signed update files
+On a tag push, when the Actions secrets `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` are set, the Mac build also makes the updater tarball
+`StickyBot.app.tar.gz` and its minisign `.sig` (`desktop/scripts/build-app.sh` passes
+`createUpdaterArtifacts` through `--config` only when the key is in the environment; it is never
+in `tauri.conf.json`). The workflow checks the tarball's `.app` (`codesign --verify --deep
+--strict`, ad hoc, hardened runtime) and uploads both as `StickyBot-X.Y.Z-macos-arm64.app.tar.gz`
+and `.sig`. The publish job generates `latest.json` with `tools/release_tool.py latest-json`
+(`version`, `notes` from the changelog entry, `pub_date`, `platforms.darwin-aarch64.{signature,url}`;
+it refuses an empty signature, a non-SemVer version or a URL off the repo's release downloads) and
+attaches the three files. The zip and the manifest's `apps` entry are unchanged, so apps that
+predate in-app updates still find their zip and firmware. The key signs only tag pushes: a manual
+run, a fork and a build without the secrets pass with the updater files skipped, and a tag
+without the secrets publishes with a `::warning::`. The public key is in `tauri.conf.json`;
+`docs/RELEASING.md` "Update signing key" covers adding the secrets, rotation (the old key signs the
+release that carries the new public key, then the secrets are swapped) and a lost key (a one-time
+manual install).
+
+#### Scenario: A build without the update key
+- **GIVEN** a checkout or workflow run with no `TAURI_SIGNING_PRIVATE_KEY`
+- **WHEN** `build-app.sh` runs
+- **THEN** StickyBot.app is built and signed ad hoc as before, the script says the updater artifacts were skipped, and no tarball or `.sig` is produced
+
 #### Scenario: The release workflow fails
 - **GIVEN** a pushed tag whose workflow failed
 - **WHEN** the problem is fixed
@@ -49,10 +72,16 @@ Apps download a release's firmware parts and check each against the manifest's s
 The speech model and pinned third-party downloads (sherpa-onnx libraries, the BlackHole package)
 are checked against pinned hashes.
 
-### Requirement: The Mac app tells, the user installs
-The app checks for releases at start and every 24 h. For a newer app it shows "Update available"
-and opens the release page; new stick firmware is downloaded and offered on the Stick page, over
-Bluetooth or USB.
+### Requirement: The Mac app installs its own updates
+The app checks for releases at start and every 24 h. For a newer app release that has a
+`latest.json`, the menu offers "Install update vX and restart…" and the dashboard offers
+**Install and restart**: the app downloads the signed tarball, checks the signature against the
+public key compiled into it, replaces itself and relaunches (see [Mac apps](/apps/mac-apps.md)).
+Without a `latest.json` on the release, or where the app cannot replace itself, it shows "Update
+available" and opens the release page. A release that is not newer is never installed. The
+channel picks the feed: stable reads `releases/latest/download/latest.json`, beta the picked
+prerelease's own `releases/download/<tag>/latest.json`. New stick firmware is downloaded and
+offered on the Stick page, over Bluetooth or USB.
 
 ## Design Decisions
 
@@ -68,7 +97,19 @@ Bluetooth or USB.
 **Rejected**: Letting each build fetch the latest.
 *Introduced by*: predates fab; see `docs/RELEASING.md`
 
+### Updater artifacts only when the key is in the environment
+**Decision**: `build-app.sh` adds `createUpdaterArtifacts` when `TAURI_SIGNING_PRIVATE_KEY` is set, and the workflow hands the key to the build only on tag pushes; `tauri.conf.json` never sets it.
+**Why**: The Tauri CLI fails a build that asks for updater artifacts without a key, and PR, manual and local builds have none; signing only tags keeps the key away from branch runs.
+**Rejected**: A second config file for releases (two places to keep in step).
+*Introduced by*: 261112-xkmx-in-app-updates
+
+### Beta channel through the release list, not a second feed
+**Decision**: Stable uses GitHub's `releases/latest/download/latest.json`; beta builds the per-tag `latest.json` URL from the release the existing check picked, passed to the updater at run time.
+**Why**: GitHub's "latest" is never a prerelease; the app already lists releases; the URL is built from the compiled-in repo and a validated tag, never copied from an API answer.
+**Rejected**: A `latest-beta.json` on a moving tag or on Pages (another thing to publish and keep in step).
+*Introduced by*: 261112-xkmx-in-app-updates
+
 ## Sources
 
-`docs/RELEASING.md`, `CHANGELOG.md`, `.github/workflows/release.yml`, `tools/release.sh`.
+`docs/RELEASING.md`, `CHANGELOG.md`, `.github/workflows/release.yml`, `tools/release.sh`, `desktop/scripts/build-app.sh`.
 Related: [CI and review](/delivery/ci-and-review.md), [firmware update](/link/firmware-update.md).
