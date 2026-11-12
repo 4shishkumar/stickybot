@@ -9,7 +9,7 @@ progress:
     apply: done
     review: done
     hydrate: done
-    ship: active
+    ship: done
     review-pr: pending
 plan:
     generated: true
@@ -33,14 +33,15 @@ stage_metrics:
     apply: {started_at: "2026-11-12T19:33:09Z", driver: fab-fff, iterations: 2, completed_at: "2026-11-12T19:38:44Z"}
     review: {started_at: "2026-11-12T19:38:44Z", driver: fab-fff, iterations: 2, completed_at: "2026-11-12T19:46:41Z"}
     hydrate: {started_at: "2026-11-12T19:46:41Z", driver: fab-fff, iterations: 1, completed_at: "2026-11-12T19:50:29Z"}
-    ship: {started_at: "2026-11-12T19:50:29Z", driver: fab-fff, iterations: 1}
-prs: []
+    ship: {started_at: "2026-11-12T19:50:29Z", driver: fab-fff, iterations: 1, completed_at: "2026-11-12T19:51:03Z"}
+prs:
+    - https://github.com/4shishkumar/stickybot/pull/5
 base_branch: main
 change_type_source: explicit
 true_impact:
-    added: 5286
-    deleted: 23
-    net: 5263
+    added: 5407
+    deleted: 30
+    net: 5377
     excluding:
         added: 4489
         deleted: 23
@@ -49,9 +50,9 @@ true_impact:
         added: 1837
         deleted: 0
         net: 1837
-    computed_at: "2026-11-12T19:50:29Z"
-    computed_at_stage: hydrate
+    computed_at: "2026-11-12T19:51:03Z"
+    computed_at_stage: ship
 summary: 'Connections page and read-only Calendar connection: EventKit crate with fake, meeting card, meeting_soon reminder, join, voice and stick tools, calendars entitlement'
 # base_branch: written by /git-branch or /fab-new when the change's branch is created (no placeholder here).
 # true_impact: lazily created on first stage-finish that computes it (no placeholder here).
-last_updated: 2026-11-12T19:50:29Z
+last_updated: 2026-11-12T19:51:03Z
