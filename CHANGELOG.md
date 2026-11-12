@@ -12,6 +12,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-11-12
+
 ### Added
 - **Celebration sounds on the stick (firmware 2.7.0).** Eight new built-in clips: `applause`,
   `clap`, `cheer`, `party_horn`, `tada`, `drumroll` (a snare roll and a crash), `level_up` and
@@ -25,12 +27,6 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   level's sound. Saved in the settings as `event_sounds` (both Mac apps), checked against the
   stick's own list. A stick without the new clips (firmware before 2.7.0) gets its level's sound
   instead, and firmware 2.7.0 falls back to it by itself for a name it doesn't know.
-
-### Fixed
-- **Events page: ▶ plays what you picked.** It sent only the event kind, so the sample used the
-  saved level, not the one just chosen; it now sends the level and sound shown. And a changed
-  level is saved at once (it used to wait for the Save button, and was lost on leaving the page),
-  without redrawing the page.
 - **StickyBot.app in the Dock and ⌘-Tab while its window is open.** The Mac app (Rust) is a menu
   bar app as before, but while the dashboard window is open it has a Dock icon, is in ⌘-Tab and has
   an app menu (Quit, Settings…, Edit with Copy / Paste, Reload, Window, Help → Report an Issue…),
@@ -46,6 +42,12 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   copied), at most 5 an hour. They go to the team's Google Sheet through a small Apps Script web app
   (`docs/feedback/apps-script.gs`, setup in [docs/FEEDBACK.md](docs/FEEDBACK.md)); until its address
   is set, the page offers **Copy report** and **Email it instead**.
+
+### Fixed
+- **Events page: ▶ plays what you picked.** It sent only the event kind, so the sample used the
+  saved level, not the one just chosen; it now sends the level and sound shown. And a changed
+  level is saved at once (it used to wait for the Save button, and was lost on leaving the page),
+  without redrawing the page.
 
 ## [2.4.0] - 2026-11-11
 
@@ -497,7 +499,8 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/4shishkumar/stickybot/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/4shishkumar/stickybot/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.5.0
 [2.4.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.4.0
 [2.3.2]: https://github.com/4shishkumar/stickybot/releases/tag/v2.3.2
 [2.3.1]: https://github.com/4shishkumar/stickybot/releases/tag/v2.3.1
