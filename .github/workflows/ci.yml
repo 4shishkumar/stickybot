@@ -1,33 +1,77 @@
-# CI for when the repo has a remote. macOS runners: the agent needs macOS frameworks
-# (Core Bluetooth via bleak, MLX), and building the firmware is the same as on a dev Mac.
+# CI for every pull request into main (and by hand: Actions → CI → Run workflow).
+# main is protected: a PR merges only when the "CI passed" check is green (docs/CONTRIBUTING.md).
+#
+# Each job runs only when its part of the repo changed (the "changes" job), so a docs-only PR is
+# quick; "CI passed" collects them, so it is the one check the branch rule needs.
+#   firmware   (ubuntu)  native tests with gcc (the stick's compiler family: clang on a Mac has
+#                        hidden bugs before), the stick build, and a flash-size limit
+#   agent      (ubuntu)  the Python app's lint + tests and the dashboard's JS tests (node)
+#   mac-app    (macos)   the Rust app: tests, clippy, and StickyBot.app as a test download
+#   secrets    (ubuntu)  gitleaks over the PR's commits: nothing that looks like a key gets in
+#   changelog  (ubuntu)  a CHANGELOG.md line, unless the PR has the "no-changelog" label
+#   workflows  (ubuntu)  actionlint on .github/workflows
+# The repo is public: GitHub-hosted runners (macOS too) cost nothing. Only GITHUB_TOKEN is used.
 name: CI
-# Private repo: macOS runners use free minutes ~10x faster, so CI runs on pull
-# requests and on demand (Actions tab -> CI -> Run workflow), not on every push.
+
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # the same pins as release.yml (keep them together)
+  SHERPA_ONNX_VERSION: "2.0.1"
+  SHERPA_ONNX_ARCHIVE: sherpa-onnx-v2.0.1-osx-arm64-static-lib.tar.bz2
+  SHERPA_ONNX_SHA256: d7a9b14f337958e7373c8c650f046df33d210bbaff2f33cb8322dda663ee5e1c
+  TAURI_CLI_VERSION: "2.12.4"
+  # the stick's app partition (3,342,336 bytes): fail above this share, so there is room to grow
+  FLASH_LIMIT_PCT: "85"
+
 jobs:
-  agent:
-    runs-on: macos-15          # Apple Silicon (MLX wheels)
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      firmware: ${{ steps.f.outputs.firmware }}
+      agent: ${{ steps.f.outputs.agent }}
+      mac_app: ${{ steps.f.outputs.mac_app }}
+      workflows: ${{ steps.f.outputs.workflows }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: dorny/paths-filter@v3
+        id: f
         with:
-          python-version: "3.14"
-          cache: pip
-          cache-dependency-path: mac-agent/pyproject.toml
-      - name: Install
-        run: python -m pip install -e "mac-agent[dev]"
-      - name: Lint
-        working-directory: mac-agent
-        run: python -m ruff check .
-      - name: Tests (fast; the slow ones need the 2.5 GB speech model)
-        working-directory: mac-agent
-        run: python -m pytest
+          # run by hand: everything
+          base: ${{ github.event_name == 'workflow_dispatch' && '' || github.base_ref }}
+          filters: |
+            firmware:
+              - 'm5-stick-s3/**'
+              - 'xiao-esp32-c3/**'
+              - 'PROTOCOL.md'
+              - '.github/workflows/ci.yml'
+            agent:
+              - 'mac-agent/**'
+              - 'tools/**'
+              - '.github/workflows/ci.yml'
+            mac_app:
+              - 'desktop/**'
+              - 'mac-agent/stick_agent/static/**'
+              - '.github/workflows/ci.yml'
+            workflows:
+              - '.github/workflows/**'
 
   firmware:
-    runs-on: macos-15
+    needs: changes
+    if: needs.changes.outputs.firmware == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,19 +83,176 @@ jobs:
             ~/.platformio/packages
             ~/.platformio/platforms
             m5-stick-s3/.pio/libdeps
-          key: pio-${{ runner.os }}-${{ hashFiles('m5-stick-s3/platformio.ini', 'xiao-esp32-c3/platformio.ini') }}
+          key: pio-ci-${{ runner.os }}-${{ hashFiles('m5-stick-s3/platformio.ini', 'xiao-esp32-c3/platformio.ini') }}
       - name: Install PlatformIO
-        run: python -m pip install platformio
-      - name: Local secrets placeholder (OTA password, not used in CI)
         run: |
-          cp m5-stick-s3/secrets.example.ini m5-stick-s3/secrets.ini
+          python -m pip install platformio
+          cp m5-stick-s3/secrets.example.ini m5-stick-s3/secrets.ini       # OTA password placeholder
           cp xiao-esp32-c3/secrets.example.ini xiao-esp32-c3/secrets.ini
-      - name: M5StickS3 unit tests (native)
+      - name: M5StickS3 — native unit tests (gcc)
         working-directory: m5-stick-s3
         run: pio test -e native
-      - name: Build M5StickS3
+      - name: M5StickS3 — build, and the flash-size limit
         working-directory: m5-stick-s3
-        run: pio run -e sticks3
-      - name: Build XIAO ESP32-C3
+        run: |
+          pio run -e sticks3 | tee build.log
+          line="$(grep -E '^Flash:' build.log | tail -1)"
+          pct="$(echo "$line" | grep -oE '[0-9]+\.[0-9]+%' | tr -d %)"
+          echo "### Firmware flash: $line" >> "$GITHUB_STEP_SUMMARY"
+          awk -v p="$pct" -v l="$FLASH_LIMIT_PCT" 'BEGIN { if (p+0 > l+0) { print "flash " p "% is over the " l "% limit"; exit 1 } }'
+      - name: XIAO ESP32-C3 — build
         working-directory: xiao-esp32-c3
         run: pio run -e xiao_c3
+
+  agent:
+    needs: changes
+    if: needs.changes.outputs.agent == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: mac-agent/pyproject.toml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"   # the dashboard's JS tests (node --test, run from pytest)
+      - name: Install (without the macOS-only libraries, as in release.yml)
+        run: |
+          python -m pip install --no-deps -e mac-agent
+          python -m pip install bleak aiohttp numpy soundfile soxr pyserial huggingface_hub cryptography \
+            "pytest>=8" "pytest-asyncio>=0.23" "pytest-aiohttp>=1.0" "ruff>=0.5"
+      - name: Lint
+        working-directory: mac-agent
+        run: python -m ruff check .
+      - name: Tests (Python + the dashboard's JS)
+        working-directory: mac-agent
+        run: python -m pytest
+
+  mac-app:
+    needs: changes
+    if: needs.changes.outputs.mac_app == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-15   # Apple silicon (arm64)
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust (stable, with clippy)
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop -> target
+          cache-bin: "false"
+          cache-on-failure: true
+      - name: Cache the Tauri CLI
+        id: tauri-cli
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri
+          key: tauri-cli-${{ env.TAURI_CLI_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install the Tauri CLI
+        if: steps.tauri-cli.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+      - name: Cache the sherpa-onnx libraries
+        uses: actions/cache@v4
+        with:
+          path: ~/sherpa-onnx-archive
+          key: sherpa-onnx-${{ env.SHERPA_ONNX_SHA256 }}
+      - name: Fetch and check the sherpa-onnx libraries
+        run: |
+          dir="$HOME/sherpa-onnx-archive"
+          mkdir -p "$dir"
+          if [ ! -f "$dir/$SHERPA_ONNX_ARCHIVE" ]; then
+            curl -fsSL --retry 3 -o "$dir/$SHERPA_ONNX_ARCHIVE" \
+              "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$SHERPA_ONNX_VERSION/$SHERPA_ONNX_ARCHIVE"
+          fi
+          echo "$SHERPA_ONNX_SHA256  $dir/$SHERPA_ONNX_ARCHIVE" | shasum -a 256 -c -
+          echo "SHERPA_ONNX_ARCHIVE_DIR=$dir" >> "$GITHUB_ENV"
+      - name: Tests
+        run: cargo test --workspace --locked
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Build StickyBot.app (ad hoc, a test download for this PR)
+        run: |
+          unset APPLE_SIGNING_IDENTITY STICKYBOT_SIGNING_IDENTITY
+          scripts/build-app.sh
+          mkdir -p ../dist-app
+          ditto -c -k --keepParent target/release/bundle/macos/StickyBot.app \
+            "../dist-app/StickyBot-pr${{ github.event.pull_request.number || 'manual' }}-${GITHUB_SHA::7}-macos-arm64.zip"
+          ls -l ../dist-app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StickyBot-test-build
+          path: dist-app/*.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the PR's commits, not only its last state
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
+  changelog:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: A CHANGELOG.md line (or the "no-changelog" label)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          SKIP: ${{ contains(github.event.pull_request.labels.*.name, 'no-changelog') }}
+        run: |
+          if [ "$SKIP" = true ]; then echo "label no-changelog: skipped"; exit 0; fi
+          if git diff --name-only "$BASE" "$HEAD" | grep -qx 'CHANGELOG.md'; then
+            echo "CHANGELOG.md changed"
+          else
+            echo "::error::Add a line under [Unreleased] in CHANGELOG.md, or label the PR no-changelog (docs, CI, tests only)."
+            exit 1
+          fi
+
+  workflows:
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint
+        uses: raven-actions/actionlint@v2
+
+  # The one check the branch rule requires: green when every job above passed or was skipped.
+  ci-passed:
+    name: CI passed
+    if: always()
+    needs: [changes, firmware, agent, mac-app, secrets, changelog, workflows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: All jobs passed or were skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          # anything but success / skipped fails: failure, cancelled, and states like "abandoned"
+          # (a macOS runner GitHub never handed out), so a job that didn't run can't count as passed
+          for r in $RESULTS; do
+            case "$r" in success|skipped) ;; *) echo "::error::a job ended '$r' — re-run it"; exit 1 ;; esac
+          done

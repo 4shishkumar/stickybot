@@ -1,3 +1,7 @@
+# Everything: GitHub asks these people for a review on every pull request (one approval from
+# someone other than the author is required, docs/CONTRIBUTING.md).
+*                           @4shishkumar @ashish-kumar-noon @arbaaz-noon
+
 # Faces (docs/faces/GUIDELINES.md, "Updates"): only a face's author or a maintainer changes it.
 # The maintainers own everything under faces/; a community face's PR adds a line for its folder
 # naming its author too, e.g.
