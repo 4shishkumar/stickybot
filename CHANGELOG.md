@@ -12,6 +12,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-11-12
+
 ### Added
 - **Celebration sounds on the stick (firmware 2.7.0).** Eight new built-in clips: `applause`,
   `clap`, `cheer`, `party_horn`, `tada`, `drumroll` (a snare roll and a crash), `level_up` and
@@ -497,7 +499,8 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/4shishkumar/stickybot/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/4shishkumar/stickybot/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.5.0
 [2.4.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.4.0
 [2.3.2]: https://github.com/4shishkumar/stickybot/releases/tag/v2.3.2
 [2.3.1]: https://github.com/4shishkumar/stickybot/releases/tag/v2.3.1

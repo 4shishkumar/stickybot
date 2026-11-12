@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/macos-audio", "crates/stt", "crates/stick-link", "crates/stickybot-server", "crates/stickybot-app"]
 
 [workspace.package]
-version = "2.4.0"  # the release (tools/release_tool.py bump): StickyBot.app and /api/rust report it
+version = "2.5.0"  # the release (tools/release_tool.py bump): StickyBot.app and /api/rust report it
 edition = "2024"
 license = "MIT"
 publish = false
