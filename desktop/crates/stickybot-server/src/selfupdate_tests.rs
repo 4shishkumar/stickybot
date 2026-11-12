@@ -167,7 +167,7 @@ fn pending_against_the_version_that_runs() {
 fn the_automatic_install_needs_everything_at_once() {
     let ready = AutoFacts { on: true, check_on: true, can_install: true, idle_s: Some(660.0), ..Default::default() };
     assert!(auto_due(&ready));
-    assert!(auto_due(&AutoFacts { idle_s: None, ..ready.clone() }), "no button since start-up is idle");
+    assert!(!auto_due(&AutoFacts { idle_s: None, ..ready.clone() }), "unknown idle time is not idle");
     assert!(!auto_due(&AutoFacts { on: false, ..ready.clone() }));
     assert!(!auto_due(&AutoFacts { check_on: false, ..ready.clone() }));
     assert!(!auto_due(&AutoFacts { can_install: false, ..ready.clone() }));
@@ -586,27 +586,56 @@ async fn a_relaunch_that_fails_says_the_update_is_in_place() {
 
 // --- update_auto ----------------------------------------------------------------------------------------------------------
 
-fn set_input_ago(st: &AppState, secs: f64) {
-    *st.last_input.lock().unwrap() = Some(crate::hub::now() - secs);
+/// The app started a moment ago; `later(min)` is "min minutes from now" for `auto_tick_at`.
+fn later(min: f64) -> f64 {
+    crate::hub::now() + min * 60.0
+}
+
+/// A stick button pressed `secs` before `now`.
+fn input_before(st: &AppState, now: f64, secs: f64) {
+    *st.last_input.lock().unwrap() = Some(now - secs);
 }
 
 #[tokio::test]
 async fn the_automatic_install_starts_only_when_idle_for_ten_minutes() {
     let t = offered("auto").await;
     assert_eq!(t.st.cfg.lock().unwrap()["update_auto"], false, "off by default");
-    assert!(!auto_tick(&t.st), "off: nothing starts");
+    assert!(!auto_tick_at(&t.st, later(30.0)), "off: nothing starts");
     t.st.update_config(json!({"update_auto": true}).as_object().unwrap().clone()).unwrap();
-    set_input_ago(&t.st, 120.0);
-    assert!(!auto_tick(&t.st), "a button two minutes ago");
+    // 11 minutes in, a button two minutes ago
+    let now = later(11.0);
+    input_before(&t.st, now, 120.0);
+    assert!(!auto_tick_at(&t.st, now), "a button two minutes ago");
     assert_eq!(t.st.updates.run.phase(), Phase::Idle);
-    set_input_ago(&t.st, 11.0 * 60.0);
+    input_before(&t.st, now, 660.0);
     t.st.jobs.add(crate::firmware::Job::new());
-    assert!(!auto_tick(&t.st), "busy");
+    assert!(!auto_tick_at(&t.st, now), "busy");
     let t = offered("auto2").await;
     t.st.update_config(json!({"update_auto": true}).as_object().unwrap().clone()).unwrap();
-    set_input_ago(&t.st, 11.0 * 60.0);
-    assert!(auto_tick(&t.st));
+    input_before(&t.st, now, 660.0);
+    assert!(auto_tick_at(&t.st, now));
     until("the restart", || *t.app.restarts.lock().unwrap() == 1).await;
+}
+
+#[tokio::test]
+async fn nothing_installs_by_itself_in_the_first_ten_minutes_after_start_up() {
+    let t = offered("autostart").await;
+    t.st.update_config(json!({"update_auto": true}).as_object().unwrap().clone()).unwrap();
+    // no button since start-up: idle is counted from the start, not "forever"
+    assert!(!auto_tick(&t.st), "right after the start");
+    assert!(!auto_tick_at(&t.st, later(2.0)), "80 s .. 2 min after the start");
+    assert!(!auto_tick_at(&t.st, later(9.5)));
+    assert_eq!(t.st.updates.run.phase(), Phase::Idle);
+    assert!(t.inst.endpoints.lock().unwrap().is_empty());
+    // ten quiet minutes since the start and no button: now
+    assert!(auto_tick_at(&t.st, later(10.5)));
+    until("the restart", || *t.app.restarts.lock().unwrap() == 1).await;
+    // a button 12 minutes after the start, then 5 minutes quiet: not yet
+    let t = offered("autostart2").await;
+    t.st.update_config(json!({"update_auto": true}).as_object().unwrap().clone()).unwrap();
+    let now = later(17.0);
+    input_before(&t.st, now, 300.0);
+    assert!(!auto_tick_at(&t.st, now));
 }
 
 #[tokio::test]
@@ -614,22 +643,39 @@ async fn a_failed_automatic_install_is_not_retried_in_a_loop() {
     let t = offered("autoonce").await;
     t.st.update_config(json!({"update_auto": true}).as_object().unwrap().clone()).unwrap();
     *t.inst.download_fails.lock().unwrap() = Some(InstallError::Network("offline".into()));
-    assert!(auto_tick(&t.st));
+    let now = later(11.0);
+    assert!(auto_tick_at(&t.st, now));
     until("error", || status(&t.st)["state"] == "error").await;
     *t.inst.download_fails.lock().unwrap() = None;
-    assert!(!auto_tick(&t.st), "tried a moment ago");
+    assert!(!auto_tick_at(&t.st, now + 60.0), "tried a minute ago");
     assert_eq!(t.inst.endpoints.lock().unwrap().len(), 1);
     // a day later, it may again (the person's own button works any time)
-    t.st.updates.run.s.lock().unwrap().tried.insert(NEWER.into(), crate::hub::now() - 25.0 * 3600.0);
     t.st.updates.run.cancel(); // dismiss the error
-    assert!(auto_tick(&t.st));
+    assert!(auto_tick_at(&t.st, now + 25.0 * 3600.0));
 }
 
 #[tokio::test]
 async fn the_automatic_install_needs_the_update_check_on() {
     let t = offered("autocheck").await;
     t.st.update_config(json!({"update_auto": true, "update_check": false}).as_object().unwrap().clone()).unwrap();
-    assert!(!auto_tick(&t.st));
+    assert!(!auto_tick_at(&t.st, later(30.0)));
+}
+
+#[tokio::test]
+async fn a_cancel_during_the_last_moments_never_answers_ok_while_installing() {
+    let t = offered("cancelrace").await;
+    t.st.jobs.add(crate::firmware::Job::new()); // holds it in `waiting`
+    start(&t.st, "test").unwrap();
+    until("waiting", || status(&t.st)["waiting"].is_string()).await;
+    // cancel is decided under the lock that enters Installing: once it says true, nothing is replaced
+    assert!(cancel(&t.st));
+    until("idle", || t.st.updates.run.phase() == Phase::Idle).await;
+    assert_eq!(t.inst.installed.load(std::sync::atomic::Ordering::Relaxed), 0);
+    // and the other way round: once installing, cancel says no
+    let t = offered("cancelrace2").await;
+    start(&t.st, "test").unwrap();
+    until("the restart", || *t.app.restarts.lock().unwrap() == 1).await;
+    assert!(!cancel(&t.st));
 }
 
 // --- after the restart ----------------------------------------------------------------------------------------------------

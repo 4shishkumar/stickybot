@@ -305,7 +305,7 @@ New module `desktop/crates/stickybot-server/src/selfupdate.rs` (so `updates.rs`,
 - JS: the new helpers; the legacy shape (no `state`) still renders the old card.
 - Run: `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `python -m ruff check .` + `python -m pytest` in `mac-agent/` (venv:
-  `/private/tmp/claude-501/-Users-ashishkumar-experiments-m5Stack-exp/c1835f46-09ee-46ef-a07b-2af62033119a/scratchpad/py-venv`;
+  `<scratch>/py-venv`;
   one hooks test fails locally only because port 8660 is in use — ignore it), shellcheck on the
   scripts, actionlint on the workflows when a binary is at hand (download with a checksum into the
   scratch folder).
@@ -328,7 +328,7 @@ New module `desktop/crates/stickybot-server/src/selfupdate.rs` (so `updates.rs`,
 - Screenshots (headless Chromium from `~/Library/Caches/ms-playwright`, a temp profile, the
   dashboard served by `stickybot-headless --fake-stick` on a free port ≠ 8660/8670 with a
   temporary home and a fake installer / a small fake server) into
-  `/private/tmp/claude-501/-Users-ashishkumar-experiments-m5Stack-exp/c1835f46-09ee-46ef-a07b-2af62033119a/scratchpad/update-ui/`:
+  `<scratch>/update-ui/`:
   banner (available), progress, waiting, an error, "Updated to vX", the Settings card. Every
   browser and server started is killed afterwards. Screenshots are not committed.
 

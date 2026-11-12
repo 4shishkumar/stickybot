@@ -74,8 +74,8 @@ Ordering follows SemVer: `1.8.0-beta.2 < 1.8.0-beta.10 < 1.8.0-rc.1 < 1.8.0`.
    **Trying the Mac build before tagging:** Actions → Release → *Run workflow* on a branch runs
    only *mac-app* (no tag check, nothing published); the zip
    (`StickyBot-<version>-dev.<commit>-macos-arm64.zip`) is the run's `mac-app` artifact, with the
-   update files next to it when the secrets are set (without them the build still passes and says
-   it skipped them).
+   update files only on a tag push (a run by hand is always built without the update key: unsigned,
+   no update files; it still passes and says it skipped them).
 
    Moving to a newer sherpa-onnx (`desktop/crates/stt/Cargo.toml`) or Tauri: update
    `SHERPA_ONNX_VERSION` / `SHERPA_ONNX_ARCHIVE` / `SHERPA_ONNX_SHA256` (`shasum -a 256` of the
@@ -178,16 +178,17 @@ asks for a password and writes the private key to `<file>` and the public key to
 password somewhere safe, apart from the repo.
 
 Without the secrets a build still works: `build-app.sh` says *no update key: updater artifacts
-skipped*, the workflow's `mac-app` job passes on a pull request or a run by hand, and a tag still
-publishes the release (see above), without update files.
+skipped*, and a tag still publishes the release (see above), without update files. The release
+workflow has no pull request trigger (a tag push, or a run by hand), and it hands the key to the
+build **on a tag push only**: a run by hand on a branch is always unsigned and makes no update
+files, so unreviewed code never builds with the key.
 
 **Rotating the key** (it may have leaked, or the password is forgotten but the key file is not):
-make a new pair, put the new public key in `tauri.conf.json` and the new private key in the
-secrets, and cut a release **signed with the old key** that carries the new public key — people
-update to it (their app trusts the old key), and from then on releases are signed with the new
-one. So: first release with the new `pubkey` is still signed with the old private key; only the
-release after that is signed with the new key. The old private key must still be at hand for that
-one release.
+make a new pair and put the new public key in `tauri.conf.json`. The release that carries the new
+public key is **signed with the old key** (the secrets still hold the old private key): people
+update to it, because their app trusts the old key. Only after that release is out, swap the two
+secrets to the new private key (and password); every release from then on is signed with the new
+one. The old private key must still be at hand for that one release.
 
 **If the private key is lost** (or it leaked and nobody can use it to ship the rotation release):
 no installed app can verify an update signed with a new key, so nothing can be updated in-app any

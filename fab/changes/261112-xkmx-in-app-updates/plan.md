@@ -242,15 +242,15 @@ manual install for ≤ 2.5.0 and macOS asking for permissions again MUST be said
 
 - [x] T003 New `desktop/crates/stickybot-server/src/selfupdate.rs`: `Installer` / `Staged` traits, `NoInstaller`, `FakeInstaller` (tests), `InstallError` kinds and their sentences, `Phase` state machine, `endpoint()` with the release / debug override rules; unit tests for transitions, error words, endpoint <!-- R5 R6 R11 -->
 - [x] T004 Busy gate in `selfupdate.rs`: a `Busy` snapshot read off `AppState` (firmware job, USB flash, talk / brain, approvals / asks, wireless mic, face install) and a pure `busy_reason()`; unit tests for each reason and paused-is-not-busy <!-- R8 -->
-- [x] T005 Install flow in `selfupdate.rs` (`install`, `cancel`): refusals, download with throttled progress events, version check of the staged update, wait-while-busy (5 s / 30 min, cancellable), notify the stick, `pending` in `updates.json`, `Staged::install` on a blocking thread, `bye`, `AppControl::restart`; tests with `FakeInstaller` + `FakeApp` incl. downgrade, mismatch, signature error leaves nothing replaced <!-- R6 R7 R8 R9 -->
-- [x] T006 `desktop/crates/stickybot-server/src/updates.rs`: record `updater_asset` in `fetch`, add `state` / `progress` / `waiting` / `install_error` / `updated` / `auto` and installer-driven `install.can_update` / `why` to `status()` / `full()` and to `emit`, the pending → "Updated to vX" once logic at start-up and on connect, the `update_auto` branch in the check loop (idle 10 min, once per version per 24 h); `lib.rs`: the `installer` field; keep every existing field and test passing, add tests <!-- R6 R9 R10 R12 -->
+- [x] T005 Install flow in `selfupdate.rs` (`install`, `cancel`): refusals, download with throttled progress events, version check of the staged update, wait-while-busy (5 s / 30 min, cancellable), notify the stick, `pending` in `updates.json`, `Staged::install` on a blocking thread, `bye`, `AppControl::restart`; tests with `FakeInstaller` + `FakeApp` incl. downgrade, mismatch, signature error leaves nothing replaced <!-- R6 R7 R8 R9 --> <!-- rework: cancel / switch to Installing under one lock; re-check the busy gate after the stick notify, before Staged::install -->
+- [x] T006 `desktop/crates/stickybot-server/src/updates.rs`: record `updater_asset` in `fetch`, add `state` / `progress` / `waiting` / `install_error` / `updated` / `auto` and installer-driven `install.can_update` / `why` to `status()` / `full()` and to `emit`, the pending → "Updated to vX" once logic at start-up and on connect, the `update_auto` branch in the check loop (idle 10 min, once per version per 24 h); `lib.rs`: the `installer` field; keep every existing field and test passing, add tests <!-- R6 R9 R10 R12 --> <!-- rework: update_auto idle must count from max(last stick input, app start): no automatic install in the first 10 min after launch (R10); stale comment at updates.rs:138 -->
 - [x] T007 `desktop/crates/stickybot-server/src/api.rs`: routes `POST /api/update/install`, `POST /api/update/cancel`, `/api/update/agent` as an alias (handlers in `selfupdate.rs`), the route list at the top; API tests (202, 409, cancel, token needed, shape keeps old fields) <!-- R12 -->
 - [x] T008 New `desktop/crates/stickybot-app/src/updater.rs`: `TauriInstaller` over `tauri_plugin_updater::UpdaterExt` (run-time endpoint, download with progress, staged bytes, install), error mapping, `unavailable()` (not in a `.app`, `/AppTranslocation/`, folder not writable) as pure functions over a path with unit tests; set it on `state.installer` in `main.rs` <!-- R13 -->
 - [x] T009 `desktop/crates/stickybot-app/src/tray.rs`: "Install update vX and restart…", the running-state texts, click → `selfupdate::install` or the release page; update the module doc's menu sketch; unit tests <!-- R14 -->
 - [x] T010 [P] `tools/release_tool.py` `latest-json` + tests in `mac-agent/tests/test_release_tool.py` (shape, notes, URL, refusals) <!-- R4 -->
 - [x] T011 [P] `desktop/scripts/build-app.sh`: updater artifacts when the key is set, check they exist, the skip message; shellcheck clean <!-- R2 -->
-- [x] T012 `.github/workflows/release.yml`: secrets into the build env, tarball codesign check (ad hoc + hardened runtime), upload under release names, job output, `publish` builds `latest.json` and attaches the three files when present, warning on a tag without the key, header comment updated; actionlint if a binary can be had (download with checksum into the scratch folder) <!-- R3 -->
-- [x] T013 Dashboard: `mac-agent/stick_agent/static/updates.js` new flow behind `u.state !== undefined` (banner, card, progress, waiting + Cancel, errors + Try again + download page, "Updated to vX", `update_auto` toggle wired into the settings save), pure helpers in a small module with `mac-agent/tests/js/updates.test.mjs`; the old path untouched <!-- R15 -->
+- [x] T012 `.github/workflows/release.yml`: secrets into the build env, tarball codesign check (ad hoc + hardened runtime), upload under release names, job output, `publish` builds `latest.json` and attaches the three files when present, warning on a tag without the key, header comment updated; actionlint if a binary can be had (download with checksum into the scratch folder) <!-- R3 --> <!-- rework: pass the signing key only on tag pushes (github.event_name == 'push'), so a workflow_dispatch on a branch never signs -->
+- [x] T013 Dashboard: `mac-agent/stick_agent/static/updates.js` new flow behind `u.state !== undefined` (banner, card, progress, waiting + Cancel, errors + Try again + download page, "Updated to vX", `update_auto` toggle wired into the settings save), pure helpers in a small module with `mac-agent/tests/js/updates.test.mjs`; the old path untouched <!-- R15 --> <!-- rework: new banner flow: skip the rebuild when nothing shown changed -->
 
 ### Phase 3: Integration & Edge Cases
 
@@ -260,8 +260,8 @@ manual install for ≤ 2.5.0 and macOS asking for permissions again MUST be said
 
 ### Phase 4: Polish
 
-- [x] T017 Docs: `CHANGELOG.md` `[Unreleased]` → Added; `README.md` "Updating"; `docs/RELEASING.md` (updater files, `latest.json`, channels, "Update signing key": adding the two secrets, rotation, a lost key, first updater release by hand); `desktop/README.md` (selfupdate now ported, the new endpoints) <!-- R16 -->
-- [x] T018 Screenshots into `/private/tmp/claude-501/-Users-ashishkumar-experiments-m5Stack-exp/c1835f46-09ee-46ef-a07b-2af62033119a/scratchpad/update-ui/` (headless Chromium from `~/Library/Caches/ms-playwright`, temp profile, `stickybot-headless --fake-stick` on a free port with a temp home, or a small fake API server): banner, progress, waiting, error, "Updated to vX", Settings card; kill every browser and server started; list the files in `## Notes` <!-- R15 -->
+- [x] T017 Docs: `CHANGELOG.md` `[Unreleased]` → Added; `README.md` "Updating"; `docs/RELEASING.md` (updater files, `latest.json`, channels, "Update signing key": adding the two secrets, rotation, a lost key, first updater release by hand); `desktop/README.md` (selfupdate now ported, the new endpoints) <!-- R16 --> <!-- rework: RELEASING.md Update signing key: there is no pull_request trigger; rotation order (the old key signs the release that carries the new public key, then swap the secrets); desktop/SWITCHOVER.md:157 self-update row is stale -->
+- [x] T018 Screenshots into `<scratch>/update-ui/` (headless Chromium from `~/Library/Caches/ms-playwright`, temp profile, `stickybot-headless --fake-stick` on a free port with a temp home, or a small fake API server): banner, progress, waiting, error, "Updated to vX", Settings card; kill every browser and server started; list the files in `## Notes` <!-- R15 -->
 
 ## Execution Order
 
@@ -274,70 +274,70 @@ manual install for ≤ 2.5.0 and macOS asking for permissions again MUST be said
 
 ### Functional Completeness
 
-- [ ] A-001 R1: `tauri.conf.json` has `plugins.updater` with the given public key and the stable endpoint; no other key of the file changed; no `createUpdaterArtifacts` in it
-- [ ] A-002 R2: `build-app.sh` makes and checks the updater artifacts only when the key is set, and is shellcheck clean
-- [ ] A-003 R3: `release.yml` passes the secrets, verifies the tarball's signature, uploads tarball + `.sig`, and `publish` attaches them with `latest.json` only when present; zip and manifest steps unchanged
-- [ ] A-004 R4: `release_tool.py latest-json` writes the documented shape and refuses bad input
-- [ ] A-005 R5: `selfupdate.rs` defines the traits, `NoInstaller`, a fake, and error kinds with sentences; no Tauri in the server crate
-- [ ] A-006 R6: `/api/update` reports `state`, `progress`, `waiting`, `install_error`; hub `update` events carry them
-- [ ] A-007 R7: every refusal in R7 is implemented and worded
-- [ ] A-008 R8: the gate covers firmware (Bluetooth + USB), talk, approvals / asks, wireless mic, face install; waits and can be cancelled
-- [ ] A-009 R9: stick notify before replace, `pending` recorded, `bye` before relaunch, "Updated to vX" once after
-- [ ] A-010 R10: `update_auto` default false, settable, installs only when idle 10 min and once per version per 24 h
-- [ ] A-011 R11: `endpoint()` maps both channels; release builds ignore overrides; debug accepts only localhost
-- [ ] A-012 R12: the three routes exist, need the token, and the old fields of `/api/update` are intact
-- [ ] A-013 R13: `TauriInstaller` uses the plugin, maps errors, and reports translocated / not writable / not a bundle in words
-- [ ] A-014 R14: the menu item wording and click behaviour match R14
-- [ ] A-015 R15: the dashboard shows banner, notes, Install and restart, progress, waiting, errors, fallback, "Updated to vX", the auto toggle
-- [ ] A-016 R16: changelog, README, RELEASING.md ("Update signing key"), desktop/README.md, THIRD_PARTY_NOTICES.md updated
+- [x] A-001 R1: `tauri.conf.json` has `plugins.updater` with the given public key and the stable endpoint; no other key of the file changed; no `createUpdaterArtifacts` in it
+- [x] A-002 R2: `build-app.sh` makes and checks the updater artifacts only when the key is set, and is shellcheck clean
+- [x] A-003 R3: `release.yml` passes the secrets, verifies the tarball's signature, uploads tarball + `.sig`, and `publish` attaches them with `latest.json` only when present; zip and manifest steps unchanged
+- [x] A-004 R4: `release_tool.py latest-json` writes the documented shape and refuses bad input
+- [x] A-005 R5: `selfupdate.rs` defines the traits, `NoInstaller`, a fake, and error kinds with sentences; no Tauri in the server crate
+- [x] A-006 R6: `/api/update` reports `state`, `progress`, `waiting`, `install_error`; hub `update` events carry them
+- [x] A-007 R7: every refusal in R7 is implemented and worded
+- [x] A-008 R8: the gate covers firmware (Bluetooth + USB), talk, approvals / asks, wireless mic, face install; waits and can be cancelled
+- [x] A-009 R9: stick notify before replace, `pending` recorded, `bye` before relaunch, "Updated to vX" once after
+- [x] A-010 R10: `update_auto` default false, settable, installs only when idle 10 min and once per version per 24 h
+- [x] A-011 R11: `endpoint()` maps both channels; release builds ignore overrides; debug accepts only localhost
+- [x] A-012 R12: the three routes exist, need the token, and the old fields of `/api/update` are intact
+- [x] A-013 R13: `TauriInstaller` uses the plugin, maps errors, and reports translocated / not writable / not a bundle in words
+- [x] A-014 R14: the menu item wording and click behaviour match R14
+- [x] A-015 R15: the dashboard shows banner, notes, Install and restart, progress, waiting, errors, fallback, "Updated to vX", the auto toggle
+- [x] A-016 R16: changelog, README, RELEASING.md ("Update signing key"), desktop/README.md, THIRD_PARTY_NOTICES.md updated
 
 ### Behavioral Correctness
 
-- [ ] A-017 R12: `POST /api/update/agent` no longer answers a flat 409 in the Rust app when an install is possible; with no installer it still answers 409 with where to download
-- [ ] A-018 R14: "Update available: vX — download…" still appears, and opens the release page, when in-app install is unavailable
+- [x] A-017 R12: `POST /api/update/agent` no longer answers a flat 409 in the Rust app when an install is possible; with no installer it still answers 409 with where to download
+- [x] A-018 R14: "Update available: vX — download…" still appears, and opens the release page, when in-app install is unavailable
 
 ### Scenario Coverage
 
-- [ ] A-019 R6: a test drives `downloading → installing → restarting` with the fake installer and checks one restart
-- [ ] A-020 R8: a test holds an install behind a running firmware job and sees it continue after
-- [ ] A-021 R9: a test shows "Updated to vX" is sent once across two starts
-- [ ] A-022 R13: the integration test serves a signed fake update from 127.0.0.1 and reaches at least "verified" (state how far in Notes)
-- [ ] A-023 R15: a JS test covers the legacy shape and the progress text
+- [x] A-019 R6: a test drives `downloading → installing → restarting` with the fake installer and checks one restart
+- [x] A-020 R8: a test holds an install behind a running firmware job and sees it continue after
+- [x] A-021 R9: a test shows "Updated to vX" is sent once across two starts
+- [x] A-022 R13: the integration test serves a signed fake update from 127.0.0.1 and reaches at least "verified" (state how far in Notes)
+- [x] A-023 R15: a JS test covers the legacy shape and the progress text
 
 ### Edge Cases & Error Handling
 
-- [ ] A-024 R7: lower and equal versions are refused; a staged version mismatch is an error with nothing replaced
-- [ ] A-025 R13: a tampered tarball and a wrong key give the `signature` kind
-- [ ] A-026 R6: a second install while one runs answers 409
-- [ ] A-027 R9: a pending update that did not take is reported once and cleared
-- [ ] A-028 R3: a build without the secrets passes (script path shown to work locally or by reading the workflow logic)
+- [x] A-024 R7: lower and equal versions are refused; a staged version mismatch is an error with nothing replaced
+- [x] A-025 R13: a tampered tarball and a wrong key give the `signature` kind
+- [x] A-026 R6: a second install while one runs answers 409
+- [x] A-027 R9: a pending update that did not take is reported once and cleared
+- [x] A-028 R3: a build without the secrets passes (script path shown to work locally or by reading the workflow logic)
 
 ### Code Quality
 
-- [ ] A-029 Pattern consistency: new code follows the style of `updates.rs` / `appctl.rs` / `tray.rs` (module docs that say why, traits + fakes, width 120)
-- [ ] A-030 No unnecessary duplication: `releases::newer`, `events::notify`, `AppControl::restart`, `link.bye`, `reloadWhenBack`, `notesBlock` are reused, not re-made
-- [ ] A-031 Logic kept away from hardware / the OS: gate, state machine, endpoint, path checks are pure functions with tests
-- [ ] A-032 Errors reach the person as words, with the download page as the way out
-- [ ] A-033 Constants have a name, a unit and the reason (5 s, 30 min, 10 min, 24 h, progress rate)
-- [ ] A-034 Tests touch no real home, Bluetooth, Keychain, GitHub or `/Applications`; key material is made at run time
-- [ ] A-035 No hand-bumped version; `Cargo.lock` changed only by cargo
-- [ ] A-036 The changelog line is written for the person using StickyBot
+- [x] A-029 Pattern consistency: new code follows the style of `updates.rs` / `appctl.rs` / `tray.rs` (module docs that say why, traits + fakes, width 120)
+- [x] A-030 No unnecessary duplication: `releases::newer`, `events::notify`, `AppControl::restart`, `link.bye`, `reloadWhenBack`, `notesBlock` are reused, not re-made
+- [x] A-031 Logic kept away from hardware / the OS: gate, state machine, endpoint, path checks are pure functions with tests
+- [x] A-032 Errors reach the person as words, with the download page as the way out
+- [x] A-033 Constants have a name, a unit and the reason (5 s, 30 min, 10 min, 24 h, progress rate)
+- [x] A-034 Tests touch no real home, Bluetooth, Keychain, GitHub or `/Applications`; key material is made at run time
+- [x] A-035 No hand-bumped version; `Cargo.lock` changed only by cargo
+- [x] A-036 The changelog line is written for the person using StickyBot
 
 ### Security
 
-- [ ] A-037 R1: the public key is compiled in; the private key is referenced only as Actions secrets
-- [ ] A-038 R11: https only; no config or environment value changes the endpoint in a release build
-- [ ] A-039 R13: the signature is verified before anything is replaced
-- [ ] A-040 R7: downgrade protection holds in the server and in the plugin's comparator
+- [x] A-037 R1: the public key is compiled in; the private key is referenced only as Actions secrets
+- [x] A-038 R11: https only; no config or environment value changes the endpoint in a release build
+- [x] A-039 R13: the signature is verified before anything is replaced
+- [x] A-040 R7: downgrade protection holds in the server and in the plugin's comparator
 
 ### compatibility
 
-- [ ] A-041: the legacy Python app's update page still works with the shared JS (no `state` → old path); older firmware sees only ordinary notify messages; `PROTOCOL.md` unchanged
-- [ ] A-042: an older Rust app (≤ 2.5.0) reading a release with the new assets still finds its zip and firmware (`manifest.json` unchanged)
+- [x] A-041: the legacy Python app's update page still works with the shared JS (no `state` → old path); older firmware sees only ordinary notify messages; `PROTOCOL.md` unchanged
+- [x] A-042: an older Rust app (≤ 2.5.0) reading a release with the new assets still finds its zip and firmware (`manifest.json` unchanged)
 
 ### real_stick_check
 
-- [ ] A-043: the PR lists what a person must try: the "Updating StickyBot…" and "Updated to vX" toasts on a real stick, a real install from `/Applications` (replace + relaunch, permissions asked again), the release workflow with the real secrets — recorded as open, `needs-hardware`
+- [ ] A-043: the PR lists what a person must try: the "Updating StickyBot…" and "Updated to vX" toasts on a real stick, a real install from `/Applications` (replace + relaunch, permissions asked again), the release workflow with the real secrets — recorded as open, `needs-hardware` <!-- review: open, needs a person with a real stick and the real app (needs-hardware); not a failure -->
 
 ## Notes
 
@@ -385,7 +385,7 @@ scratch folder, never in the repo):
 
 **T018 — screenshots** (headless Chromium from `~/Library/Caches/ms-playwright`, temp profile removed; a fake Rust-app API
 server on port 8793 for the real dashboard files; both killed afterwards), in
-`/private/tmp/claude-501/-Users-ashishkumar-experiments-m5Stack-exp/c1835f46-09ee-46ef-a07b-2af62033119a/scratchpad/update-ui/`
+`<scratch>/update-ui/`
 (not committed): `1-banner-available.png`, `2-banner-downloading.png`, `3-banner-waiting.png`, `4-banner-installing.png`,
 `5-banner-error.png`, `6-banner-fallback.png`, `7-banner-updated.png`, `8-settings-card-downloading.png`,
 `9-settings-card-available.png`, `10-banner-legacy-python.png` (the old shape: old banner, no auto toggle). The driver also
@@ -404,6 +404,31 @@ checked that a live `update` event moves the bar to 75 % and that Install and re
 - The owner has added the two Actions secrets; the workflow still passes without them (PR / dispatch / fork) and warns on a
   tag without them, as planned.
 - Dashboard "Updated to vX" is dismissed per browser (localStorage `updatedSeen`), no extra endpoint.
+
+## Deletion Candidates
+
+- None — this change adds new functionality without making existing code redundant (re-review after rework cycle 1: the stale `desktop/SWITCHOVER.md` self-update row and the `updates.rs` "(it can't install itself)" comment are fixed; `NO_SELF_UPDATE`, `api.rs` `update_agent` and `tray.rs` `update_link` were already removed by the change, and no reference to them is left).
+
+### Rework cycle 1
+
+- R10: idle for `update_auto` is now measured from the later of the last stick button and this app's start (`auto_tick_at`
+  takes `now` so tests can move it): no automatic install in the first 10 minutes after start-up. The old "no button since
+  start-up is idle" assertion became the opposite; new tests cover the first 10 minutes and a button after the start. Stale
+  comment in `updates.rs` fixed.
+- T005: `Run::enter_installing` decides "cancelled?" and the switch to Installing under one lock, so `cancel` can't answer
+  200 while the install goes on (test added). The busy gate is looked at again after the "Updating StickyBot…" notify and
+  before `Staged::install`; if busy again it goes back to waiting (this re-check is code-reviewed only: no deterministic way
+  to start a talk inside the notify's await without a hook, so no test).
+- T012: the signing key and password go to the build only on a tag push
+  (`github.event_name == 'push' && secrets.… || ''`); a run by hand is always unsigned. Workflow comments and RELEASING.md
+  say so; actionlint is clean.
+- T013: the banner's new flow rebuilds only when the view, the "Updated" notice or the title changed (progress changes the
+  view, so the bar still moves); legacy path untouched; screenshot driver re-run, all checks pass.
+- T017: RELEASING.md: no pull request trigger, and the rotation order (the release with the new public key is signed with the
+  old key, then swap the secrets); `desktop/SWITCHOVER.md` self-update row updated.
+- Re-run: `cargo test --workspace` (server 421), clippy `-D warnings`, ruff, pytest (only the known hooks test), node tests
+  (20), shellcheck: all as before.
+
 
 ## Assumptions
 

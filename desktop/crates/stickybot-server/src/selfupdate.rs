@@ -611,6 +611,18 @@ impl Run {
         due || last
     }
 
+    /// Waiting -> installing, unless the person cancelled meanwhile (decided under one lock with
+    /// [`Run::cancel`], which only works before this).
+    fn enter_installing(&self) -> bool {
+        let mut s = self.s.lock().unwrap();
+        if s.cancelled {
+            return false;
+        }
+        s.phase = Phase::Installing;
+        s.waiting = None;
+        true
+    }
+
     fn set_waiting(&self, reason: &str) -> bool {
         let mut s = self.s.lock().unwrap();
         let text = format!("busy — will install when idle: {reason}");
@@ -803,31 +815,43 @@ async fn run(st: Arc<AppState>, plan: Plan, cancel: Arc<tokio::sync::Notify>) {
         (t.poll, t.max_wait)
     };
     let waited = Instant::now();
-    while let Some(why) = busy_reason(&Busy::of(&st)) {
-        if st.updates.run.cancelled() {
+    loop {
+        while let Some(why) = busy_reason(&Busy::of(&st)) {
+            if st.updates.run.cancelled() {
+                return dropped(&st);
+            }
+            if waited.elapsed() >= max_wait {
+                return failed(
+                    &st,
+                    &InstallError::Other(
+                        "StickyBot is still busy — try the update again when the stick is idle.".into(),
+                    ),
+                );
+            }
+            if st.updates.run.set_waiting(why) {
+                crate::updates::emit(&st);
+            }
+            tokio::select! {
+                () = tokio::time::sleep(poll) => {}
+                () = cancel.notified() => return dropped(&st),
+            }
+        }
+        // 3. replace: from here a cancel is too late. Checking "cancelled" and entering Installing is one
+        // step, so a cancel never answers 200 while the install goes on.
+        if !st.updates.run.enter_installing() {
             return dropped(&st);
         }
-        if waited.elapsed() >= max_wait {
-            return failed(
-                &st,
-                &InstallError::Other("StickyBot is still busy — try the update again when the stick is idle.".into()),
-            );
+        crate::updates::emit(&st);
+        // tell the stick first; that takes a moment, in which a talk may have started: look again
+        crate::events::notify(&st, "update", "Updating StickyBot…", "back in a moment", None, None, None).await;
+        if let Some(why) = busy_reason(&Busy::of(&st)) {
+            if st.updates.run.set_waiting(why) {
+                crate::updates::emit(&st);
+            }
+            continue;
         }
-        if st.updates.run.set_waiting(why) {
-            crate::updates::emit(&st);
-        }
-        tokio::select! {
-            () = tokio::time::sleep(poll) => {}
-            () = cancel.notified() => return dropped(&st),
-        }
+        break;
     }
-    if st.updates.run.cancelled() {
-        return dropped(&st);
-    }
-    // 3. replace: tell the stick first, and write down what we're about to do
-    st.updates.run.set_phase(Phase::Installing);
-    crate::updates::emit(&st);
-    crate::events::notify(&st, "update", "Updating StickyBot…", "back in a moment", None, None, None).await;
     let from = st.updates.current().to_string();
     st.updates.run.set_pending(Some(Pending { from, to: plan.version.clone(), at: crate::hub::now() }));
     st.updates.save();
@@ -918,7 +942,8 @@ pub struct AutoFacts {
     pub can_install: bool,
     pub running: bool,
     pub busy: bool,
-    /// seconds since a button was pressed on the stick (`None`: not since start-up)
+    /// seconds since the last button on the stick or since this app started, whichever is later
+    /// (a fresh start is not idle: nobody has had the chance to be seen yet)
     pub idle_s: Option<f64>,
     /// seconds since an install of this version was last started
     pub tried_s: Option<f64>,
@@ -930,25 +955,29 @@ pub fn auto_due(f: &AutoFacts) -> bool {
         && f.can_install
         && !f.running
         && !f.busy
-        && f.idle_s.is_none_or(|s| s >= AUTO_IDLE.as_secs_f64())
+        && f.idle_s.is_some_and(|s| s >= AUTO_IDLE.as_secs_f64())
         && f.tried_s.is_none_or(|s| s >= AUTO_RETRY.as_secs_f64())
 }
 
 /// The check loop's tick: installs by itself when `update_auto` says so. `true` = started.
 pub fn auto_tick(st: &Arc<AppState>) -> bool {
+    auto_tick_at(st, crate::hub::now())
+}
+
+/// [`auto_tick`] at time `now` (`hub::now()` seconds; tests move it).
+pub fn auto_tick_at(st: &Arc<AppState>, now: f64) -> bool {
     let cfg = st.cfg.lock().unwrap().clone();
     if cfg.get("update_auto").and_then(Value::as_bool) != Some(true) {
         return false;
     }
     let plan = st.updates.plan(&cfg).ok();
-    let now = crate::hub::now();
     let facts = AutoFacts {
         on: true,
         check_on: cfg.get("update_check").and_then(Value::as_bool) != Some(false),
         can_install: plan.is_some(),
         running: st.updates.run.phase().running(),
         busy: busy_reason(&Busy::of(st)).is_some(),
-        idle_s: st.last_input().map(|t| now - t),
+        idle_s: Some(now - st.last_input().unwrap_or(st.started).max(st.started)),
         tried_s: plan.as_ref().and_then(|p| st.updates.run.tried_at(&p.version)).map(|t| now - t),
     };
     auto_due(&facts) && start(st, "automatic").is_ok()

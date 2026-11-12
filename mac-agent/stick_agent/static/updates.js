@@ -171,22 +171,27 @@ function updatedPanel(n, dismiss) {
 export function mountBanner(el) {
   let shownKey = null, busy = false;
   let app = null, fullKey = null;   // the Rust app's /api/update, and the title it was fetched for
+  let drawn = null;   // what is on screen (the view and the notice): an unchanged one isn't rebuilt
   const drawNew = () => {
+    const v = view(app), n = updatedNotice(app, recall("updatedSeen", null));
+    const offer = ["offer", "fallback"].includes(v.mode);
+    const hidden = offer && recall("updateLater", null) === app.title;
+    const sig = JSON.stringify([v, hidden, n, app.title, app.firmware_update]);
+    if (sig === drawn) return;
+    drawn = sig;
     clear(el);
-    const offer = ["offer", "fallback"].includes(view(app).mode);
     const later = () => { remember("updateLater", app.title); drawNew(); };
-    if (!(offer && recall("updateLater", null) === app.title)) {
+    if (!hidden) {
       const p = installPanel(app, {refresh: refreshStatus, later: offer ? later : null});
       if (p) el.appendChild(p);
     }
-    const n = updatedNotice(app, recall("updatedSeen", null));
     if (n) el.appendChild(updatedPanel(n, () => { remember("updatedSeen", n.at); drawNew(); }));
   };
   // -> true when the new flow drew (or has nothing to draw), false when the old banner should
   const paintNew = async s => {
     if (!app || s.title !== fullKey) {
       const f = await get("/api/update");
-      if (f.error || !hasInstaller(f)) { app = null; fullKey = null; return false; }
+      if (f.error || !hasInstaller(f)) { app = null; fullKey = null; drawn = null; return false; }
       app = f; fullKey = s.title;
     } else {
       app = merge(app, s);
@@ -206,7 +211,7 @@ export function mountBanner(el) {
   const paint = async () => {
     const s = (store.status || {}).update || {};
     if (hasInstaller(s) && appFlow(s)) { if (await paintNew(s)) return; }
-    else if (app) { app = null; fullKey = null; clear(el); shownKey = null; }   // nothing about the app now
+    else if (app) { app = null; fullKey = null; drawn = null; clear(el); shownKey = null; }   // nothing about the app now
     if (!s.available) { if (!busy) { clear(el); shownKey = null; } return; }
     const key = s.title;
     if (key === shownKey || busy) return;

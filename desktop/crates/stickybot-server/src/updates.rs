@@ -135,7 +135,7 @@ impl Updates {
         let lat = s.latest.clone();
         let fw = lat.as_ref().and_then(|l| l.get("firmware")).and_then(Value::as_str).map(str::to_string);
         let firmware_update = fw.is_some() && s.stick_fw.is_some() && releases::newer(fw.as_deref(), s.stick_fw.as_deref());
-        // a newer StickyBot.app: only when the release has the download (it can't install itself)
+        // a newer StickyBot.app: only when the release has the Mac app's download (installable in-app only with `latest.json` too: `selfupdate::plan`)
         let tag = lat.as_ref().and_then(|l| l.get("tag")).and_then(Value::as_str).unwrap_or("").to_string();
         let ver = lat.as_ref().and_then(|l| l.get("version")).and_then(Value::as_str).map(str::to_string);
         let has_app = lat.as_ref().is_some_and(|l| l.get("app_asset").is_some_and(Value::is_string));

@@ -20,17 +20,18 @@
 #
 # The update key: the repository secrets TAURI_SIGNING_PRIVATE_KEY and
 # TAURI_SIGNING_PRIVATE_KEY_PASSWORD (docs/RELEASING.md, "Update signing key"). The Mac app carries
-# the matching public key and installs only updates signed with the private one. Without the
-# secrets (a run by hand from a fork, say) the build still passes and just leaves the update files
-# out; a tag without them still publishes the release, with a warning that it can't be installed
-# from inside the app.
+# the matching public key and installs only updates signed with the private one. The key is handed
+# to the build on a tag push only: a run by hand (workflow_dispatch, on any branch) never gets it,
+# so unreviewed code is never built with the key; it builds unsigned, without update files, and
+# passes. The same goes for a run without the secrets (a fork); a tag without them still publishes
+# the release, with a warning that it can't be installed from inside the app.
 #
 # Run it by hand (Actions → Release → Run workflow, on any branch) to try the Mac app build before
-# tagging: only mac-app runs, nothing is published, and the zip (and the update files, when the
-# secrets are there) are a workflow artifact.
+# tagging: only mac-app runs, nothing is published, and the zip is a workflow artifact (never the
+# update files: the signing key only reaches a tag build).
 #
 # The agent's tests here leave out its macOS-only libraries (rumps, MLX, PortAudio), which they
-# don't need, as CI on pull requests does (ci.yml). Only GITHUB_TOKEN is used.
+# don't need, as CI on pull requests does (ci.yml). Secrets: GITHUB_TOKEN and, on a tag, the two TAURI_SIGNING_* ones.
 name: Release
 
 on:
@@ -214,9 +215,10 @@ jobs:
       - name: Build StickyBot.app (ad-hoc signature, and the signed update when the key is set)
         env:
           STICKYBOT_VERSION: ${{ steps.names.outputs.version }}
-          # empty when the secrets aren't set: build-app.sh then skips the update files
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # only on a tag push, and empty when the secrets aren't set (or on a run by hand, which
+          # may build any branch): build-app.sh then skips the update files
+          TAURI_SIGNING_PRIVATE_KEY: ${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: |
           unset APPLE_SIGNING_IDENTITY STICKYBOT_SIGNING_IDENTITY
           scripts/build-app.sh
