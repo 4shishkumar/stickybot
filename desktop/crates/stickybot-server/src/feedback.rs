@@ -40,8 +40,13 @@ pub const PAYLOAD_VERSION: u32 = 1;
 /// reports "My reports" lists
 pub const LIST_MAX: usize = 50;
 
-/// The team's Apps Script web app (`https://script.google.com/macros/s/<deployment>/exec`), empty
-/// until it's deployed; config `feedback_url` overrides it.
+/// The team's Apps Script web app (docs/FEEDBACK.md): it only appends rows to the feedback Sheet,
+/// so the address isn't a secret. Config `feedback_url` overrides it.
+#[cfg(not(test))]
+pub const DEFAULT_URL: &str =
+    "https://script.google.com/macros/s/AKfycbz1YO2s19ZgnXvwhYelhTxYu60bSQStxgwNX3G0rAMTcfB4bhLh9f0_uCdDD5brwysr/exec";
+/// Tests never reach the real one: unset means "not set up" there.
+#[cfg(test)]
 pub const DEFAULT_URL: &str = "";
 
 /// A feedback address we post to: an Apps Script web app over https, or this Mac (tests, a
