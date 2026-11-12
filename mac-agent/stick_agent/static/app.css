@@ -183,6 +183,14 @@ select::-ms-expand { display: none; }
 .list > .item:first-child { border-top: 0; }
 .list > .item .what { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .list > .item .what .sub { color: var(--faint); font-size: 12px; }
+/* Events: a level and a sound per event kind */
+.list > .ev-row .ev-level { width: 280px; }
+.list > .ev-row .ev-sound { width: 210px; }
+@media (max-width: 760px) {
+  .list > .ev-row { flex-wrap: wrap; gap: 8px; }
+  .list > .ev-row .what { flex-basis: 100%; }
+  .list > .ev-row .ev-level, .list > .ev-row .ev-sound { width: auto; flex: 1 1 0; min-width: 0; }
+}
 
 /* ---------- state pills ---------- */
 .pill { display: inline-flex; align-items: center; gap: 7px; padding: 3px 11px 3px 9px; border-radius: 99px; border: 1px solid var(--line);

@@ -7,7 +7,7 @@ builds in work by others under these licences.
 | What | Where | Licence |
 |---|---|---|
 | **Inter** font (Rasmus Andersson) — and the fonts generated from it | `m5-stick-s3/tools/fonts/Inter.ttf`, `m5-stick-s3/src/fonts_vlw.cpp` | SIL Open Font License 1.1 — [OFL.txt](m5-stick-s3/tools/fonts/OFL.txt) |
-| **Kenney** sound packs (Interface Sounds, UI Audio, Music Jingles) — the clips built into the firmware | `m5-stick-s3/src/sounds_clips.cpp` (packs are downloaded by `tools/make_sounds.py`, not committed) | CC0 1.0 (public domain) — [kenney.nl](https://kenney.nl) |
+| **Kenney** sound packs (Interface Sounds, UI Audio, Music Jingles) — the clips built into the firmware | `m5-stick-s3/src/sounds_clips.cpp` (packs are downloaded by `tools/make_sounds.py`, not committed) | CC0 1.0 (public domain) — [kenney.nl](https://kenney.nl). The celebration clips next to them (applause, cheer, ta-da…) are synthesized by `tools/synth_sounds.py`, no third-party audio; each clip's source: [m5-stick-s3/SOUNDS.md](m5-stick-s3/SOUNDS.md) |
 
 ## Built into the stick firmware (and the bundled `mac-agent/stick_agent/firmware/*.bin`)
 | Library | Licence |

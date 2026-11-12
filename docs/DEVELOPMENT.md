@@ -84,12 +84,16 @@ Phrases use `{n}` (a number), `{app}` / `{q}` (words); actions `open_url` (+ `br
 Add a case to `tests/test_commands.py`.
 
 **A sound:** a beep → add it to `TUNES` in `m5-stick-s3/src/sound.cpp`; a real clip → add it
-to `CLIPS` in `tools/make_sounds.py` and run it. A new *moment* → a `Cue` in `sound.h`, an
+to `CLIPS` in `tools/make_sounds.py` and run it (CC0 / public-domain sources only, or one made
+by `tools/synth_sounds.py` as `"synth:<name>"`; list its source in `m5-stick-s3/SOUNDS.md`;
+`test_builtin_clips` checks every clip decodes). A new *moment* → a `Cue` in `sound.h`, an
 `EVENTS` row in `sound.cpp` (name + default), call `sound::play(...)`, and add the row to
 `SOUND_EVENTS` in the dashboard (`dashboard.html`).
 
 **An event kind** (Mac agent): add it to `KINDS` in `stick_agent/events.py` (default level,
-icon, sample title) and call `agent.notifier.notify("<kind>", title, sub)` where it happens.
+icon, sample title; its own sound, if any, in `DEFAULT_SOUNDS`) and call
+`agent.notifier.notify("<kind>", title, sub)` where it happens. The Rust app has the same table
+in `desktop/crates/stickybot-server/src/events.rs`.
 The dashboard's Events tab picks it up from `/api/events/kinds`. Test it in `tests/test_events.py`.
 
 **A screen** (stick): a `draw…` function in `src/ui.cpp` (declared in `ui.h`), shown from

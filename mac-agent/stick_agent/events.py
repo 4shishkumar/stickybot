@@ -8,12 +8,20 @@ Something happens (a PR merged, Claude Code finished a long task...) -> a
   off        nothing
 During quiet hours events still show, but silently.
 
+Each kind can also have its own sound (Events tab, config "event_sounds" {kind: name | "off"}):
+a clip or tune the stick has ("applause"), "off", or "" for its level's default sound (the stick
+picks it: celebrate jingle_win, nice confirmation_002, headsup question_001). PR merged, release
+and CI fixed have their own by default (DEFAULT_SOUNDS, firmware 2.7.0's celebration clips). A
+name the stick doesn't list goes out as "" (firmware 2.7.0 falls back by itself; older ones would
+play nothing).
+
 Sent to the stick as:
   {"src":"agent","event":{"id","level","title","sub","icon","sound"}}
 and the stick answers {"src":"agent","evt":"event_shown","id"}.
 """
 import json
 import logging
+import re
 import time
 
 from . import config
@@ -40,6 +48,12 @@ KINDS = {
     "test":              ("nice",      "bell",   "Test event",                "from the dashboard"),
 }
 DEFAULT_RULES = {k: v[0] for k, v in KINDS.items()}
+# kind -> its own sound (the rest: "" = the level's default, chosen on the stick)
+DEFAULT_SOUNDS = {"pr_merged": "applause", "release": "party_horn", "ci_fixed": "cheer"}
+LEVEL_SOUNDS = {"celebrate": "jingle_win", "nice": "confirmation_002", "headsup": "question_001"}  # events.cpp
+# firmware 2.7.0's celebration clips: offered while the stick hasn't told us its list
+CELEBRATION_SOUNDS = ("applause", "clap", "cheer", "party_horn", "tada", "drumroll", "level_up", "coins")
+_NAME = re.compile(r"[A-Za-z0-9_-]{1,32}")
 EVENTS_LOG = config.HOME / "events.jsonl"
 
 
@@ -47,6 +61,48 @@ def rules(cfg):
     r = dict(DEFAULT_RULES)
     r.update({k: v for k, v in (cfg.get("event_rules") or {}).items() if v in LEVELS})
     return r
+
+
+def _sound_ok(v):
+    return isinstance(v, str) and (v in ("", "off") or bool(_NAME.fullmatch(v)))
+
+
+def sounds(cfg):
+    """kind -> its sound: a name, "off", or "" (the level's default)."""
+    s = {k: DEFAULT_SOUNDS.get(k, "") for k in KINDS}
+    s.update({k: v for k, v in (cfg.get("event_sounds") or {}).items() if k in KINDS and _sound_ok(v)})
+    return s
+
+
+def tune_list(stick_sounds):
+    """The stick's tunes from its last sound report, or None if it hasn't sent one."""
+    t = (stick_sounds or {}).get("tunes")
+    return [x for x in t if isinstance(x, str)] if isinstance(t, list) else None
+
+
+def for_stick(name, tunes):
+    """The sound to send: a name the stick doesn't have becomes "" (its level's default)."""
+    return name if name in ("", "off") or tunes is None or name in tunes else ""
+
+
+def valid_config(body, tunes=None, current=None):
+    """'' if event_sounds in a PUT /api/config body is fine, else what's wrong. New names must be
+    ones the stick has (when it has told us); a kind's current one (saved or default) may stay, as
+    the page sends them all (another stick, older firmware: they go out as "" then)."""
+    es = body.get("event_sounds")
+    if es is None:
+        return ""
+    if not isinstance(es, dict):
+        return "event_sounds must map event kinds to sound names"
+    now = sounds(current or {})
+    for k, v in es.items():
+        if k not in KINDS:
+            return f"event_sounds: no event kind {k!r}"
+        if not _sound_ok(v):
+            return f"event_sounds.{k}: not a sound name"
+        if tunes is not None and v not in ("", "off") and v not in tunes and now.get(k) != v:
+            return f"event_sounds.{k}: the stick has no sound {v!r}"
+    return ""
 
 
 def _minutes(hhmm):
@@ -73,9 +129,10 @@ class Events:
         self._n = 0
         self.shown = set()  # ids the stick acknowledged
 
-    async def notify(self, kind, title, sub="", icon=None, level=None, sound=""):
-        """Fires an event of `kind` (its level comes from the rules unless given).
-        Returns the event dict, or None if this kind is turned off."""
+    async def notify(self, kind, title, sub="", icon=None, level=None, sound=None):
+        """Fires an event of `kind` (its level and sound come from the settings unless given;
+        sound "" = the level's default, "off" = silent). Returns the event dict, or None if this
+        kind is turned off."""
         from .core import stick_text  # (core imports us)
         cfg = self.agent.cfg
         level = level or rules(cfg).get(kind, "nice")
@@ -84,6 +141,9 @@ class Events:
             return None
         self._n += 1
         quiet = quiet_now(cfg)
+        if sound is None:
+            sound = sounds(cfg).get(kind, "")
+        sound = for_stick(sound, tune_list(self.agent.sounds))
         ev = {"id": f"e{self._n}", "level": level, "title": stick_text(title)[:40], "sub": stick_text(sub)[:90],
               "icon": icon or KINDS.get(kind, (None, "bell"))[1], "sound": "off" if quiet else sound,
               "kind": kind}  # the stick's faces react to it (firmware 2.1.0+; older ones ignore it)
@@ -99,9 +159,12 @@ class Events:
                  "" if sent else " (stick not connected)")
         return ev
 
-    async def test(self, kind):
+    async def test(self, kind, level=None, sound=None):
+        """The kind's sample, with the level / sound picked on the page if given (saved or not)."""
         lvl, icon, title, sub = KINDS.get(kind, KINDS["test"])
-        return await self.notify(kind, title, sub, icon)
+        level = level if level in LEVELS else None
+        sound = sound if _sound_ok(sound) else None
+        return await self.notify(kind, title, sub, icon, level=level, sound=sound)
 
     def acked(self, eid):
         self.shown.add(eid)

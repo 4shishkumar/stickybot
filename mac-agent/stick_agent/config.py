@@ -67,6 +67,9 @@ DEFAULT_CONFIG = {
     # Events on the stick (see events.py): kind -> "celebrate" | "nice" | "headsup" | "off";
     # kinds not listed use events.DEFAULT_RULES
     "event_rules": {},
+    # kind -> its own sound: a clip/tune the stick has, "off", or "" = the level's default;
+    # kinds not listed use events.DEFAULT_SOUNDS (PR merged: applause, release: party horn, CI fixed: cheer)
+    "event_sounds": {},
     "quiet_hours": {"on": False, "from": "19:00", "to": "09:00"},  # events show, but silently
     "claude_done_min_s": 120,  # "Claude finished" only for tasks at least this long
     "github": {"on": True, "interval_s": 120, "primary_repo": ""},  # PR watcher (gh CLI)

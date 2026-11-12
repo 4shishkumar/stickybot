@@ -3992,6 +3992,7 @@ dependencies = [
 name = "stickybot-app"
 version = "2.4.0"
 dependencies = [
+ "block2",
  "log",
  "objc2",
  "objc2-foundation",

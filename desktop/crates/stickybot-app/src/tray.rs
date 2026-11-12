@@ -8,6 +8,7 @@
 //! Open StickyBot                     its own window
 //! Open in browser
 //! Check for Updates…                 its title shows the result for a few seconds
+//! Report an issue…                   the dashboard's Feedback page
 //! Stick volume ▸ Mute / 25% / 50% / 75% / 100%   (a check on the current one)
 //! Sounds on the stick                (checked while on)
 //! ───
@@ -220,6 +221,7 @@ impl Tray {
         let open = MenuItem::with_id(app, "open", format!("Open {name}"), true, None::<&str>)?;
         let browser = MenuItem::with_id(app, "browser", "Open in browser", true, None::<&str>)?;
         let check = MenuItem::with_id(app, "check", CHECK, true, None::<&str>)?;
+        let feedback = MenuItem::with_id(app, "feedback", "Report an issue…", true, None::<&str>)?;
         let volume = VOLUMES
             .iter()
             .map(|&p| {
@@ -244,6 +246,7 @@ impl Tray {
                 &open,
                 &browser,
                 &check,
+                &feedback,
                 &volume_menu,
                 &sounds,
                 &sep()?,
@@ -312,6 +315,9 @@ impl Tray {
     /// it, off the main thread; no lock is held while the menu is changed (that waits for the main
     /// thread, where the clicks run).
     fn refresh(&self) {
+        if let Some(d) = crate::dock::of(&self.app) {
+            d.sync(&self.app); // "Always show in the Dock" changed in Settings
+        }
         let snap = Snapshot::of(&self.st);
         let status = status_text(&snap);
         let next = Shown {
@@ -408,6 +414,7 @@ impl Tray {
                 }
             }
             "setup" => crate::show_dashboard_at(&self.app, "install"),
+            "feedback" => crate::show_dashboard_at(&self.app, "feedback"),
             "browser" => {
                 let _ = std::process::Command::new("open").arg(st.url()).spawn();
             }
