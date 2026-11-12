@@ -40,6 +40,7 @@ pub mod speech;
 pub mod talk;
 pub mod weather;
 pub mod releases;
+pub mod selfupdate;
 pub mod updates;
 pub mod usb;
 pub mod wmic;

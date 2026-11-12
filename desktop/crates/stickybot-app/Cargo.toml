@@ -17,9 +17,12 @@ tauri-build = { version = "2", features = [] }
 stickybot-server = { path = "../stickybot-server" }
 stick-link = { path = "../stick-link" }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# in-app updates (updater.rs): download, minisign check, replace the bundle
+tauri-plugin-updater = "2"
 log = "0.4"
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "sync"] }
+futures-util = { version = "0.3", default-features = false }
 
 # start at login (SMAppService, login.rs)
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -27,6 +30,19 @@ objc2 = "0.6"
 # the Dock: NSApplicationDidBecomeActiveNotification's block (dock.rs)
 block2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+
+# can this app write where it sits (updater.rs): access(2), geteuid(2)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# updater.rs's tests: the real plugin against a local server, with a key pair made at run time
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+minisign = "0.9"
+base64 = "0.23"
+tar = "0.4"
+flate2 = "1"
 
 [features]
 # `cargo tauri dev` turns this on; it must exist

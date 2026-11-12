@@ -1,0 +1,54 @@
+id: xkmx
+name: 261112-xkmx-in-app-updates
+created: 2026-11-12T17:12:31Z
+created_by: ashish-kumar-noon
+change_type: feat
+issues: []
+progress:
+    intake: done
+    apply: done
+    review: active
+    hydrate: pending
+    ship: pending
+    review-pr: pending
+plan:
+    generated: true
+    task_count: 18
+    acceptance_count: 43
+    acceptance_completed: 0
+confidence:
+    certain: 4
+    confident: 11
+    tentative: 0
+    unresolved: 0
+    score: 3.4
+    fuzzy: true
+    dimensions:
+        signal: 72.3
+        reversibility: 81.3
+        competence: 73.3
+        disambiguation: 71.0
+stage_metrics:
+    intake: {started_at: "2026-11-12T17:12:31Z", driver: fab-new, iterations: 1, completed_at: "2026-11-12T17:14:58Z"}
+    apply: {started_at: "2026-11-12T17:14:58Z", driver: fab-fff, iterations: 1, completed_at: "2026-11-12T19:36:11Z"}
+    review: {started_at: "2026-11-12T19:36:11Z", driver: fab-fff, iterations: 1}
+prs: []
+change_type_source: explicit
+base_branch: main
+true_impact:
+    added: 0
+    deleted: 0
+    net: 0
+    excluding:
+        added: 0
+        deleted: 0
+        net: 0
+    tests:
+        added: 0
+        deleted: 0
+        net: 0
+    computed_at: "2026-11-12T19:36:11Z"
+    computed_at_stage: apply
+# base_branch: written by /git-branch or /fab-new when the change's branch is created (no placeholder here).
+# true_impact: lazily created on first stage-finish that computes it (no placeholder here).
+last_updated: 2026-11-12T19:36:11Z

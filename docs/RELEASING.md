@@ -52,7 +52,11 @@ Ordering follows SemVer: `1.8.0-beta.2 < 1.8.0-beta.10 < 1.8.0-rc.1 < 1.8.0`.
      `cargo test --workspace`, `cargo clippy -D warnings`, then `desktop/scripts/build-app.sh`
      with the release's version, **signed ad hoc** (no Apple certificate in CI: users open it with
      right-click → Open, see the README's *Install the Mac app*), zipped with `ditto` as
-     `StickyBot-X.Y.Z-macos-arm64.zip` (~16 MB). Cached: cargo's registry and `target/`
+     `StickyBot-X.Y.Z-macos-arm64.zip` (~16 MB). With the update key (below) it also makes the
+     signed update for the in-app updater: `StickyBot.app.tar.gz` and its `.sig`, checked after the
+     build (the `.app` inside must still pass `codesign --verify --deep --strict`, be signed ad hoc
+     and have the hardened runtime flag) and uploaded as
+     `StickyBot-X.Y.Z-macos-arm64.app.tar.gz` and `….app.tar.gz.sig`. Cached: cargo's registry and `target/`
      (Swatinem/rust-cache), the Tauri CLI (`TAURI_CLI_VERSION`, installed with
      `cargo install --locked` on a cache miss) and sherpa-onnx's prebuilt libraries (a pinned
      URL, checked against `SHERPA_ONNX_SHA256`; the crate's own build script would download them
@@ -60,20 +64,30 @@ Ordering follows SemVer: `1.8.0-beta.2 < 1.8.0-beta.10 < 1.8.0-rc.1 < 1.8.0`.
      15–25 minutes cold, 5–10 with the caches.
    - **publish** (ubuntu-latest): `tools/release_tool.py add-app` lists the zip in
      `manifest.json` (`"apps": [{name, platform, version, file, size, sha256}]`; agents read only
-     the firmware keys, so older ones are unaffected), then creates the GitHub release
-     "StickyBot vX.Y.Z" with the 5 firmware assets, the zip and the changelog entry as notes, as
-     a prerelease when the tag has a `-` suffix
+     the firmware keys, so older ones are unaffected), writes `latest.json` for the in-app updater
+     when the signed update exists (`tools/release_tool.py latest-json`: the version, the
+     changelog entry as `notes`, the update's signature and its download URL), then creates the
+     GitHub release "StickyBot vX.Y.Z" with the 5 firmware assets, the zip, the update files
+     (`.app.tar.gz`, `.sig`, `latest.json`) and the changelog entry as notes, as a prerelease when
+     the tag has a `-` suffix
 
    **Trying the Mac build before tagging:** Actions → Release → *Run workflow* on a branch runs
    only *mac-app* (no tag check, nothing published); the zip
-   (`StickyBot-<version>-dev.<commit>-macos-arm64.zip`) is the run's `mac-app` artifact.
+   (`StickyBot-<version>-dev.<commit>-macos-arm64.zip`) is the run's `mac-app` artifact, with the
+   update files next to it when the secrets are set (without them the build still passes and says
+   it skipped them).
 
    Moving to a newer sherpa-onnx (`desktop/crates/stt/Cargo.toml`) or Tauri: update
    `SHERPA_ONNX_VERSION` / `SHERPA_ONNX_ARCHIVE` / `SHERPA_ONNX_SHA256` (`shasum -a 256` of the
    `osx-arm64-static-lib` archive from k2-fsa's release) or `TAURI_CLI_VERSION` at the top of the
    workflow.
 
-   Only the built-in `GITHUB_TOKEN` is used. If the workflow fails, fix the problem, delete
+   Besides the built-in `GITHUB_TOKEN`, the only secrets are the two update-key ones
+   (`TAURI_SIGNING_PRIVATE_KEY` and its password, see *Update signing key*). **A tag pushed without
+   them still publishes the release**, with a warning in the run: it just has no update file, so
+   people install it by hand (a release that can't be installed from inside the app is better than
+   firmware that can't be released at all; if you'd rather fail the tag, add `exit 1` to the two
+   "no update" branches of the workflow). If the workflow fails, fix the problem, delete
    the tag (`git tag -d v1.8.0 && git push origin :refs/tags/v1.8.0`) and the GitHub
    release if one was created, then tag again.
 
@@ -112,6 +126,83 @@ git push origin v1.7.2
     OTA, plug in through `updates.register_firmware_updater()` and appear next to it.
 - **Re-running install.sh** moves a release install to the newest stable release after it.
   A fresh install starts on the latest stable release (or `main` before the first one).
+- **StickyBot.app (the Rust app) installs its own updates** (*Install update vX and restart…* in
+  the menu, *Install and restart* in the dashboard): see the next section.
+
+## Updates inside StickyBot.app
+
+A release that has `latest.json` (and the signed `StickyBot-X.Y.Z-macos-arm64.app.tar.gz` it
+points at) can be installed from inside the Mac app. The app (`stickybot-app`, Tauri's updater
+plugin) reads `latest.json`, downloads the tarball, checks its minisign signature **over the whole
+download** against the public key built into the app (`plugins.updater.pubkey` in
+`desktop/crates/stickybot-app/tauri.conf.json`, with `requireSignedVersion` so a signature also
+binds the version it was made for), and only then swaps the `.app` for the new one and opens it
+again. It never installs a version that isn't newer than the running one, and it does nothing
+without that signature.
+
+| Channel (Settings → Updates) | `latest.json` it reads |
+|---|---|
+| stable (default) | `https://github.com/4shishkumar/stickybot/releases/latest/download/latest.json` (GitHub's "latest" is never a prerelease) |
+| beta | `https://github.com/4shishkumar/stickybot/releases/download/<tag>/latest.json` for the release the update check picked (newest by SemVer, prereleases included; for a stable one that is its own file) |
+
+The address is built from the repo compiled into the app and a checked tag; no setting or
+environment variable changes it in a release build. A release without `latest.json` (anything up to
+2.5.0, or one published without the key) keeps the old behaviour: *Update available: vX —
+download…* and the release page.
+
+The Mac app can't replace itself where it can't write (a translocated, read-only copy; an
+Applications folder this user can't change) or when it isn't a `.app` (a developer build): there it
+falls back to the release page, and it never asks for an administrator password.
+
+**Versions up to 2.5.0 have no updater inside.** The first release with it is installed by hand,
+once, like any first install (README: *Install the Mac app*); the changelog line and the release
+notes say so.
+
+### Update signing key
+
+The update key is a minisign key pair made by the Tauri CLI. **The public key is in the repo**
+(`tauri.conf.json`); **the private key lives only in this repository's Actions secrets** (plus the
+owner's own backup of it), nowhere else: never in the repo, a test or a log.
+
+Add the two secrets (the owner does this; once):
+
+1. Settings → Secrets and variables → Actions → *New repository secret*.
+2. `TAURI_SIGNING_PRIVATE_KEY`: the private key (the content of the key file, the long base64
+   text, or the path where the Tauri CLI wrote it when run locally).
+3. `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: its password (empty if the key has none).
+
+Make a key pair (only when there isn't one, or to rotate): `cargo tauri signer generate -w <file>`
+asks for a password and writes the private key to `<file>` and the public key to `<file>.pub`;
+`TAURI_SIGNING_PRIVATE_KEY` / `_PASSWORD` in the environment (or the same secrets) are what
+`desktop/scripts/build-app.sh` and the workflow sign with. Keep a copy of the private key and its
+password somewhere safe, apart from the repo.
+
+Without the secrets a build still works: `build-app.sh` says *no update key: updater artifacts
+skipped*, the workflow's `mac-app` job passes on a pull request or a run by hand, and a tag still
+publishes the release (see above), without update files.
+
+**Rotating the key** (it may have leaked, or the password is forgotten but the key file is not):
+make a new pair, put the new public key in `tauri.conf.json` and the new private key in the
+secrets, and cut a release **signed with the old key** that carries the new public key — people
+update to it (their app trusts the old key), and from then on releases are signed with the new
+one. So: first release with the new `pubkey` is still signed with the old private key; only the
+release after that is signed with the new key. The old private key must still be at hand for that
+one release.
+
+**If the private key is lost** (or it leaked and nobody can use it to ship the rotation release):
+no installed app can verify an update signed with a new key, so nothing can be updated in-app any
+more. Make a new pair, put its public key in `tauri.conf.json`, release, and tell people to
+install that release **by hand once** (as for the first updater release); in-app updates work
+again from then on.
+
+### Checking a release's update file
+
+`latest.json` is plain JSON (Tauri's static update format: `version`, `notes`, `pub_date`,
+`platforms.darwin-aarch64.{signature,url}`); `signature` is the `.sig` file's content. Before
+tagging, `tools/release_tool.py latest-json out.json --version X.Y.Z --tag vX.Y.Z --sig <file>.sig
+--asset StickyBot-X.Y.Z-macos-arm64.app.tar.gz` shows what the workflow will write; it refuses an
+empty signature, a version that isn't SemVer and an asset or repo name that wouldn't give
+`https://github.com/<repo>/releases/download/<tag>/<asset>`.
 
 ## The BlackHole pin (setup page)
 

@@ -28,5 +28,12 @@
       "minimumSystemVersion": "13.0",
       "signingIdentity": null
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE2RURCNUI3QzlEMDVENTAKUldSUVhkREp0N1h0Rm9vUzUzZkJHbVc1UUlVaXpOTnVqTG1zQXkyRDZlNWZhNzhFOHZjWVRKWU4K",
+      "endpoints": ["https://github.com/4shishkumar/stickybot/releases/latest/download/latest.json"],
+      "requireSignedVersion": true
+    }
   }
 }

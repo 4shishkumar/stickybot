@@ -1,0 +1,6 @@
+{"action":"enter","driver":"fab-new","event":"stage-transition","stage":"intake","ts":"2026-11-12T17:12:31Z"}
+{"args":"Build in-app updates for the StickyBot Mac app: click, downloads in the background, verifies, installs, restarts (Tauri updater plugin, signed releases, latest.json, update_auto)","cmd":"fab-new","event":"command","ts":"2026-11-12T17:12:31Z"}
+{"delta":"+3.4","event":"confidence","score":3.4,"trigger":"calc-score","ts":"2026-11-12T17:14:38Z"}
+{"cmd":"fab-fff","event":"command","ts":"2026-11-12T17:14:53Z"}
+{"action":"enter","driver":"fab-fff","event":"stage-transition","stage":"apply","ts":"2026-11-12T17:14:58Z"}
+{"action":"enter","driver":"fab-fff","event":"stage-transition","stage":"review","ts":"2026-11-12T19:36:11Z"}

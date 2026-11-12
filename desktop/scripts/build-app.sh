@@ -12,6 +12,13 @@
 # signed ad hoc (`codesign -s -`): it works, but every rebuild is a new identity and macOS asks
 # for its permissions again. The release workflow builds it ad hoc (.github/workflows/release.yml).
 # Tauri reads APPLE_SIGNING_IDENTITY (it overrides bundle.macOS.signingIdentity); "-" is ad hoc.
+#
+# In-app updates: with the update key in TAURI_SIGNING_PRIVATE_KEY (the key itself or a path to
+# it; its password in TAURI_SIGNING_PRIVATE_KEY_PASSWORD) the build also makes the signed update,
+# StickyBot.app.tar.gz and StickyBot.app.tar.gz.sig next to the .app, and fails if either is
+# missing. Without the key (a local or pull request build) it builds as before and says it
+# skipped them. The key is the release owner's (docs/RELEASING.md, "Update signing key"): never
+# put it in the repo.
 set -euo pipefail
 cd "$(dirname "$0")/../crates/stickybot-app"
 
@@ -29,8 +36,29 @@ args=(--bundles app)
 if [ -n "${STICKYBOT_VERSION:-}" ]; then
   args+=(--config "{\"version\": \"$STICKYBOT_VERSION\"}")
 fi
+# asking Tauri for updater artifacts without a key fails the build, so only ask when there is one
+# (tauri.conf.json does not set bundle.createUpdaterArtifacts for that reason)
+updater=no
+if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+  args+=(--config '{"bundle": {"createUpdaterArtifacts": true}}')
+  updater=yes
+else
+  echo "no update key: updater artifacts skipped (this build can't be installed from inside the app)" >&2
+fi
 cargo tauri build "${args[@]}"
-APP="$(cd ../.. && pwd)/target/release/bundle/macos/StickyBot.app"
+BUNDLE="$(cd ../.. && pwd)/target/release/bundle/macos"
+APP="$BUNDLE/StickyBot.app"
+if [ "$updater" = yes ]; then
+  for f in "$BUNDLE/StickyBot.app.tar.gz" "$BUNDLE/StickyBot.app.tar.gz.sig"; do
+    if [ ! -s "$f" ]; then
+      echo "error: $f was not made (is TAURI_SIGNING_PRIVATE_KEY a valid key, and its password in TAURI_SIGNING_PRIVATE_KEY_PASSWORD?)" >&2
+      exit 1
+    fi
+  done
+fi
 codesign --verify --deep --strict --verbose=1 "$APP"
 codesign -dv "$APP" 2>&1 | grep -E "^(Identifier|Authority|TeamIdentifier|Signature|CodeDirectory)" || true
 echo "built: $APP"
+if [ "$updater" = yes ]; then
+  echo "update files: $BUNDLE/StickyBot.app.tar.gz and .sig"
+fi

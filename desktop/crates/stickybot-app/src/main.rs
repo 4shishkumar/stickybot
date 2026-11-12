@@ -15,6 +15,7 @@ mod dock;
 mod icon;
 mod login;
 mod tray;
+mod updater;
 mod window;
 
 pub(crate) use window::show_dashboard_at;
@@ -30,6 +31,7 @@ fn main() {
     stickybot_server::logs::init(&opts.home.join("app.log")); // stderr + app.log + the Logs page
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build()) // in-app updates (updater.rs)
         // closing the dashboard window: back to the menu bar only (unless "Always show in the Dock")
         .on_window_event(|w, ev| {
             if w.label() == window::WINDOW
@@ -48,6 +50,7 @@ fn main() {
             let state = running.state.clone();
             *state.login_item.lock().unwrap() = Arc::new(login::AppLoginItem);
             *state.setup.app.lock().unwrap() = Arc::new(appctl::TauriApp(app.handle().clone()));
+            state.updates.run.set_installer(updater::installer(app.handle())); // "Install and restart"
             app.manage(state.clone());
 
             let dock = Arc::new(dock::Dock::default());

@@ -88,6 +88,8 @@ pub const PORTED: &[&str] = &[
     "GET /api/update",
     "POST /api/update/check",
     "POST /api/update/agent",
+    "POST /api/update/install",
+    "POST /api/update/cancel",
     "POST /api/update/firmware/{updater}",
     "GET /api/update/jobs/{id}",
     // the IR remote (stick 2.5.0; ir.rs)
@@ -189,7 +191,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/logs", get(logs_tail))
         .route("/api/update", get(update_info))
         .route("/api/update/check", post(update_check))
-        .route("/api/update/agent", post(update_agent))
+        .route("/api/update/agent", post(crate::selfupdate::install_route)) // the shared page's old path
+        .route("/api/update/install", post(crate::selfupdate::install_route))
+        .route("/api/update/cancel", post(crate::selfupdate::cancel_route))
         .route("/api/update/firmware/{updater}", post(update_firmware))
         .route("/api/update/jobs/{id}", get(job_events))
         .merge(crate::ir::routes())
@@ -654,14 +658,6 @@ async fn update_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
 /// Checks now (lists releases, downloads the latest firmware) -> the same.
 async fn update_check(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
     axum::Json(crate::updates::check_now(&st).await)
-}
-
-/// The app updating itself isn't ported (selfupdate.py).
-async fn update_agent(State(st): State<Arc<AppState>>) -> Response {
-    let cfg = st.cfg.lock().unwrap().clone();
-    let install = st.updates.full(&cfg)["install"].clone();
-    (StatusCode::CONFLICT, axum::Json(json!({"error": crate::updates::NO_SELF_UPDATE, "install": install})))
-        .into_response()
 }
 
 /// No extra firmware updaters here (Bluetooth and USB have their own endpoints).
@@ -1433,7 +1429,9 @@ mod tests {
         assert_eq!(v["update"]["available"], true);
         let (s, v, _) = call(&app, req("POST", "/api/update/agent", Some(json!({})), tok)).await;
         assert_eq!(s, StatusCode::CONFLICT);
-        assert!(v["error"].as_str().unwrap().contains("doesn't update itself"));
+        // only firmware is newer here: nothing to install, and the page still gets where to download
+        assert!(v["error"].as_str().unwrap().contains("no newer StickyBot"));
+        assert_eq!(v["install"]["can_update"], false);
         // one toast on the stick per release
         let ev = crate::updates::notify(&st).await.expect("toasted");
         assert_eq!((ev["title"].as_str(), ev["kind"].as_str()), (Some("Update firmware 9.9.0 ready"), Some("update")));

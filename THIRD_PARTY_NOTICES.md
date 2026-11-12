@@ -19,6 +19,19 @@ builds in work by others under these licences.
 | [ArduinoJson](https://github.com/bblanchon/ArduinoJson) | MIT |
 | [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) (via pioarduino) | LGPL-2.1 (core) / Apache-2.0 (ESP-IDF, TinyUSB parts MIT) |
 
+## Built into the Mac app (Rust, `desktop/`; crates.io, exact versions in `desktop/Cargo.lock`)
+The in-app updater (`desktop/crates/stickybot-app/src/updater.rs`) and what it brings with it:
+
+| Crate | Used for | Licence |
+|---|---|---|
+| [tauri-plugin-updater](https://github.com/tauri-apps/plugins-workspace) 2.x | downloads the update, checks its signature, replaces the app | Apache-2.0 OR MIT |
+| [minisign-verify](https://github.com/jedisct1/rust-minisign-verify) | the signature check against the public key built into the app | MIT |
+| [osakit](https://github.com/mdevaev/osakit), objc2-osa-kit | the plugin's AppleScript call for an administrator install (StickyBot never takes that path: it falls back to the release page) | MIT OR Apache-2.0; Zlib OR Apache-2.0 OR MIT |
+| hyper-rustls, tokio-rustls, rustls-platform-verifier, system-configuration | HTTPS (TLS with the system's certificates and proxy settings) for the download | Apache-2.0 OR ISC OR MIT; MIT OR Apache-2.0 |
+| tar, flate2, tempfile | unpacking `StickyBot.app.tar.gz` and its temporary folders | MIT OR Apache-2.0 |
+| libc | `access(2)` / `geteuid(2)`: can StickyBot write where it sits | MIT OR Apache-2.0 |
+| minisign (test-only, not shipped) | the tests make a throwaway key pair and sign a fake update at run time | MIT |
+
 ## Used by the Mac agent (installed from PyPI, not included)
 bleak (MIT), aiohttp (Apache-2.0), rumps (BSD-3-Clause), numpy (BSD-3-Clause),
 parakeet-mlx (Apache-2.0), MLX (MIT), soundfile (BSD-3-Clause), soxr (LGPL-2.1),
