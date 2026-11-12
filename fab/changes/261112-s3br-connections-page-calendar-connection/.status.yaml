@@ -8,8 +8,8 @@ progress:
     intake: done
     apply: done
     review: done
-    hydrate: active
-    ship: pending
+    hydrate: done
+    ship: active
     review-pr: pending
 plan:
     generated: true
@@ -32,24 +32,26 @@ stage_metrics:
     intake: {started_at: "2026-11-12T16:43:30Z", driver: fab-new, iterations: 1, completed_at: "2026-11-12T16:46:49Z"}
     apply: {started_at: "2026-11-12T19:33:09Z", driver: fab-fff, iterations: 2, completed_at: "2026-11-12T19:38:44Z"}
     review: {started_at: "2026-11-12T19:38:44Z", driver: fab-fff, iterations: 2, completed_at: "2026-11-12T19:46:41Z"}
-    hydrate: {started_at: "2026-11-12T19:46:41Z", driver: fab-fff, iterations: 1}
+    hydrate: {started_at: "2026-11-12T19:46:41Z", driver: fab-fff, iterations: 1, completed_at: "2026-11-12T19:50:29Z"}
+    ship: {started_at: "2026-11-12T19:50:29Z", driver: fab-fff, iterations: 1}
 prs: []
 base_branch: main
 change_type_source: explicit
 true_impact:
-    added: 5044
+    added: 5286
     deleted: 23
-    net: 5021
+    net: 5263
     excluding:
-        added: 4257
+        added: 4489
         deleted: 23
-        net: 4234
+        net: 4466
     tests:
-        added: 1707
+        added: 1837
         deleted: 0
-        net: 1707
-    computed_at: "2026-11-12T19:38:44Z"
-    computed_at_stage: apply
+        net: 1837
+    computed_at: "2026-11-12T19:50:29Z"
+    computed_at_stage: hydrate
+summary: 'Connections page and read-only Calendar connection: EventKit crate with fake, meeting card, meeting_soon reminder, join, voice and stick tools, calendars entitlement'
 # base_branch: written by /git-branch or /fab-new when the change's branch is created (no placeholder here).
 # true_impact: lazily created on first stage-finish that computes it (no placeholder here).
-last_updated: 2026-11-12T19:46:41Z
+last_updated: 2026-11-12T19:50:29Z
