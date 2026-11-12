@@ -29,3 +29,10 @@ __pycache__/
 
 # Claude Code agent worktrees
 .claude/worktrees/
+
+# fab-kit: per-checkout state and locks (the pinned version is committed). The skills in
+# .claude/skills/ and .agents/skills/ are ignored by the .gitignore `fab sync` writes there.
+.fab-*
+!fab/.fab-version
+.status.yaml.lock
+/.claude/settings.local.json
