@@ -9,6 +9,7 @@ description = "StickyBot's dashboard + local API (axum) on top of the stick link
 [dependencies]
 stick-link = { path = "../stick-link" }
 macos-audio = { path = "../macos-audio" }
+macos-calendar = { path = "../macos-calendar" }
 stt = { path = "../stt" }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "tower-log"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal", "io-util", "process"] }

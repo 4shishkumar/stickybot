@@ -9,5 +9,10 @@
   <string>StickyBot talks to your stick over Bluetooth: its settings, approvals, alerts and voice requests.</string>
   <key>NSAudioCaptureUsageDescription</key>
   <string>StickyBot taps only its own sound to make the stick's Bluetooth mic.</string>
+  <!-- the Calendar connection (macOS 14 and later ask for the first, macOS 13 for the second) -->
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>StickyBot reads your calendar to show your next meeting on the stick and remind you before it starts. It never changes your calendar.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>StickyBot reads your calendar to show your next meeting on the stick and remind you before it starts. It never changes your calendar.</string>
 </dict>
 </plist>
