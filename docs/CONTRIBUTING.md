@@ -24,8 +24,13 @@ to `main` directly (the owner can bypass in an emergency, and says so in the PR 
    | workflows | actionlint, when a workflow changed |
 
    **CI passed** sums them up; it's the check `main` requires.
-5. **Review and merge**: the owner reviews (CODEOWNERS), then **Squash and merge**. The branch is
-   deleted after the merge.
+5. **Review and merge**: at least **one approval** from someone other than the PR's author is
+   required (GitHub asks the people in `.github/CODEOWNERS` automatically). New commits after an
+   approval need a fresh one, and every review comment has to be resolved. Then **Squash and
+   merge**; the branch is deleted after the merge.
+
+   An author can't approve their own PR: a PR opened from one account is approved from another
+   (the owner's, or a teammate's).
 
 ### Labels
 
@@ -56,8 +61,10 @@ GitHub → the repo → **Settings → Rules → Rulesets → New ruleset → Ne
 - **Target branches:** *Add target → Include default branch*
 - Rules:
   - **Restrict deletions** and **Block force pushes**
-  - **Require a pull request before merging** — required approvals: 0 for now (1 when there are
-    two regular reviewers); *Allowed merge methods*: **Squash** only
+  - **Require a pull request before merging** — *Required approvals*: **1**; tick *Dismiss stale
+    pull request approvals when new commits are pushed*, *Require approval of the most recent
+    reviewable push* and *Require conversation resolution before merging*; *Allowed merge
+    methods*: **Squash** only
   - **Require status checks to pass** → *Add checks* → **CI passed** (it appears after the first
     CI run); tick *Require branches to be up to date before merging*
 - **Create**

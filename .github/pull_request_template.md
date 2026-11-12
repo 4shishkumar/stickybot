@@ -23,3 +23,4 @@
 - [ ] `PROTOCOL.md` updated if a message between the Mac and the stick changed
 - [ ] No keys, tokens, passwords or personal data (names, repos, emails) in code, tests or logs
 - [ ] Older firmware / older apps still work, or the change says what they need
+- [ ] Ready for review: one approval from someone other than the author is needed to merge
