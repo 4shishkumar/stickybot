@@ -400,6 +400,10 @@ def test_download_watcher_reports_bytes(tmp_path, monkeypatch):
     for i in range(5):
         (blobs / f"f{i}.incomplete").write_bytes(b"x" * 100)
         time.sleep(0.05)
+    # a busy CI runner can be slow to poll: wait for the watcher to see all 500 bytes (up to 5 s)
+    deadline = time.monotonic() + 5
+    while not (got and got[-1]["bytes"] == 500) and time.monotonic() < deadline:
+        time.sleep(0.02)
     stop.set()
     t.join()
     assert got and got[-1]["bytes"] == 500 and got[-1]["total"] == 1000 and got[-1]["progress"] == 50
