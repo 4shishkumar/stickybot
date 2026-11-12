@@ -11,4 +11,4 @@ description: "The two Mac apps (the Rust StickyBot.app that ships, the legacy Py
 
 | File | Description |
 |------|-------------|
-| [mac-apps](mac-apps.md) | The Mac apps: StickyBot.app in Rust (Tauri 2, axum, ~/.stickybot-rs, com.stickybot.rs) that ships, the legacy Python app (~/.stick-agent), the dashboard files both serve, ports 8660 and 8670, ad-hoc signing and macOS permissions. |
+| [mac-apps](mac-apps.md) | The Mac apps: StickyBot.app in Rust (Tauri 2, axum, ~/.stickybot-rs, com.stickybot.rs) that ships, the legacy Python app (~/.stick-agent), the dashboard files both serve, ports 8660 and 8670, ad-hoc signing, in-app updates and macOS permissions. |
