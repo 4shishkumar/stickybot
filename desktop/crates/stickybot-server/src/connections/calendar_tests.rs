@@ -294,7 +294,10 @@ async fn permission_that_was_not_given_reads_as_needs_permission_and_is_not_aske
 async fn settings_are_saved_in_any_subset_and_bad_ones_are_refused_in_words() {
     let w = W::new("cal-settings").await;
     w.connect().await;
+    let reads = w.cal.reads();
     let (s, v) = w.call("PUT", "/api/connections/calendar", Some(json!({"alert_min": 10}))).await;
+    tokio::time::sleep(Duration::from_millis(200)).await; // a second, background read would land by now
+    assert_eq!(w.cal.reads(), reads + 1, "one save, one read of the calendar");
     assert_eq!(
         (s, v["settings"]["alert_min"].clone(), v["settings"]["on"].clone()),
         (StatusCode::OK, json!(10), json!(true))

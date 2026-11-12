@@ -12,6 +12,7 @@ struct State {
     calendars: Vec<CalendarInfo>,
     events: Vec<Event>,
     requests: usize,
+    reads: usize,
     fail: Option<String>,
     listeners: Vec<Arc<dyn Fn() + Send + Sync>>,
 }
@@ -103,6 +104,11 @@ impl FakeCalendar {
         self.s.lock().unwrap().fail = why.map(str::to_string);
     }
 
+    /// How many times the events were read (`events` calls).
+    pub fn reads(&self) -> usize {
+        self.s.lock().unwrap().reads
+    }
+
     /// How many times the permission was asked for.
     pub fn requests(&self) -> usize {
         self.s.lock().unwrap().requests
@@ -140,7 +146,8 @@ impl CalendarSource for FakeCalendar {
     }
 
     fn events(&self, from: i64, to: i64) -> Result<Vec<Event>, String> {
-        let s = self.s.lock().unwrap();
+        let mut s = self.s.lock().unwrap();
+        s.reads += 1;
         if let Some(why) = &s.fail {
             return Err(why.clone());
         }

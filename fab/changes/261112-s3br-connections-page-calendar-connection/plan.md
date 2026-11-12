@@ -251,21 +251,21 @@ would be a way to make the Mac open an arbitrary page.
 
 ### Phase 2: Core Implementation
 
-- [x] T004 `desktop/crates/macos-calendar/src/eventkit.rs`: `EventKitCalendar` (status, request on 14+ / 13, calendars with colours, events in a range incl. the current user's declined status and attendees, change notification); compile-checked only, never run <!-- R1 -->
+- [x] T004 `desktop/crates/macos-calendar/src/eventkit.rs`: `EventKitCalendar` (status, request on 14+ / 13, calendars with colours, events in a range incl. the current user's declined status and attendees, change notification); compile-checked only, never run <!-- R1 --> <!-- rework: store made before the grant must be recreated/reset; autorelease pools; observer note -->
 - [x] T005 `desktop/crates/macos-calendar/examples/calendar_dump.rs` (`--status`, `--list`, `--today`, `--help`); run only `--help` <!-- R2 -->
-- [x] T006 `desktop/crates/stickybot-server/src/connections/agenda.rs` + `agenda_tests.rs`: settings struct + parsing/validation, filtering, now / next / today, card text + priority window, alert decision, spoken lines (next, today), join-link detection and join choice; tests for time zones, all-day, declined, canceled, overlapping, back-to-back, multi-day, recurring occurrences, card text, links <!-- R7 -->
-- [x] T007 `desktop/crates/stickybot-server/src/connections/calendar.rs`: the connection state on `AppState` (source, cache, error, fired set), status / detail, refresh (blocking calls in `spawn_blocking`), change subscription, the 60 s loop with the alert check and card push; `connections/mod.rs`: the common shape; `lib.rs` wiring (fake source with `--fake-stick` / tests, real EventKit otherwise on macOS) <!-- R8 -->
+- [x] T006 `desktop/crates/stickybot-server/src/connections/agenda.rs` + `agenda_tests.rs`: settings struct + parsing/validation, filtering, now / next / today, card text + priority window, alert decision, spoken lines (next, today), join-link detection and join choice; tests for time zones, all-day, declined, canceled, overlapping, back-to-back, multi-day, recurring occurrences, card text, links <!-- R7 --> <!-- rework: join_choice: next within 15 min across midnight; DST-changing zone test for day bounds -->
+- [x] T007 `desktop/crates/stickybot-server/src/connections/calendar.rs`: the connection state on `AppState` (source, cache, error, fired set), status / detail, refresh (blocking calls in `spawn_blocking`), change subscription, the 60 s loop with the alert check and card push; `connections/mod.rs`: the common shape; `lib.rs` wiring (fake source with `--fake-stick` / tests, real EventKit otherwise on macOS) <!-- R8 --> <!-- rework: subscribe/on_change off the async runtime; alert check often enough for a 1-min reminder; one refresh per save -->
 - [x] T008 API in `connections/mod.rs` + `calendar.rs`, merged in `api.rs`: list, connect, settings, disconnect, calendars, events; tests in `connections/calendar_tests.rs` (incl. denied permission, bad settings, not connected) <!-- R4 R5 R6 -->
 - [x] T009 Home card: meeting candidate + priority in `desktop/crates/stickybot-server/src/home.rs` (`CardInput` gains the meeting card); check the firmware's card code for unknown `k` and choose `cal` or an existing kind; tests <!-- R9 -->
 - [x] T010 Alert: `meeting_soon` in `events::KINDS` (+ `event_sounds` default none), info log line without text for it, fired from the calendar loop once per occurrence; tests (once, not for all-day / declined / 0 / off, listed in kinds) <!-- R10 R14 -->
-- [x] T011 Voice: `calendar` action in `talk.rs` (like `ir`), phrases + one-time add to `commands.json` (`calendar_voice_added`) in `calendar.rs`; join through the `commands::Runner`; tests (next, today, join, not connected) <!-- R11 R12 -->
+- [x] T011 Voice: `calendar` action in `talk.rs` (like `ir`), phrases + one-time add to `commands.json` (`calendar_voice_added`) in `calendar.rs`; join through the `commands::Runner`; tests (next, today, join, not connected) <!-- R11 R12 --> <!-- rework: answer_today: remove the unused tomorrow branch (zero call sites, duplicates day_lines) -->
 - [x] T012 MCP: `calendar_next`, `calendar_today`, `calendar_join` in `desktop/crates/stickybot-server/src/mcp.rs` (definitions, approval list, handlers, the OpenRouter tool list if shared); tests <!-- R13 -->
-- [x] T013 Privacy: `Known.meetings` + `[meeting]` in `feedback.rs` `redact`, `calendar` in the features line; tests in `feedback_tests.rs` <!-- R14 -->
+- [x] T013 Privacy: `Known.meetings` + `[meeting]` in `feedback.rs` `redact`, `calendar` in the features line; tests in `feedback_tests.rs` <!-- R14 --> <!-- rework: redact meeting strings of 3 chars (whole-word for short ones) -->
 
 ### Phase 3: Integration & Edge Cases
 
-- [x] T014 Bundle: usage strings in `desktop/crates/stickybot-app/Info.plist`, `desktop/crates/stickybot-app/entitlements.plist`, `bundle.macOS.entitlements` in `tauri.conf.json`, the entitlement check in `desktop/scripts/build-app.sh` (shellcheck-clean); pass the EventKit source from `stickybot-app`; if `cargo tauri build` is practical, build once (never launch) and confirm the entitlement in the signature <!-- R3 -->
-- [x] T015 Dashboard: `desktop/crates/stickybot-server/assets/connections.js` (+ an import-free helpers module), registered in `assets/rust.js`, served in `api.rs` `static-rs`; a `node --test` suite for the helpers under `mac-agent/tests/js/`; API test that the assets are served <!-- R15 -->
+- [x] T014 Bundle: usage strings in `desktop/crates/stickybot-app/Info.plist`, `desktop/crates/stickybot-app/entitlements.plist`, `bundle.macOS.entitlements` in `tauri.conf.json`, the entitlement check in `desktop/scripts/build-app.sh` (shellcheck-clean); pass the EventKit source from `stickybot-app`; if `cargo tauri build` is practical, build once (never launch) and confirm the entitlement in the signature <!-- R3 --> <!-- rework: build-app.sh entitlement check without a pipe under pipefail -->
+- [x] T015 Dashboard: `desktop/crates/stickybot-server/assets/connections.js` (+ an import-free helpers module), registered in `assets/rust.js`, served in `api.rs` `static-rs`; a `node --test` suite for the helpers under `mac-agent/tests/js/`; API test that the assets are served <!-- R15 --> <!-- rework: hide the detail line when the permission box shows -->
 - [x] T016 Screenshots of the Connections page (off, permission denied, connected with sample meetings; light and dark if the dashboard has both) with headless Chromium against the headless server on a free port with `--fake-stick` and a temporary home, or a small fake server; saved to the session scratchpad `connections-page/`; every browser and server started is stopped <!-- R15 -->
 
 ### Phase 4: Polish
@@ -283,70 +283,74 @@ would be a way to make the Mac open an arbitrary page.
 
 ### Functional Completeness
 
-- [ ] A-001 R1: `macos-calendar` exists with the trait, types, `FakeCalendar` and a macOS-only EventKit implementation; no write path to calendars exists anywhere in the diff
-- [ ] A-002 R2: `calendar_dump` has `--status`, `--list`, `--today`, and `--help` prints usage without creating an event store
-- [ ] A-003 R3: Info.plist has both usage strings; `entitlements.plist` + `bundle.macOS.entitlements` are set; `build-app.sh` fails without the entitlement
-- [ ] A-004 R4: `GET /api/connections` answers the common shape with the four statuses
-- [ ] A-005 R5: connect / settings / disconnect work and validate as specified, including through `PUT /api/config`
-- [ ] A-006 R6: the calendars and events routes answer the documented fields
-- [ ] A-007 R7: selection is pure (takes `now` and a zone) and implements every rule
-- [ ] A-008 R8: refresh happens at connect, on settings change, on the source's change callback and on the 60 s timer; events are not written to disk
-- [ ] A-009 R9: the meeting card joins the rotation and is prioritised in the 15 min / 5 min window below approvals, questions and session lines
-- [ ] A-010 R10: `meeting_soon` is a listed kind (headsup, bell) and fires once per occurrence
-- [ ] A-011 R11: join links are limited to https Meet / Zoom / Teams / Webex hosts in the URL → location → notes order
-- [ ] A-012 R12: the three voice intents answer without the brain; phrases are added once; the Python defaults file is unchanged
-- [ ] A-013 R13: the three MCP tools exist, error when not connected, and `calendar_join` follows `open_url`'s approval rule
-- [ ] A-014 R14: no info-level log line carries meeting text; `redact` removes cached meeting titles, attendees, locations and links
-- [ ] A-015 R15: the Connections page is served, in the nav, and has every control listed
-- [ ] A-016 R16: changelog, README, desktop/README (and notices if applicable) are updated
+- [x] A-001 R1: `macos-calendar` exists with the trait, types, `FakeCalendar` and a macOS-only EventKit implementation; no write path to calendars exists anywhere in the diff
+- [x] A-002 R2: `calendar_dump` has `--status`, `--list`, `--today`, and `--help` prints usage without creating an event store
+- [x] A-003 R3: Info.plist has both usage strings; `entitlements.plist` + `bundle.macOS.entitlements` are set; `build-app.sh` fails without the entitlement
+- [x] A-004 R4: `GET /api/connections` answers the common shape with the four statuses
+- [x] A-005 R5: connect / settings / disconnect work and validate as specified, including through `PUT /api/config`
+- [x] A-006 R6: the calendars and events routes answer the documented fields
+- [x] A-007 R7: selection is pure (takes `now` and a zone) and implements every rule
+- [x] A-008 R8: refresh happens at connect, on settings change, on the source's change callback and on the 60 s timer; events are not written to disk
+- [x] A-009 R9: the meeting card joins the rotation and is prioritised in the 15 min / 5 min window below approvals, questions and session lines
+- [x] A-010 R10: `meeting_soon` is a listed kind (headsup, bell) and fires once per occurrence
+- [x] A-011 R11: join links are limited to https Meet / Zoom / Teams / Webex hosts in the URL → location → notes order
+- [x] A-012 R12: the three voice intents answer without the brain; phrases are added once; the Python defaults file is unchanged
+- [x] A-013 R13: the three MCP tools exist, error when not connected, and `calendar_join` follows `open_url`'s approval rule
+- [x] A-014 R14: no info-level log line carries meeting text; `redact` removes cached meeting titles, attendees, locations and links
+- [x] A-015 R15: the Connections page is served, in the nav, and has every control listed
+- [x] A-016 R16: changelog, README, desktop/README (and notices if applicable) are updated
 
 ### Scenario Coverage
 
-- [ ] A-017 R7: tests cover time zones, all-day, declined, canceled, overlapping, back-to-back, multi-day and recurring occurrences
-- [ ] A-018 R9: tests cover the card texts (`in N min · HH:MM`, hours, `now · until`), the title cut, stick-safe text and the priority window
-- [ ] A-019 R10: a test shows the alert firing exactly once and not for all-day / declined / `alert_min` 0 / off
-- [ ] A-020 R11: tests cover each provider, each field, refusal of other and http links
-- [ ] A-021 R5: API tests cover denied permission, bad settings (words in the error), disconnect clearing the cache
-- [ ] A-022 R12: talk tests cover next, today, join and the not-connected line
-- [ ] A-023 R14: a feedback test shows a meeting title and link redacted
-- [ ] A-024 R15: a `node --test` suite covers the page's helpers and runs with `python -m pytest` in `mac-agent/`
+- [x] A-017 R7: tests cover time zones, all-day, declined, canceled, overlapping, back-to-back, multi-day and recurring occurrences
+- [x] A-018 R9: tests cover the card texts (`in N min · HH:MM`, hours, `now · until`), the title cut, stick-safe text and the priority window
+- [x] A-019 R10: a test shows the alert firing exactly once and not for all-day / declined / `alert_min` 0 / off
+- [x] A-020 R11: tests cover each provider, each field, refusal of other and http links
+- [x] A-021 R5: API tests cover denied permission, bad settings (words in the error), disconnect clearing the cache
+- [x] A-022 R12: talk tests cover next, today, join and the not-connected line
+- [x] A-023 R14: a feedback test shows a meeting title and link redacted
+- [x] A-024 R15: a `node --test` suite covers the page's helpers and runs with `python -m pytest` in `mac-agent/`
 
 ### Edge Cases & Error Handling
 
-- [ ] A-025 R5: a saved config with a partial or malformed `connections.calendar` reads as defaults without a panic
-- [ ] A-026 R6: a failing source (fetch error) reads as status `error` with words, and the routes answer an error, not a 500 panic
-- [ ] A-027 R9: no meeting, or the connection off → the card and rotation behave exactly as before
-- [ ] A-028 R1: `cargo test --workspace` creates no EventKit object (the real source is only constructed outside tests / `--fake-stick`)
+- [x] A-025 R5: a saved config with a partial or malformed `connections.calendar` reads as defaults without a panic
+- [x] A-026 R6: a failing source (fetch error) reads as status `error` with words, and the routes answer an error, not a 500 panic
+- [x] A-027 R9: no meeting, or the connection off → the card and rotation behave exactly as before
+- [x] A-028 R1: `cargo test --workspace` creates no EventKit object (the real source is only constructed outside tests / `--fake-stick`)
 
 ### Code Quality
 
-- [ ] A-029 Pattern consistency: new Rust follows the neighbours (`//!` docs saying what and why, traits + fakes, `serde_json::Value` shapes, error words), JS follows `assets/feedback.js`
-- [ ] A-030 No unnecessary duplication: reuses `stick_text`, `events::notify`, `commands::Runner`, the API's guards and helpers, the dashboard's components
-- [ ] A-031 Logic kept away from the OS: `eventkit.rs` only converts objects; all rules are in pure code with tests
-- [ ] A-032 Constants have names, units and reasons (window lengths, limits, intervals); errors reach the person as words
-- [ ] A-033 No real-looking names, emails, meeting titles of real people, or keys in code, tests, fixtures, screenshots or log lines
-- [ ] A-034 Changelog line is written for the person using StickyBot; versions untouched; `Cargo.lock` changed only by cargo
-- [ ] A-035 Lints: `cargo clippy --workspace --all-targets -- -D warnings` and `ruff check` are clean; all suites pass (the one port-8660 hooks test excepted when the user's app holds the port)
+- [x] A-029 Pattern consistency: new Rust follows the neighbours (`//!` docs saying what and why, traits + fakes, `serde_json::Value` shapes, error words), JS follows `assets/feedback.js`
+- [x] A-030 No unnecessary duplication: reuses `stick_text`, `events::notify`, `commands::Runner`, the API's guards and helpers, the dashboard's components (re-review: the unused `tomorrow` branch of `answer_today` is gone; `day_lines` is the one day listing)
+- [x] A-031 Logic kept away from the OS: `eventkit.rs` only converts objects; all rules are in pure code with tests
+- [x] A-032 Constants have names, units and reasons (window lengths, limits, intervals); errors reach the person as words
+- [x] A-033 No real-looking names, emails, meeting titles of real people, or keys in code, tests, fixtures, screenshots or log lines
+- [x] A-034 Changelog line is written for the person using StickyBot; versions untouched; `Cargo.lock` changed only by cargo
+- [x] A-035 Lints: `cargo clippy --workspace --all-targets -- -D warnings` and `ruff check` are clean; all suites pass (the one port-8660 hooks test excepted when the user's app holds the port)
 
 ### Security
 
-- [ ] A-036 R11: nothing but an allow-listed https conference link can be opened from event text
-- [ ] A-037 R4: the new routes sit behind the same token / Host guards as the rest of the API
+- [x] A-036 R11: nothing but an allow-listed https conference link can be opened from event text
+- [x] A-037 R4: the new routes sit behind the same token / Host guards as the rest of the API
 
 ### Compatibility
 
-- [ ] A-038: no message, field or command between the Mac and the stick changed; `PROTOCOL.md` untouched; the card kind chosen is one every released firmware draws
-- [ ] A-039: the Python app's behaviour and files under `mac-agent/stick_agent/` are unchanged (apart from nothing); its tests pass
+- [x] A-038: no message, field or command between the Mac and the stick changed; `PROTOCOL.md` untouched; the card kind chosen is one every released firmware draws
+- [x] A-039: the Python app's behaviour and files under `mac-agent/stick_agent/` are unchanged (apart from nothing); its tests pass
 
 ### Real Stick Check
 
-- [ ] A-040: **N/A** for the agent — recorded as open for a person: the meeting card and the `meeting_soon` alert on a real stick, and the permission prompt + EventKit + entitlement on a real signed bundle; the PR carries `needs-hardware` and lists the steps
+- [x] A-040: **N/A**: for the agent — recorded as open for a person: the meeting card and the `meeting_soon` alert on a real stick, and the permission prompt + EventKit + entitlement on a real signed bundle; the PR carries `needs-hardware` and lists the steps
 
 ## Notes
 
 - Check items as you review: `- [x]`
 - All acceptance items must pass before `/fab-continue` (hydrate)
 - If an item is not applicable, mark checked and prefix with **N/A**: `- [x] A-NNN **N/A**: {reason}`
+
+## Deletion Candidates
+
+None — this change adds new functionality without making existing code redundant (re-review: the two earlier candidates, the `tomorrow` branch of `answer_today` and the double read on a settings save, were removed / fixed in rework cycle 1)
 
 ## Assumptions
 

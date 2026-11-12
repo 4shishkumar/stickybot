@@ -14,6 +14,12 @@ use macos_calendar::Event;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
+/// How often the cached events are checked for a due reminder, in seconds. It must be well under
+/// the shortest lead time the settings allow (1 minute), or a tick could land just before the window
+/// opens and the next one just after it closes and the reminder would never go out; 15 s leaves four
+/// chances. A check reads nothing from the Calendar.
+pub const ALERT_TICK_S: i64 = 15;
+
 /// A meeting that has been reminded about: `(event id, start)`.
 pub type Key = (String, i64);
 
@@ -39,6 +45,9 @@ const HOURS_FROM_MIN: i64 = 90;
 const CARD_TITLE_MAX: usize = 40;
 /// The reminder's title ("Standup in 5 min") must fit the event title the stick shows, in characters.
 const ALERT_TITLE_MAX: usize = 40;
+/// A meeting starting within this long after `now` can be joined even across midnight, in seconds
+/// (a 00:05 call joined at 23:55).
+const JOIN_SOON_S: i64 = 15 * 60;
 /// How many meetings the spoken day names after the count.
 const SPOKEN_NAMED: usize = 2;
 
@@ -414,9 +423,10 @@ pub fn join_link(e: &Event) -> Option<(&'static str, String)> {
         .find_map(|u| provider(&u).map(|p| (p, u.to_string())))
 }
 
-/// The meeting to join: the one on now (the one that started last), else the next ones today in
-/// order, the first of them that has a link. Not declined, not all-day. (A meeting on now without a
-/// link is passed over for the next one that has one.)
+/// The meeting to join: the one on now (the one that started last), else the next ones today (or
+/// starting within 15 min, across midnight) in order, the first of them that has a link. Not
+/// declined, not all-day. (A meeting on now without a link is passed over for the next one that
+/// has one.)
 pub fn join_choice<'a, Tz: TimeZone>(
     events: &'a [Event],
     s: &Settings,
@@ -425,8 +435,9 @@ pub fn join_choice<'a, Tz: TimeZone>(
 ) -> Option<(&'a Event, &'static str, String)> {
     let mut running: Vec<&Event> = meetings(events, s).filter(|e| e.start <= now && now < e.end).collect();
     running.sort_by(|a, b| b.start.cmp(&a.start).then(a.title.cmp(&b.title)));
-    let mut later: Vec<&Event> =
-        meetings(events, s).filter(|e| e.start > now && date_of(tz, e.start) == date_of(tz, now)).collect();
+    let mut later: Vec<&Event> = meetings(events, s)
+        .filter(|e| e.start > now && (date_of(tz, e.start) == date_of(tz, now) || e.start - now <= JOIN_SOON_S))
+        .collect();
     later.sort_by(|a, b| a.start.cmp(&b.start).then(a.title.cmp(&b.title)));
     running.into_iter().chain(later).find_map(|e| join_link(e).map(|(p, u)| (e, p, u)))
 }

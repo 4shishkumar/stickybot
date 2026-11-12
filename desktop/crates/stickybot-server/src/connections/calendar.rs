@@ -12,7 +12,7 @@
 //! (the card, the reminder) and to the brain when it calls a calendar tool.
 //!
 //! **Refresh**: when connected, when the settings change, when EventKit says the calendar changed,
-//! and every 60 s (which also drives the reminder and the card).
+//! and every 60 s; the reminder and the card are checked against the cached events every 15 s.
 
 use super::Status;
 use super::agenda::{self, Key, MeetingCard, Settings};
@@ -32,8 +32,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// How often the events are read again, the reminder checked and the card kept right, in seconds. A
-/// minute is the finest a "starts in N min" text needs, and cheap: one query of two days.
+/// How often the events are read again, in seconds (the reminder and the card are checked more
+/// often, against the cache: `agenda::ALERT_TICK_S`). A minute is cheap: one query of two days.
 pub const REFRESH_S: u64 = 60;
 /// After EventKit says "changed", wait this long, in milliseconds, before reading: one edit in the
 /// Calendar app posts several notifications in a burst.
@@ -98,6 +98,8 @@ pub struct Calendar {
     changed: Arc<tokio::sync::Notify>,
     refreshing: tokio::sync::Mutex<()>,
     clock: Mutex<Clock>,
+    /// set by [`save_settings`]: its caller reads the calendar itself, so the config hook need not
+    api_saved: AtomicBool,
 }
 
 impl Calendar {
@@ -109,6 +111,7 @@ impl Calendar {
             changed: Arc::new(tokio::sync::Notify::new()),
             refreshing: tokio::sync::Mutex::new(()),
             clock: Mutex::new(Clock::System),
+            api_saved: AtomicBool::new(false),
         }
     }
 
@@ -148,10 +151,15 @@ impl Calendar {
         *c = Cache { note: String::new(), ..Cache::default() };
     }
 
-    fn subscribe(&self) {
+    /// Asks the source to tell us about changes, once. On a blocking thread: EventKit makes its
+    /// event store here, which must not hold up an async worker.
+    async fn subscribe(&self) {
         if !self.subscribed.swap(true, Ordering::Relaxed) {
-            let changed = self.changed.clone();
-            self.source().on_change(Box::new(move || changed.notify_one()));
+            let (changed, source) = (self.changed.clone(), self.source());
+            let task = tokio::task::spawn_blocking(move || source.on_change(Box::new(move || changed.notify_one())));
+            if task.await.is_err() {
+                self.subscribed.store(false, Ordering::Relaxed); // not registered: the next connect tries again
+            }
         }
     }
 
@@ -181,9 +189,15 @@ pub fn settings(st: &AppState) -> Settings {
 }
 
 fn save_settings(st: &AppState, s: &Settings) -> Result<(), String> {
+    st.calendar.api_saved.store(true, Ordering::Relaxed);
     let mut calendar = Map::new();
     calendar.insert("calendar".into(), s.to_json());
-    st.update_config([("connections".to_string(), Value::Object(calendar))].into_iter().collect()).map(|_| ())
+    let saved = st.update_config([("connections".to_string(), Value::Object(calendar))].into_iter().collect());
+    if saved.is_err() {
+        // the config hook never ran: don't let the flag swallow a later save's refresh
+        st.calendar.api_saved.store(false, Ordering::Relaxed);
+    }
+    saved.map(|_| ())
 }
 
 /// Connected: on, and macOS lets us read.
@@ -337,18 +351,30 @@ pub fn meeting_card(st: &AppState) -> Option<MeetingCard> {
     zoned!(cal, tz => agenda::meeting_card(&events, &s, &tz, now))
 }
 
-/// The loop: reads now, then every minute or when the Calendar says it changed.
+/// The loop: reads now, then every minute or when the Calendar says it changed; in between, every
+/// [`agenda::ALERT_TICK_S`] it only checks the cached events for a due reminder (no EventKit read).
 pub fn spawn(st: Arc<AppState>) {
     tokio::spawn(async move {
+        let mut last_read: Option<std::time::Instant> = None;
         loop {
             if settings(&st).on {
-                st.calendar.subscribe();
-                refresh(&st).await;
+                st.calendar.subscribe().await;
+                if last_read.is_none_or(|t| t.elapsed().as_secs() >= REFRESH_S) {
+                    refresh(&st).await;
+                    last_read = Some(std::time::Instant::now());
+                } else {
+                    tick(&st).await;
+                }
+            } else {
+                last_read = None;
             }
             let changed = st.calendar.changed.clone();
             tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(REFRESH_S)) => {}
-                _ = changed.notified() => tokio::time::sleep(Duration::from_millis(CHANGE_SETTLE_MS)).await,
+                _ = tokio::time::sleep(Duration::from_secs(agenda::ALERT_TICK_S as u64)) => {}
+                _ = changed.notified() => {
+                    tokio::time::sleep(Duration::from_millis(CHANGE_SETTLE_MS)).await;
+                    last_read = None;
+                }
             }
         }
     });
@@ -356,6 +382,9 @@ pub fn spawn(st: Arc<AppState>) {
 
 /// The settings changed (a PUT of the config): read again, in the background.
 pub fn settings_changed(st: &Arc<AppState>) {
+    if st.calendar.api_saved.swap(false, Ordering::Relaxed) {
+        return; // saved through this connection's own routes, which read right after
+    }
     let st = st.clone();
     if let Ok(h) = tokio::runtime::Handle::try_current() {
         h.spawn(async move { refresh(&st).await });
@@ -379,7 +408,7 @@ pub async fn connect(st: &Arc<AppState>) -> Result<(), String> {
             .unwrap_or_else(|_| Err("macOS didn't answer".into()));
         st.calendar.cache.lock().unwrap().note = asked.err().unwrap_or_default();
     }
-    st.calendar.subscribe();
+    st.calendar.subscribe().await;
     refresh(st).await;
     if st.calendar.source().access() == Access::Full {
         ensure_voice_commands(st);
@@ -445,7 +474,7 @@ pub fn ensure_voice_commands(st: &AppState) -> bool {
 pub async fn voice(st: &Arc<AppState>, what: &str) -> (bool, String) {
     let result = match what {
         "next" => answer_next(st),
-        "today" => answer_today(st, false),
+        "today" => answer_today(st),
         "join" => open_join(st).await,
         _ => Err("I don't know that calendar question.".to_string()),
     };
@@ -467,16 +496,10 @@ pub fn answer_next(st: &AppState) -> Result<String, String> {
     Ok(zoned!(st.calendar, tz => agenda::say_next(&events, &s, &tz, now)))
 }
 
-/// A day's meetings: the short spoken line, or (for a tool) one line per event, at most 12.
-pub fn answer_today(st: &AppState, tomorrow: bool) -> Result<String, String> {
+/// "3 meetings today. Next: Standup at 10:30, then Design review at 14:00."
+pub fn answer_today(st: &AppState) -> Result<String, String> {
     let (s, events, now) = snapshot(st)?;
-    zoned!(st.calendar, tz => {
-        if !tomorrow {
-            return Ok(agenda::say_today(&events, &s, &tz, now));
-        }
-        let date = agenda::date_of(&tz, now).map(|d| d + Days::days(1)).ok_or("no date")?;
-        Ok(lines(&agenda::day(&events, &s, &tz, date), &tz, "tomorrow"))
-    })
+    Ok(zoned!(st.calendar, tz => agenda::say_today(&events, &s, &tz, now)))
 }
 
 /// A tool's listing of a day.

@@ -21,6 +21,7 @@ fn known() -> Known {
             "Teammate A".into(),
             "https://meet.google.com/abc-defg-hij".into(),
             "1:1".into(),
+            "Gym".into(),
         ],
     }
 }
@@ -180,15 +181,15 @@ fn diagnostics_are_redacted_and_fit_the_form() {
 fn meeting_titles_attendees_and_links_go() {
     let k = known();
     let out = redact(
-        "refresh: Quarterly numbers with Teammate A\nopened https://meet.google.com/abc-defg-hij for you\nthe quarterly NUMBERS again\nit is a 1:1 today\n",
+        "refresh: Quarterly numbers with Teammate A\nopened https://meet.google.com/abc-defg-hij for you\nthe quarterly NUMBERS again\nit is a 1:1 today, then the Gym, not gymnastics\n",
         &k,
     );
     for gone in ["Quarterly numbers", "quarterly NUMBERS", "Teammate", "meet.google.com", "abc-defg-hij"] {
         assert!(!out.contains(gone), "{gone} left in:\n{out}");
     }
     assert!(out.contains("refresh: [meeting] with [meeting]"), "{out}");
-    // a very short title is not worth blanking a word of the logs for
-    assert!(out.contains("1:1 today"), "{out}");
+    // a short title goes too, but only as a whole word: other words are left alone
+    assert!(out.contains("it is a [meeting] today, then the [meeting], not gymnastics"), "{out}");
     // the reminder's own log line carries no text at all; a debug line that did would still go
     assert_eq!(redact("event meeting_soon -> headsup", &k), "event meeting_soon -> headsup");
     assert_eq!(

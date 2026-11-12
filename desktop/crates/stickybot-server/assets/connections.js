@@ -70,9 +70,12 @@ function apply(conn) {
   const {cls, label} = statusPill(conn.status);
   u.pill.className = "pill" + (cls ? " " + cls : "");
   u.pill.querySelector(".label").textContent = label;
+  // the permission box below says it all in words: no second line saying the same
+  const boxed = conn.status === "needs_permission" && showSettingsLink(conn.permission);
   u.detail.textContent = conn.status === "off"
     ? "Shows your next meeting on the stick and reminds you before it starts. It only reads your calendar; it never changes it."
-    : conn.detail || "";
+    : boxed ? "" : conn.detail || "";
+  u.detail.hidden = !u.detail.textContent;
   const on = conn.status === "connected";
   u.connect.hidden = on;
   u.disconnect.hidden = !on;

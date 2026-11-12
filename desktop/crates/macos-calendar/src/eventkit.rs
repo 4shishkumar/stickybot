@@ -6,6 +6,15 @@
 //! store and asking for access shows the macOS permission prompt and reads the real calendar. The
 //! store is made on first use, so an app with Calendar switched off never creates one.
 //!
+//! **The store is replaced once the permission is granted.** A store made before the answer (it has to
+//! exist to ask) can keep returning no calendars after the grant, so [`request_access`] swaps in a
+//! fresh one as soon as the access is `Full`. Observers are not tied to a store (they watch
+//! `EKEventStoreChangedNotification` with a nil object, i.e. any store in the process), so the
+//! change callback keeps working across the swap. They are removed in `Drop`.
+//!
+//! Every call that talks to EventKit runs in an autorelease pool: they run on blocking-pool threads,
+//! which have none of their own, and EventKit hands back autoreleased objects.
+//!
 //! macOS 14 replaced `requestAccessToEntityType:` with `requestFullAccessToEventsWithCompletion:`
 //! (the app's minimum is 13, so both are used, the new one when the OS has it). The permission needs
 //! `NSCalendarsFullAccessUsageDescription` / `NSCalendarsUsageDescription` in Info.plist and, with the
@@ -13,7 +22,7 @@
 
 use crate::{Access, CalendarInfo, CalendarSource, Event};
 use block2::RcBlock;
-use objc2::rc::Retained;
+use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyObject, Bool, NSObjectProtocol, ProtocolObject};
 use objc2::sel;
 use objc2_core_graphics::CGColor;
@@ -23,6 +32,7 @@ use objc2_event_kit::{
 };
 use objc2_foundation::{NSDate, NSError, NSNotification, NSNotificationCenter};
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
@@ -53,6 +63,9 @@ type Observer = Retained<ProtocolObject<dyn NSObjectProtocol>>;
 
 pub struct EventKitCalendar {
     store: Mutex<Option<Hold<Retained<EKEventStore>>>>,
+    /// whether the held store was made while access was already `Full` (only changed under the
+    /// store's lock): one made earlier is replaced the first time a caller sees `Full`
+    made_with_access: AtomicBool,
     /// the notification observers, kept so they stay registered for the life of the app
     observers: Mutex<Vec<Hold<Observer>>>,
 }
@@ -66,14 +79,18 @@ impl Default for EventKitCalendar {
 impl EventKitCalendar {
     /// Nothing is created or asked yet.
     pub fn new() -> Self {
-        Self { store: Mutex::new(None), observers: Mutex::new(Vec::new()) }
+        Self { store: Mutex::new(None), made_with_access: AtomicBool::new(false), observers: Mutex::new(Vec::new()) }
     }
 
     fn store_guard(&self) -> MutexGuard<'_, Option<Hold<Retained<EKEventStore>>>> {
         let mut g = self.store.lock().unwrap_or_else(|e| e.into_inner());
-        if g.is_none() {
+        // A store made before the grant may keep returning nothing, however late the answer came
+        // (even after `request_access` stopped waiting): the first caller that sees `Full` gets a new one.
+        let full = status() == Access::Full;
+        if g.is_none() || (full && !self.made_with_access.load(Ordering::Relaxed)) {
             // SAFETY: `new` on a class with no preconditions
             *g = Some(Hold(unsafe { EKEventStore::new() }));
+            self.made_with_access.store(full, Ordering::Relaxed);
         }
         g
     }
@@ -177,6 +194,24 @@ impl CalendarSource for EventKitCalendar {
     }
 
     fn request_access(&self) -> Result<Access, String> {
+        autoreleasepool(|_| self.ask())
+    }
+
+    fn calendars(&self) -> Result<Vec<CalendarInfo>, String> {
+        autoreleasepool(|_| self.list_calendars())
+    }
+
+    fn events(&self, from: i64, to: i64) -> Result<Vec<Event>, String> {
+        autoreleasepool(|_| self.list_events(from, to))
+    }
+
+    fn on_change(&self, f: Box<dyn Fn() + Send + Sync>) {
+        autoreleasepool(|_| self.observe(f))
+    }
+}
+
+impl EventKitCalendar {
+    fn ask(&self) -> Result<Access, String> {
         if status() != Access::NotAsked {
             return Ok(status()); // macOS asks once; the answer stands (the person changes it in System Settings)
         }
@@ -198,14 +233,18 @@ impl CalendarSource for EventKitCalendar {
                 store.requestAccessToEntityType_completion(EKEntityType::Event, RcBlock::as_ptr(&done));
             }
         }
-        match rx.recv_timeout(ANSWER_WAIT) {
+        let answer = rx.recv_timeout(ANSWER_WAIT);
+        drop(store);
+        // granted: swap the store now (see `store_guard`), so it is there for the change notification
+        drop(self.store_guard());
+        match answer {
             Ok(Err(why)) if status() == Access::NotAsked => Err(format!("macOS couldn't ask: {why}")),
             Ok(_) => Ok(status()),
             Err(_) => Err("macOS is still waiting for your answer to the Calendar question".into()),
         }
     }
 
-    fn calendars(&self) -> Result<Vec<CalendarInfo>, String> {
+    fn list_calendars(&self) -> Result<Vec<CalendarInfo>, String> {
         need_full(status())?;
         Ok(self.with_store(|s| {
             // SAFETY: a read-only query
@@ -214,7 +253,7 @@ impl CalendarSource for EventKitCalendar {
         }))
     }
 
-    fn events(&self, from: i64, to: i64) -> Result<Vec<Event>, String> {
+    fn list_events(&self, from: i64, to: i64) -> Result<Vec<Event>, String> {
         need_full(status())?;
         Ok(self.with_store(|s| {
             let (start, end) =
@@ -228,7 +267,7 @@ impl CalendarSource for EventKitCalendar {
         }))
     }
 
-    fn on_change(&self, f: Box<dyn Fn() + Send + Sync>) {
+    fn observe(&self, f: Box<dyn Fn() + Send + Sync>) {
         // the store has to exist for the notification to be posted
         drop(self.store_guard());
         let block = RcBlock::new(move |_n: NonNull<NSNotification>| f());
@@ -243,5 +282,19 @@ impl CalendarSource for EventKitCalendar {
             )
         };
         self.observers.lock().unwrap_or_else(|e| e.into_inner()).push(Hold(token));
+    }
+}
+
+impl Drop for EventKitCalendar {
+    /// Takes the observers out of the notification center. The app keeps one source for its whole life,
+    /// so this only matters for a source made and dropped (a test, a tool); it keeps a dropped source
+    /// from leaving callbacks behind.
+    fn drop(&mut self) {
+        let center = NSNotificationCenter::defaultCenter();
+        for Hold(token) in self.observers.get_mut().unwrap_or_else(|e| e.into_inner()).drain(..) {
+            // SAFETY: the token is what `addObserverForName` returned for this center
+            let object: &AnyObject = (*token).as_ref();
+            unsafe { center.removeObserver(object) };
+        }
     }
 }

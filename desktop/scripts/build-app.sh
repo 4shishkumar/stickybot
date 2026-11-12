@@ -38,7 +38,8 @@ codesign -dv "$APP" 2>&1 | grep -E "^(Identifier|Authority|TeamIdentifier|Signat
 # connection) unless the calendars entitlement is signed in (entitlements.plist, applied through
 # bundle.macOS.entitlements in tauri.conf.json). Without it the permission question never appears
 # and Calendar quietly reads nothing, so a build that lost it fails here, loudly.
-if ! codesign -d --entitlements :- "$APP" 2>/dev/null | grep -q "com.apple.security.personal-information.calendars"; then
+ENTITLEMENTS="$(codesign -d --entitlements :- "$APP" 2>/dev/null || true)"
+if ! grep -q "com.apple.security.personal-information.calendars" <<<"$ENTITLEMENTS"; then
   echo "error: $APP is not signed with the calendars entitlement" >&2
   echo "  (bundle.macOS.entitlements in crates/stickybot-app/tauri.conf.json -> entitlements.plist)" >&2
   exit 1

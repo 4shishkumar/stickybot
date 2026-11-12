@@ -600,7 +600,9 @@ pub fn redact(text: &str, k: &Known) -> String {
         }
     }
     for m in &k.meetings {
-        if m.chars().count() >= 4 {
+        // short titles ("1:1", "Gym") too: `replace_literal` matches a literal that starts and ends with a
+        // letter or digit as a whole word only, so they do not blank parts of other words
+        if m.chars().count() >= 3 {
             lits.push((m, "[meeting]".into()));
         }
     }

@@ -1,5 +1,5 @@
 use super::*;
-use chrono::{FixedOffset, NaiveDateTime};
+use chrono::{Duration, FixedOffset, NaiveDateTime};
 
 /// The Mac's zone in most tests: +05:30, a half-hour zone, so a mix-up between zones shows.
 fn ist() -> FixedOffset {
@@ -658,4 +658,130 @@ fn joining_picks_the_meeting_on_now_then_the_next_one_with_a_link_today() {
     declined.declined = true;
     let tomorrow = with_link("t", "Tomorrow", "2026-11-13 10:00", "2026-11-13 11:00", "meet.google.com/ttt-tttt-ttt");
     assert!(join_choice(&[declined, tomorrow], &on(), &tz, now).is_none());
+}
+
+#[test]
+fn joining_reaches_a_meeting_starting_within_fifteen_minutes_across_midnight() {
+    let tz = ist();
+    let mut late = ev("m", "Midnight call", at(&tz, "2026-11-13 00:05"), at(&tz, "2026-11-13 00:35"));
+    late.url = "https://meet.google.com/abc-defg-hij".into();
+    let events = vec![late];
+    let pick = |now: &str| join_choice(&events, &on(), &tz, at(&tz, now)).map(|(e, _, _)| e.title.clone());
+    assert_eq!(pick("2026-11-12 23:55"), Some("Midnight call".into()));
+    assert_eq!(pick("2026-11-12 23:50"), Some("Midnight call".into()), "exactly 15 min ahead");
+    assert_eq!(pick("2026-11-12 23:49"), None, "16 min ahead, and tomorrow");
+}
+
+#[test]
+fn a_one_minute_reminder_cannot_fall_between_two_ticks() {
+    // the check runs every ALERT_TICK_S; whatever the phase, a reminder with a 1 minute lead is due at
+    // some tick, and only at one tick once it is recorded as fired
+    const { assert!(ALERT_TICK_S * 2 <= 60) } // at least two checks fit in the shortest window
+    let tz = ist();
+    let start = at(&tz, "2026-11-12 10:30");
+    let events = vec![ev("s", "Standup", start, start + 30 * MIN)];
+    let s = Settings { alert_min: 1, ..on() };
+    for phase in 0..ALERT_TICK_S {
+        let mut fired = HashMap::new();
+        let mut reminded = 0;
+        let mut now = start - 5 * MIN + phase;
+        while now < start + MIN {
+            let due = due_alerts(&events, &s, now, &fired);
+            reminded += due.len();
+            for e in due {
+                fired.insert((e.id.clone(), e.start), e.end);
+            }
+            now += ALERT_TICK_S;
+        }
+        assert_eq!(reminded, 1, "phase {phase}");
+    }
+}
+
+/// A made-up zone that is UTC-5 until a clock change on 2026-03-08 and UTC-4 after it: the clocks
+/// jump forward over `[gap_hour:00, gap_hour+1:00)` local, so that hour does not exist.
+#[derive(Clone, Copy, Debug)]
+struct Springs {
+    gap_hour: u32,
+}
+
+impl Springs {
+    const BEFORE: i32 = -5 * 3600;
+    const AFTER: i32 = -4 * 3600;
+
+    /// the instant of the change, UTC
+    fn change(&self) -> i64 {
+        FixedOffset::east_opt(Self::BEFORE)
+            .unwrap()
+            .from_local_datetime(
+                &NaiveDate::from_ymd_opt(2026, 3, 8).unwrap().and_hms_opt(self.gap_hour, 0, 0).unwrap(),
+            )
+            .unwrap()
+            .timestamp()
+    }
+
+    fn at_utc(&self, utc: i64) -> FixedOffset {
+        FixedOffset::east_opt(if utc >= self.change() { Self::AFTER } else { Self::BEFORE }).unwrap()
+    }
+}
+
+impl TimeZone for Springs {
+    type Offset = FixedOffset;
+
+    fn from_offset(offset: &FixedOffset) -> Self {
+        let _ = offset;
+        Springs { gap_hour: 2 }
+    }
+
+    fn offset_from_local_date(&self, d: &NaiveDate) -> chrono::LocalResult<FixedOffset> {
+        self.offset_from_local_datetime(&d.and_hms_opt(12, 0, 0).unwrap())
+    }
+
+    fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> chrono::LocalResult<FixedOffset> {
+        let gap_start = NaiveDate::from_ymd_opt(2026, 3, 8).unwrap().and_hms_opt(self.gap_hour, 0, 0).unwrap();
+        let gap_end = gap_start + Duration::hours(1);
+        if *local < gap_start {
+            chrono::LocalResult::Single(FixedOffset::east_opt(Self::BEFORE).unwrap())
+        } else if *local >= gap_end {
+            chrono::LocalResult::Single(FixedOffset::east_opt(Self::AFTER).unwrap())
+        } else {
+            chrono::LocalResult::None
+        }
+    }
+
+    fn offset_from_utc_date(&self, d: &NaiveDate) -> FixedOffset {
+        self.offset_from_utc_datetime(&d.and_hms_opt(12, 0, 0).unwrap())
+    }
+
+    fn offset_from_utc_datetime(&self, utc: &NaiveDateTime) -> FixedOffset {
+        self.at_utc(utc.and_utc().timestamp())
+    }
+}
+
+#[test]
+fn a_day_with_a_clock_change_is_23_hours_and_events_keep_their_local_times() {
+    let day = |tz: &Springs, d: u32| day_bounds(tz, NaiveDate::from_ymd_opt(2026, 3, d).unwrap()).unwrap();
+    // the clocks skip 02:00-03:00: the 8th has 23 hours, its neighbours 24
+    let z = Springs { gap_hour: 2 };
+    let (from, to) = day(&z, 8);
+    assert_eq!(to - from, 23 * 3600);
+    assert_eq!(day(&z, 7).1 - day(&z, 7).0, 24 * 3600);
+    assert_eq!(day(&z, 9).1 - day(&z, 9).0, 24 * 3600);
+    assert_eq!((day(&z, 7).1, day(&z, 8).1), (from, day(&z, 9).0), "the days follow each other");
+    // an hour after the change is 03:xx local, not 02:xx
+    let after = z.change() + 30 * MIN;
+    assert_eq!(hhmm(&z, after), "03:30");
+    assert_eq!(hhmm(&z, z.change() - 30 * MIN), "01:30");
+    let meeting = ev("m", "Early call", after, after + 30 * MIN);
+    assert_eq!(today(std::slice::from_ref(&meeting), &on(), &z, after).len(), 1);
+    // a day whose midnight does not exist starts at the first hour that does (01:00), and is 23 hours
+    let z = Springs { gap_hour: 0 };
+    let (from, to) = day(&z, 8);
+    assert_eq!(from, z.change());
+    assert_eq!(to - from, 23 * 3600);
+    assert_eq!(hhmm(&z, from), "01:00");
+    let first = ev("f", "First hour", from + 30 * MIN, from + 60 * MIN);
+    assert_eq!(today(&[first], &on(), &z, from + 5 * MIN).len(), 1);
+    // an event the evening before is not in it
+    let before = ev("b", "Evening", from - 90 * MIN, from - 30 * MIN);
+    assert!(today(&[before], &on(), &z, from + 5 * MIN).is_empty());
 }

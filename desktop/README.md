@@ -402,7 +402,9 @@ signature: the hardened runtime refuses EventKit without it).
 1. `cargo run -p macos-calendar --example calendar_dump -- --status` (no prompt), `--list`, then
    `--today` (the prompt names the terminal app; allow it) show the calendars and today's events.
 2. Dashboard → Connections → Connect: macOS asks for Calendars; allow Full Access. The pill turns
-   Connected, the calendars and today's meetings are listed. Deny it once: the card says how to
+   Connected, the calendars and today's meetings are listed (the first Connect on a Mac that was
+   never asked lists events at once, with no restart or second Connect: the app swaps its event
+   store for a fresh one after the grant). Deny it once: the card says how to
    turn it on in System Settings → Privacy & Security → Calendars, and *Connect again* works after.
 3. Next meeting on the stick's home card, pinned 15 min before the start until 5 min after; a
    `meeting_soon` heads-up (orange, until a button) `Remind me` minutes before, once per meeting;
