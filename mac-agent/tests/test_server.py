@@ -118,3 +118,32 @@ async def test_events_test_endpoint(client):
     r = await client.post("/api/events/test", headers=client.auth, json={"kind": "pr_merged"})
     assert r.status == 200
     assert client.agent.link.sent[-1]["event"]["level"] == "celebrate"
+    assert client.agent.link.sent[-1]["event"]["sound"] == "applause"
+
+
+async def test_events_test_plays_what_the_page_has_picked(client):
+    """The page's ▶ sends the level and sound shown, even before they're saved."""
+    r = await client.post("/api/events/test", headers=client.auth,
+                          json={"kind": "pr_merged", "level": "headsup", "sound": "tada"})
+    ev = (await r.json())["event"]
+    assert (ev["level"], ev["sound"]) == ("headsup", "tada")
+    assert client.agent.link.sent[-1]["event"] == ev
+    assert client.agent.cfg["event_rules"] == {} and client.agent.cfg["event_sounds"] == {}   # nothing saved
+
+
+async def test_event_kinds_and_sounds_config(client):
+    r = await client.get("/api/events/kinds", headers=HOST)
+    k = await r.json()
+    assert k["sounds"]["pr_merged"] == "applause" and k["sounds"]["ci_failed"] == ""
+    assert k["level_sounds"]["celebrate"] == "jingle_win"
+    assert not k["tunes_known"] and "applause" in k["tunes"] and "jingle_win" in k["tunes"]
+    client.agent.sounds = {"tunes": ["jingle_win", "applause", "beep-1"]}
+    k = await (await client.get("/api/events/kinds", headers=HOST)).json()
+    assert k["tunes_known"] and k["tunes"] == ["jingle_win", "applause", "beep-1"]
+
+    r = await client.put("/api/config", headers=client.auth, json={"event_sounds": {"pr_merged": "coins"}})
+    assert r.status == 400 and "no sound 'coins'" in (await r.json())["error"]
+    r = await client.put("/api/config", headers=client.auth, json={"event_sounds": {"pr_merged": "beep-1"}})
+    assert r.status == 200 and client.agent.cfg["event_sounds"] == {"pr_merged": "beep-1"}
+    k = await (await client.get("/api/events/kinds", headers=HOST)).json()
+    assert k["sounds"]["pr_merged"] == "beep-1"

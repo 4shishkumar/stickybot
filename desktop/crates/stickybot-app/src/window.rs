@@ -28,6 +28,10 @@ fn open_outside(url: &tauri::Url) {
 
 /// Shows and focuses the dashboard window (made if it was closed), at `#page` if given.
 pub fn show_dashboard_at(app: &AppHandle, page: &str) {
+    // a Dock icon, Cmd+Tab and the app menu while the window is up (dock.rs)
+    if let Some(d) = crate::dock::of(app) {
+        d.window_opened(app);
+    }
     if let Some(w) = app.get_webview_window(WINDOW) {
         if !page.is_empty() {
             let _ = w.eval(format!("location.hash = {page:?}")); // letters, digits and - (checked)

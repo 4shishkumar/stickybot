@@ -52,6 +52,7 @@
 #include "logic/actions.h"
 #include "sound.h"
 #include "events.h"
+#include "logic/event_sound.h"
 #include "ota.h"
 #include "faces/faces.h"
 #include "air.h"
@@ -1104,7 +1105,9 @@ void loop() {
       const events::Event& e = events::current();
       buddy::eventShown(e.id);
       ui::wake(e.level == events::Level::HEADSUP ? 61000 : 8000);
-      if (settings::soundOn()) sound::play(e.sound.length() ? e.sound : String(events::defaultSound(e.level)));
+      if (settings::soundOn())  // its own sound; one this firmware doesn't have: the level's default
+        event_sound::play(e.sound.c_str(), events::defaultSound(e.level),
+                          [](const char* n) { return sound::play(String(n)); });
       Log.printf("Showing event: %s\n", e.title.c_str());
       lastFrame = 0;
     }

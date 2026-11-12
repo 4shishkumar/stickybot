@@ -284,7 +284,7 @@ pub async fn notify(st: &crate::AppState) -> Option<Value> {
     } else {
         format!("firmware {}", s["latest"]["firmware"].as_str().unwrap_or(""))
     };
-    let ev = crate::events::notify(st, "update", &format!("Update {name} ready"), "see the dashboard", None, None, "").await;
+    let ev = crate::events::notify(st, "update", &format!("Update {name} ready"), "see the dashboard", None, None, None).await;
     st.updates.s.lock().unwrap().notified.push(tag);
     st.updates.save();
     ev

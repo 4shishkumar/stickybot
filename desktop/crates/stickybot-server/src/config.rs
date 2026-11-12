@@ -156,6 +156,12 @@ pub fn defaults() -> Map<String, Value> {
             // ({"tv": "samsung"}), and whether the TV phrases were added to commands.json
             m.insert("ir_brands".into(), json!({}));
             m.insert("ir_voice_added".into(), json!(false));
+            // a sound per event kind (events.rs; "" = the level's, "off"); unlisted: DEFAULT_SOUNDS
+            m.insert("event_sounds".into(), json!({}));
+            // the Rust app's own: a Dock icon even with the window closed; the "Report an issue"
+            // web app ("" = the compiled-in one, feedback.rs)
+            m.insert("dock_always".into(), json!(false));
+            m.insert("feedback_url".into(), json!(""));
             m
         }
         _ => unreachable!(),
@@ -239,6 +245,10 @@ pub fn invalid(body: &Map<String, Value>) -> String {
         && serde_json::from_value::<stick_link::Target>(s.clone()).is_err()
     {
         return "stick must be null or {\"address\", \"name\"}".into();
+    }
+    let bad = crate::feedback::valid_config(body);
+    if !bad.is_empty() {
+        return bad;
     }
     crate::faces::valid_config(body)
 }
