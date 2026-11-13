@@ -1,5 +1,6 @@
 #include "battery.h"
 #include "netlog.h"
+#include "board.h"
 #include <M5Unified.h>
 #include <algorithm>
 #include "logic/battery_math.h"
@@ -60,7 +61,7 @@ static void setLed(bool on) {
   static int8_t ledState = -1;
   if (ledState == (int8_t)on) return;
   ledState = on;
-  M5.Power.M5pm1.setLedEnLevel(on);  // green status LED (PY_STATUS_LED)
+  board::statusLed(on);
 }
 
 void update() {
@@ -87,15 +88,13 @@ void update() {
   full_ = usb_ && !charging_ && highSince && now - highSince > FULL_AFTER_MS && smoothMv >= FULL_MV;
   setLed(charging_);  // on while charging; off when full or unplugged
 
-  if (usb_ && !charging_ && !full_ && level_ >= 0 && level_ < 95) {
+  if (board::HAS_POWER_CHIP && usb_ && !charging_ && !full_ && level_ >= 0 && level_ < 95) {
     if (!notChargingSince) notChargingSince = now;
     if (now - notChargingSince > KICK_AFTER_MS && (!lastKick || now - lastKick > KICK_EVERY_MS)) {
       lastKick = now;
       notChargingSince = 0;
       kicks++;
-      M5.Power.M5pm1.setBatteryCharge(false);
-      delay(300);
-      M5.Power.M5pm1.setBatteryCharge(true);
+      board::chargerRestart();
       Log.println("Charger: on USB but not charging - toggled charge-enable");
     }
   } else {

@@ -71,7 +71,7 @@ constexpr uint32_t REPEAT_EVERY_MS   = 120;
 constexpr uint32_t B_HOLD_MS         = 600;   // B held this long = menu, shorter = Enter
 constexpr uint32_t ENTER_MIN_HOLD_MS = 1000;  // "Enter after hold" ignores shorter A presses
 constexpr int      USB_POWER_MV      = 4000;   // VBUS above this = plugged in, no standby
-constexpr gpio_num_t WAKE_PIN        = GPIO_NUM_11;  // button A
+constexpr gpio_num_t WAKE_PIN        = board::WAKE_PIN;  // button A
 
 constexpr uint16_t COLOR_OK   = 0x03E0;
 constexpr uint16_t COLOR_WARN = 0xC300;
@@ -286,16 +286,11 @@ static void standby() {
   ui::drawMessage("Standby", "Press A to wake", COLOR_DIM);
   delay(1500);
   ui::off();
-  // Turn off the L3B rail (LCD, backlight, mic, speaker amp) via the power chip;
-  // M5.begin() turns it back on after waking.
-  auto& pm = M5.Power.M5pm1;
-  for (auto pin : {m5::M5PM1_Class::gpio2, m5::M5PM1_Class::gpio3}) {
-    pm.setGPIOFunction(pin, m5::M5PM1_Class::gpio);
-    pm.setGPIOMode(pin, m5::M5PM1_Class::output);
-    pm.setGPIOOutput(pin, false);
+  board::prepareStandby();  // M5.begin() turns it all back on after waking
+  if (board::WAKE_PIN_PULLUP) {
+    rtc_gpio_pullup_en(WAKE_PIN);
+    rtc_gpio_pulldown_dis(WAKE_PIN);
   }
-  rtc_gpio_pullup_en(WAKE_PIN);
-  rtc_gpio_pulldown_dis(WAKE_PIN);
   esp_sleep_enable_ext0_wakeup(WAKE_PIN, 0);  // button A pulls the pin low
   esp_deep_sleep_start();
 }
@@ -765,7 +760,7 @@ void setup() {
   M5.begin(cfg);
   setCpuFrequencyMhz(CPU_MHZ);
   M5.BtnB.setHoldThresh(B_HOLD_MS);
-  M5.Power.M5pm1.setBatteryCharge(true);  // make sure the charger is on
+  board::begin();
   Serial.begin(115200);
 
   settings::begin();

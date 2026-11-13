@@ -231,6 +231,7 @@ static void rxLoop(void*) {
 }
 
 bool rxStart() {
+  if (!board::HAS_IR_RX) return false;  // this board has no receiver
   if (rxTask) return !rxError;
   for (uint16_t** b : {&cap, &ready, &frameBuf}) {
     if (*b) continue;
@@ -274,6 +275,7 @@ size_t takeCapture(uint16_t* out, size_t max) {
 }
 
 int pinLevel(int gpio) {
+  if (gpio < 0) return -1;  // a pin this board doesn't have
   if ((gpio == TX_PIN && txCh) || (gpio == RX_PIN && rxRunning)) return -1;
   gpio_reset_pin((gpio_num_t)gpio);
   gpio_set_direction((gpio_num_t)gpio, GPIO_MODE_INPUT);

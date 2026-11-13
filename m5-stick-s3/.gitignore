@@ -1,3 +1,11 @@
 tools/face_shots/build/
 tools/face_shots/out/
 tools/face_shots/big/
+
+# pioarduino library rebuild (stickc_plus2: custom_sdkconfig) leaves these behind
+.dummy/
+managed_components/
+sdkconfig.defaults
+sdkconfig.*
+dependencies.lock
+CMakeLists.txt
