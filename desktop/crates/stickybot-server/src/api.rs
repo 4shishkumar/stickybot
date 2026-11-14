@@ -133,6 +133,13 @@ pub const PORTED: &[&str] = &[
     "GET /api/feedback/reports",
     "GET /api/feedback/reports/{id}",
     "POST /api/feedback/reports/{id}/retry",
+    // connections: the Mac's Calendar (connections/)
+    "GET /api/connections",
+    "PUT /api/connections/calendar",
+    "POST /api/connections/calendar/connect",
+    "POST /api/connections/calendar/disconnect",
+    "GET /api/connections/calendar/calendars",
+    "GET /api/connections/calendar/events",
 ];
 
 /// The Python agent's endpoints that aren't here yet, by the phase that brings them.
@@ -200,6 +207,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(crate::faces::routes())
         .merge(crate::setup::routes())
         .merge(crate::feedback::routes())
+        .merge(crate::connections::routes())
         .fallback(not_ported)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -253,6 +261,8 @@ async fn page(State(st): State<Arc<AppState>>) -> Html<String> {
 const RUST_ASSETS: &[(&str, &str, &str)] = &[
     ("rust.js", "text/javascript", include_str!("../assets/rust.js")),
     ("feedback.js", "text/javascript", include_str!("../assets/feedback.js")),
+    ("connections.js", "text/javascript", include_str!("../assets/connections.js")),
+    ("connections_logic.js", "text/javascript", include_str!("../assets/connections_logic.js")),
 ];
 
 async fn rust_static(Path(path): Path<String>) -> Response {

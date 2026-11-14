@@ -56,6 +56,10 @@ the stick, the wireless Wispr mic, firmware updates. It needs a Mac with **Apple
      app taps its own sound to make the stick's mic appear on the Mac;
    - **Login Items**: if you turn on Settings → *Start at login* (System Settings → General →
      Login Items may ask you to allow StickyBot);
+   - **Calendars** (Full Access): only if you press Connect on the dashboard's Connections page. StickyBot
+     then reads your Mac's calendars for the next meeting on the stick and a reminder before it
+     starts. It never changes your calendar, keeps the events only in memory and sends them nowhere
+     but to the stick (and to Claude when you ask it about your day);
    - no **Microphone** access: the stick's mic does the listening.
 
    Because the app is signed ad hoc, macOS sees every new version as a new app: after an update it

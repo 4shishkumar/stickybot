@@ -156,6 +156,10 @@ pub fn defaults() -> Map<String, Value> {
             // ({"tv": "samsung"}), and whether the TV phrases were added to commands.json
             m.insert("ir_brands".into(), json!({}));
             m.insert("ir_voice_added".into(), json!(false));
+            // the connections (connections/): the Mac's Calendar, off until the person connects it; and
+            // whether its voice phrases were added to commands.json
+            m.insert("connections".into(), json!({"calendar": crate::connections::agenda::Settings::default().to_json()}));
+            m.insert("calendar_voice_added".into(), json!(false));
             // a sound per event kind (events.rs; "" = the level's, "off"); unlisted: DEFAULT_SOUNDS
             m.insert("event_sounds".into(), json!({}));
             // the Rust app's own: a Dock icon even with the window closed; the "Report an issue"
@@ -247,6 +251,15 @@ pub fn invalid(body: &Map<String, Value>) -> String {
     {
         return "ir_voice_added must be true or false".into();
     }
+    if let Some(b) = body.get("calendar_voice_added")
+        && !b.is_boolean()
+    {
+        return "calendar_voice_added must be true or false".into();
+    }
+    let bad = crate::connections::invalid_config(body);
+    if !bad.is_empty() {
+        return bad;
+    }
     if let Some(s) = body.get("stick")
         && !s.is_null()
         && serde_json::from_value::<stick_link::Target>(s.clone()).is_err()
@@ -328,5 +341,34 @@ mod tests {
         assert_eq!(invalid(&m(json!({"stick": {"address": "X", "name": "Y"}}))), "");
         assert_eq!(invalid(&m(json!({"stick": null}))), "");
         assert!(!invalid(&m(json!({"stick": "X"}))).is_empty());
+    }
+
+    #[test]
+    fn calendar_settings_have_defaults_and_are_checked_in_words() {
+        let m = |v: Value| v.as_object().unwrap().clone();
+        assert_eq!(
+            defaults()["connections"],
+            json!({"calendar": {"on": false, "calendars": [], "skip_all_day": true, "skip_declined": true, "alert_min": 5}})
+        );
+        assert_eq!(defaults()["calendar_voice_added"], json!(false));
+        assert_eq!(invalid(&m(json!({"connections": {"calendar": {"on": true, "alert_min": 0}}}))), "");
+        assert_eq!(
+            invalid(&m(json!({"connections": {"calendar": {"alert_min": 500}}}))),
+            "alert_min must be 0-120 minutes"
+        );
+        assert!(invalid(&m(json!({"connections": {"calendar": {"skip_declined": "no"}}}))).contains("true or false"));
+        assert!(invalid(&m(json!({"connections": {"github": {}}}))).contains("no connection 'github'"));
+        assert!(!invalid(&m(json!({"connections": []}))).is_empty());
+        assert!(!invalid(&m(json!({"calendar_voice_added": 1}))).is_empty());
+    }
+
+    #[test]
+    fn a_saved_calendar_setting_keeps_the_others_at_their_defaults() {
+        let p = tmp("calendar");
+        let mut c = load(&p);
+        c.insert("connections".into(), json!({"calendar": {"on": true}}));
+        save(&p, &c).unwrap();
+        let back = crate::connections::agenda::Settings::from_value(&load(&p)["connections"]["calendar"]);
+        assert!(back.on && back.skip_all_day && back.skip_declined && back.alert_min == 5 && back.calendars.is_empty());
     }
 }

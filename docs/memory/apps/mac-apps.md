@@ -1,6 +1,6 @@
 ---
 type: memory
-description: "The Mac apps: StickyBot.app in Rust (Tauri 2, axum, ~/.stickybot-rs, com.stickybot.rs) that ships, the legacy Python app (~/.stick-agent), the dashboard files both serve, ports 8660 and 8670, ad-hoc signing, in-app updates and macOS permissions."
+description: "The Mac apps: StickyBot.app in Rust (Tauri 2, axum, ~/.stickybot-rs, com.stickybot.rs) that ships, the legacy Python app (~/.stick-agent), the dashboard files both serve, ports 8660 and 8670, ad-hoc signing, in-app updates, macOS permissions and the signed-in Calendar entitlement."
 ---
 # Mac Apps
 
@@ -10,7 +10,7 @@ description: "The Mac apps: StickyBot.app in Rust (Tauri 2, axum, ~/.stickybot-r
 
 Two apps can drive the stick. `desktop/` is StickyBot.app, a Rust workspace (Tauri 2 menu bar
 app, axum server, CoreBluetooth, Core Audio, sherpa-onnx speech to text) and the app each release
-ships. `mac-agent/` is the older Python app, installed by `install.sh`, of which the Rust app is
+ships; its `macos-calendar` crate reads the Mac's Calendar (see [connections](/apps/connections.md)). `mac-agent/` is the older Python app, installed by `install.sh`, of which the Rust app is
 a module-by-module port. Crate layout, environment variables and the real-stick checklist are in
 `desktop/README.md`; moving from one app to the other is `desktop/SWITCHOVER.md`.
 
@@ -45,8 +45,21 @@ Keychain, never in config files, logs or API replies.
 
 ### Requirement: Nothing asks for a permission before it is needed
 Bluetooth is first touched on the first scan or connect; System Audio Recording only for the
-wireless mic; no Microphone access at all (the stick's mic listens). The speech model (487 MB) is
-downloaded on first start into the app's home and is never part of the bundle.
+wireless mic; Calendar only when the person presses Connect on the Connections page (no event
+store exists before that); no Microphone access at all (the stick's mic listens). The speech model
+(487 MB) is downloaded on first start into the app's home and is never part of the bundle.
+
+### Requirement: The Calendar permission is declared and signed in
+`desktop/crates/stickybot-app/Info.plist` carries `NSCalendarsFullAccessUsageDescription` (asked
+on macOS 14 and later) and `NSCalendarsUsageDescription` (macOS 13), both saying the app reads the
+calendar to show the next meeting and remind, and never changes it. The bundle is signed with the
+hardened runtime and the `com.apple.security.personal-information.calendars` entitlement, given in
+`crates/stickybot-app/entitlements.plist` and applied through `bundle.macOS.entitlements` in
+`tauri.conf.json`. `desktop/scripts/build-app.sh` (what CI and the release workflow run) reads the
+signed app's entitlements with `codesign -d --entitlements` and exits non-zero when the calendars
+entitlement is missing. The EventKit code itself is in the `macos-calendar` crate, which
+`stickybot-server` builds into `AppState`; the app crate needs only these bundle files. What
+Calendar does is in [connections](/apps/connections.md).
 
 ### Requirement: StickyBot.app installs its own updates
 The update state machine, busy gate, channel to endpoint rule and API live in
@@ -98,8 +111,8 @@ fake Claude and temporary homes. Tests against real Core Audio or a real stick a
 
 ### Ad-hoc signing, with permissions re-asked per version
 **Decision**: Release builds are signed ad hoc by GitHub Actions (no Apple Developer ID, not notarized).
-**Why**: No Apple certificate has to live in CI; the release workflow uses the built-in `GITHUB_TOKEN` and, on tag pushes only, the update-signing secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. [INFERRED]
-**Rejected**: A Developer ID signature with notarization, which needs a paid certificate held as a CI secret. [INFERRED] What ad hoc costs: macOS sees each version as a new app, so Bluetooth and System Audio Recording are asked again after every update, and the first open needs right-click → Open. A local build can use a stable identity (`STICKYBOT_SIGNING_IDENTITY`) to keep its permissions.
+**Why**: No Apple certificate has to live in CI; the release workflow uses the built-in `GITHUB_TOKEN` and, on tag pushes only, the update-signing secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. [INFERRED] The ad-hoc signature still uses the hardened runtime, so the entitlements an API needs (the calendars one) are signed in and checked by `build-app.sh`.
+**Rejected**: A Developer ID signature with notarization, which needs a paid certificate held as a CI secret. [INFERRED] What ad hoc costs: macOS sees each version as a new app, so Bluetooth, System Audio Recording and Calendar are asked again after every update, and the first open needs right-click → Open. A local build can use a stable identity (`STICKYBOT_SIGNING_IDENTITY`) to keep its permissions.
 *Introduced by*: predates fab; see `README.md` "Install the Mac app"
 
 ### Tauri's updater plugin behind a server-side trait

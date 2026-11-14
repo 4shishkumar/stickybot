@@ -26,7 +26,8 @@
     ],
     "macOS": {
       "minimumSystemVersion": "13.0",
-      "signingIdentity": null
+      "signingIdentity": null,
+      "entitlements": "entitlements.plist"
     }
   },
   "plugins": {
