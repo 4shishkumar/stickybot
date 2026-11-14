@@ -1,0 +1,58 @@
+id: s3br
+name: 261112-s3br-connections-page-calendar-connection
+created: 2026-11-12T16:43:30Z
+created_by: 4shishkumar
+change_type: feat
+issues: []
+progress:
+    intake: done
+    apply: done
+    review: done
+    hydrate: done
+    ship: done
+    review-pr: pending
+plan:
+    generated: true
+    task_count: 18
+    acceptance_count: 40
+    acceptance_completed: 40
+confidence:
+    certain: 8
+    confident: 6
+    tentative: 0
+    unresolved: 0
+    score: 4.5
+    fuzzy: true
+    dimensions:
+        signal: 78.9
+        reversibility: 87.1
+        competence: 79.6
+        disambiguation: 75.7
+stage_metrics:
+    intake: {started_at: "2026-11-12T16:43:30Z", driver: fab-new, iterations: 1, completed_at: "2026-11-12T16:46:49Z"}
+    apply: {started_at: "2026-11-12T19:33:09Z", driver: fab-fff, iterations: 2, completed_at: "2026-11-12T19:38:44Z"}
+    review: {started_at: "2026-11-12T19:38:44Z", driver: fab-fff, iterations: 2, completed_at: "2026-11-12T19:46:41Z"}
+    hydrate: {started_at: "2026-11-12T19:46:41Z", driver: fab-fff, iterations: 1, completed_at: "2026-11-12T19:50:29Z"}
+    ship: {started_at: "2026-11-12T19:50:29Z", driver: fab-fff, iterations: 1, completed_at: "2026-11-12T19:51:03Z"}
+prs:
+    - https://github.com/4shishkumar/stickybot/pull/5
+base_branch: main
+change_type_source: explicit
+true_impact:
+    added: 5407
+    deleted: 30
+    net: 5377
+    excluding:
+        added: 4489
+        deleted: 23
+        net: 4466
+    tests:
+        added: 1837
+        deleted: 0
+        net: 1837
+    computed_at: "2026-11-12T19:51:03Z"
+    computed_at_stage: ship
+summary: 'Connections page and read-only Calendar connection: EventKit crate with fake, meeting card, meeting_soon reminder, join, voice and stick tools, calendars entitlement'
+# base_branch: written by /git-branch or /fab-new when the change's branch is created (no placeholder here).
+# true_impact: lazily created on first stage-finish that computes it (no placeholder here).
+last_updated: 2026-11-12T19:51:03Z

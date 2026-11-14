@@ -435,6 +435,8 @@ pub struct Known {
     pub repos: Vec<String>,
     pub titles: Vec<String>,
     pub wifi: Vec<String>,
+    /// titles, attendees, locations and links of the Calendar connection's cached events
+    pub meetings: Vec<String>,
 }
 
 impl Known {
@@ -465,6 +467,7 @@ impl Known {
             }
             push_str(&mut k.repos, &g["primary"]);
         }
+        k.meetings = st.calendar.private_strings();
         k
     }
 }
@@ -583,6 +586,7 @@ pub fn redact_secrets(text: &str, token: &str) -> String {
 /// - email addresses
 /// - `/Users/<name>` paths -> `~`; the user name and the Mac's name
 /// - GitHub repos (`owner/repo`, the owner, github.com links) and the watcher's PR titles
+/// - the Calendar connection's meeting titles, attendees, locations and links -> `[meeting]`
 /// - what was said or written: voice transcripts, event texts, the claude command line, tool-call
 ///   arguments, anything labelled reply / answer / question / text
 /// - Wi-Fi names; the stick's name; Bluetooth addresses, device UUIDs and serial numbers -> a short hash
@@ -593,6 +597,13 @@ pub fn redact(text: &str, k: &Known) -> String {
     for t in &k.titles {
         if t.chars().count() >= 4 {
             lits.push((t, "[PR title]".into()));
+        }
+    }
+    for m in &k.meetings {
+        // short titles ("1:1", "Gym") too: `replace_literal` matches a literal that starts and ends with a
+        // letter or digit as a whole word only, so they do not blank parts of other words
+        if m.chars().count() >= 3 {
+            lits.push((m, "[meeting]".into()));
         }
     }
     for r in &k.repos {
@@ -700,6 +711,9 @@ pub fn features(cfg: &Map<String, Value>, speech_ready: bool) -> Vec<String> {
     }
     let gh = cfg.get("github").and_then(|g| g.get("on")).and_then(Value::as_bool).unwrap_or(true);
     out.push(format!("github_watcher={}", if gh { "on" } else { "off" }));
+    let calendar =
+        cfg.get("connections").and_then(|c| c.get("calendar")).and_then(|c| c.get("on")).and_then(Value::as_bool);
+    out.push(format!("calendar={}", if calendar.unwrap_or(false) { "on" } else { "off" }));
     out.push(format!("speech_model={}", if speech_ready { "ready" } else { "not ready" }));
     out
 }

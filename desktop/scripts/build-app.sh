@@ -33,4 +33,16 @@ cargo tauri build "${args[@]}"
 APP="$(cd ../.. && pwd)/target/release/bundle/macos/StickyBot.app"
 codesign --verify --deep --strict --verbose=1 "$APP"
 codesign -dv "$APP" 2>&1 | grep -E "^(Identifier|Authority|TeamIdentifier|Signature|CodeDirectory)" || true
+
+# The app is signed with the hardened runtime, under which macOS refuses EventKit (the Calendar
+# connection) unless the calendars entitlement is signed in (entitlements.plist, applied through
+# bundle.macOS.entitlements in tauri.conf.json). Without it the permission question never appears
+# and Calendar quietly reads nothing, so a build that lost it fails here, loudly.
+ENTITLEMENTS="$(codesign -d --entitlements :- "$APP" 2>/dev/null || true)"
+if ! grep -q "com.apple.security.personal-information.calendars" <<<"$ENTITLEMENTS"; then
+  echo "error: $APP is not signed with the calendars entitlement" >&2
+  echo "  (bundle.macOS.entitlements in crates/stickybot-app/tauri.conf.json -> entitlements.plist)" >&2
+  exit 1
+fi
+echo "signed with the calendars entitlement"
 echo "built: $APP"

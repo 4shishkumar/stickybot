@@ -39,8 +39,13 @@ pub const KINDS: &[(&str, &str, &str, &str, &str)] = &[
     ("ci_failed", "headsup", "x", "CI failed", "web #5507 - build"),
     ("claude_tool", "nice", "claude", "Tests passed", "from web"),
     ("update", "nice", "star", "Update v1.8.0 ready", "see the dashboard"),
+    ("meeting_soon", "headsup", "bell", "Standup in 5 min", "10:30 · Google Meet"),
     ("test", "nice", "bell", "Test event", "from the dashboard"),
 ];
+
+/// Kinds whose text is about the person's own day (a meeting's title): the log keeps the kind and
+/// the level only. The stick, the Events page and `events.jsonl` still get the text.
+const PRIVATE_KINDS: &[&str] = &["meeting_soon"];
 
 /// kind -> its own sound (the rest: `""` = the level's default, chosen on the stick).
 pub const DEFAULT_SOUNDS: &[(&str, &str)] = &[("pr_merged", "applause"), ("release", "party_horn"), ("ci_fixed", "cheer")];
@@ -175,8 +180,14 @@ pub async fn notify(
     let cfg = st.cfg.lock().unwrap().clone();
     let rule = rules(&cfg).get(kind_).and_then(Value::as_str).unwrap_or("nice").to_string();
     let level = level.map(str::to_string).unwrap_or(rule);
+    let private = PRIVATE_KINDS.contains(&kind_);
     if level == "off" {
-        log::info!("event {kind_} (off): {title}");
+        if private {
+            log::info!("event {kind_} (off)");
+            log::debug!("event {kind_} (off): {title}");
+        } else {
+            log::info!("event {kind_} (off): {title}");
+        }
         return None;
     }
     let id = format!("e{}", st.home.notifier.n.fetch_add(1, Ordering::Relaxed) + 1);
@@ -206,12 +217,14 @@ pub async fn notify(
     let mut feed: Map<String, Value> = entry.into_iter().filter(|(k, _)| k != "t" && k != "kind").collect();
     feed.insert("ev_kind".into(), json!(kind_));
     st.hub.emit("event", Value::Object(feed));
-    log::info!(
-        "event {kind_} -> {level}: {} / {}{}",
-        ev["title"].as_str().unwrap_or(""),
-        ev["sub"].as_str().unwrap_or(""),
-        if sent { "" } else { " (stick not connected)" }
-    );
+    let (shown_title, shown_sub) = (ev["title"].as_str().unwrap_or(""), ev["sub"].as_str().unwrap_or(""));
+    let not_connected = if sent { "" } else { " (stick not connected)" };
+    if private {
+        log::info!("event {kind_} -> {level}{not_connected}");
+        log::debug!("event {kind_} -> {level}: {shown_title} / {shown_sub}");
+    } else {
+        log::info!("event {kind_} -> {level}: {shown_title} / {shown_sub}{not_connected}");
+    }
     Some(ev)
 }
 

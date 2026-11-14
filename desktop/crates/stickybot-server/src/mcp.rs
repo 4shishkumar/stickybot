@@ -58,9 +58,24 @@ pub const NOT_CONNECTED: &str = "stick not connected";
 /// The tools that only give feedback (pre-allowed); `open_url`, `open_app`, `quick_command` change
 /// the Mac, so Claude Code asks first.
 /// (`ir_list` / `ir_send` too: the user asked for it by voice)
-pub const FEEDBACK_TOOLS: &[&str] =
-    &["notify", "ask", "celebrate", "progress", "pin_home", "stick_status", "speak", "ir_list", "ir_send"];
-pub const MAC_TOOLS: &[&str] = &["open_url", "open_app", "quick_command"];
+/// (`calendar_next` / `calendar_today` only read the Calendar the person connected, and ask for it
+/// by voice; `calendar_join` opens a meeting link, so it asks first)
+pub const FEEDBACK_TOOLS: &[&str] = &[
+    "notify",
+    "ask",
+    "celebrate",
+    "progress",
+    "pin_home",
+    "stick_status",
+    "speak",
+    "ir_list",
+    "ir_send",
+    "calendar_next",
+    "calendar_today",
+];
+pub const MAC_TOOLS: &[&str] = &["open_url", "open_app", "quick_command", "calendar_join"];
+/// The calendar tools read the Mac's Calendar, not the stick: they work with no stick connected.
+pub const CALENDAR_TOOLS: &[&str] = &["calendar_next", "calendar_today", "calendar_join"];
 
 pub const INSTRUCTIONS: &str = "Tools for the user's M5StickS3, a small device on their desk with a 135x240 screen, two buttons (A, B) and a speaker. Use it like a pager: notify() when a long task finishes or needs them, ask() for a quick A/B decision instead of waiting in the terminal, progress() for long jobs, celebrate() for real wins. Keep texts short (a few words). Don't notify for every small step. stick_status() tells whether they're at their desk.";
 
@@ -147,6 +162,19 @@ pub fn tools() -> &'static [Value] {
                         "button": {"type": "string", "maxLength": 32, "description": "The button, e.g. 'volume up'."},
                         "repeat": {"type": "integer", "minimum": 0, "maximum": 10, "default": 0}}},
                 "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true}}),
+            json!({"name": "calendar_next", "title": "Next meeting",
+                "description": "The user's next meeting from their Mac's Calendar (the Calendar connection in the dashboard must be on): what is on now and what starts next today, with times. Read-only. Works without the stick.",
+                "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}},
+                "annotations": {"readOnlyHint": true, "openWorldHint": false}}),
+            json!({"name": "calendar_today", "title": "The day's meetings",
+                "description": "The user's meetings for today or tomorrow from their Mac's Calendar (the Calendar connection must be on): one line each with the times, title and where (a meeting service or the location), at most 12 lines. Read-only. Works without the stick.",
+                "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
+                    "day": {"type": "string", "enum": ["today", "tomorrow"], "default": "today"}}},
+                "annotations": {"readOnlyHint": true, "openWorldHint": false}}),
+            json!({"name": "calendar_join", "title": "Join the meeting",
+                "description": "Open the video-call link (Google Meet, Zoom, Microsoft Teams or Webex) of the meeting that is on now, else of the next one today that has a link, in the user's browser or app. Needs the user's approval. Returns what it opened, or 'No meeting link found.'",
+                "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}},
+                "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true}}),
         ]
     })
 }
@@ -172,6 +200,7 @@ pub fn approval_hint(name: &str, args: &Value) -> String {
         "open_url" => "url",
         "open_app" => "name",
         "quick_command" => "phrase",
+        "calendar_join" => return "the link of your meeting".into(),
         _ => return summarize(args, 60),
     };
     match args.get(key) {
@@ -417,7 +446,9 @@ pub async fn call(st: &Arc<AppState>, name: &str, args: &Value, who: &str) -> Ou
         None => Err(format!("unknown tool: {name}")),
         Some(t) => match check_args(&t["inputSchema"], args) {
             Err(e) => Err(e),
-            Ok(_) if name != "stick_status" && !st.link.connected() => Err(NOT_CONNECTED.to_string()),
+            Ok(_) if name != "stick_status" && !CALENDAR_TOOLS.contains(&name) && !st.link.connected() => {
+                Err(NOT_CONNECTED.to_string())
+            }
             Ok(a) => run_tool(st, name, &a, who).await,
         },
     };
@@ -428,12 +459,15 @@ pub async fn call(st: &Arc<AppState>, name: &str, args: &Value, who: &str) -> Ou
     let ms = started.elapsed().as_millis() as u64;
     *st.mcp.calls.lock().unwrap() += 1;
     *st.mcp.last_call.lock().unwrap() = json!({"t": crate::hub::now(), "tool": name, "from": who});
-    let short: String = text.chars().take(80).collect();
+    // what the Calendar tools answer is the person's day: the log and the activity feed keep that it
+    // was asked, not the meetings
+    let shown: String = if CALENDAR_TOOLS.contains(&name) { "(from your calendar)".into() } else { text.clone() };
+    let short: String = shown.chars().take(80).collect();
     log::info!("{who}: {name}({}) -> {}{short} ({ms} ms)", summarize(args, 40), if err { "error: " } else { "" });
     st.hub.emit(
         "mcp",
         json!({"tool": name, "origin": who, "args": summarize(args, 60),
-               "result": text.chars().take(200).collect::<String>(), "ok": !err, "ms": ms}),
+               "result": shown.chars().take(200).collect::<String>(), "ok": !err, "ms": ms}),
     );
     (text, err, structured)
 }
@@ -577,6 +611,12 @@ async fn run_tool(st: &Arc<AppState>, name: &str, a: &Map<String, Value>, who: &
             let repeat = a.get("repeat").and_then(Value::as_i64).unwrap_or(0);
             crate::ir::send(st, &s("device"), &s("button"), repeat).await.map(|t| (t, None))
         }
+        "calendar_next" => crate::connections::calendar::answer_next(st).map(|t| (t, None)),
+        "calendar_today" => {
+            let tomorrow = a.get("day").and_then(Value::as_str) == Some("tomorrow");
+            crate::connections::calendar::day_lines(st, tomorrow).map(|t| (t, None))
+        }
+        "calendar_join" => crate::connections::calendar::open_join(st).await.map(|t| (t, None)),
         "open_url" => {
             let url = s("url").trim().to_string();
             let host = url
@@ -1230,13 +1270,37 @@ mod tests {
                 "stick_status",
                 "speak",
                 "ir_list",
-                "ir_send"
+                "ir_send",
+                "calendar_next",
+                "calendar_today",
+                "calendar_join"
             ]
         );
         assert_eq!(allowed_tool_names()[0], "mcp__stick__notify");
         assert_eq!(openai_tools()[0]["function"]["name"], "notify");
         assert_eq!(approval_hint("open_url", &json!({"url": "https://x"})), "https://x");
         assert_eq!(summarize(&json!({"text": "a"}), 60), "text='a'");
+    }
+
+    #[test]
+    fn the_calendar_tools_ask_only_where_they_change_something() {
+        // reading the day the person connected is pre-allowed for the voice session; opening a link asks first
+        let allowed = allowed_tool_names();
+        assert!(allowed.contains(&"mcp__stick__calendar_next".to_string()));
+        assert!(allowed.contains(&"mcp__stick__calendar_today".to_string()));
+        assert!(!allowed.contains(&"mcp__stick__calendar_join".to_string()));
+        assert!(MAC_TOOLS.contains(&"calendar_join") && !MAC_TOOLS.contains(&"calendar_next"));
+        assert_eq!(approval_hint("calendar_join", &json!({})), "the link of your meeting");
+        // the OpenRouter brain gets the same definitions
+        let names: Vec<String> =
+            openai_tools().iter().map(|t| t["function"]["name"].as_str().unwrap().to_string()).collect();
+        for tool in CALENDAR_TOOLS {
+            assert!(names.contains(&tool.to_string()), "{tool}");
+        }
+        let today = &tool("calendar_today").unwrap()["inputSchema"];
+        assert_eq!(check_args(today, &json!({})).unwrap()["day"], "today");
+        assert!(check_args(today, &json!({"day": "next week"})).unwrap_err().contains("one of: today, tomorrow"));
+        assert!(check_args(&tool("calendar_next").unwrap()["inputSchema"], &json!({"day": "today"})).is_err());
     }
 
     // --- the endpoint on the fake stick (test_mcp.py) ---------------------------------------------
@@ -1333,6 +1397,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_calendar_tools_over_the_endpoint() {
+        use macos_calendar::fake::FakeCalendar;
+        let mut c = C::new("mcp-calendar").await;
+        let cal = FakeCalendar::new();
+        cal.set_events(vec![macos_calendar::Event {
+            id: "s".into(),
+            title: "Standup".into(),
+            start: 1_800_000_900,
+            end: 1_800_001_800,
+            url: "https://meet.google.com/abc-defg-hij".into(),
+            ..Default::default()
+        }]);
+        c.t.st.calendar.set_source(Arc::new(cal));
+        c.t.st.calendar.set_clock(1_800_000_180, 0);
+        let (_, v) = c.rpc("tools/list", json!({}), &[], false).await;
+        let listed: Vec<&str> = v["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        for tool in ["calendar_next", "calendar_today", "calendar_join"] {
+            assert!(listed.contains(&tool), "{tool}");
+        }
+        // off: a tool error in words, not a protocol error
+        let (text, err, _) = c.call("calendar_next", json!({}), &[]).await;
+        assert!(err && text == crate::connections::calendar::NOT_CONNECTED, "{text}");
+        crate::connections::calendar::connect(&c.t.st).await.unwrap();
+        let (text, err, r) = c.call("calendar_next", json!({}), &[]).await;
+        assert_eq!((text.as_str(), err), ("Standup in 12 min, at 08:15.", false), "{r}");
+        let (text, err, _) = c.call("calendar_join", json!({}), &[]).await;
+        assert_eq!((text.as_str(), err), ("Opened Google Meet for Standup.", false));
+        assert_eq!(*c.t.ran.lock().unwrap(), vec![crate::commands::Action::Open(vec!["https://meet.google.com/abc-defg-hij".into()])]);
+        // the activity feed and the log keep that it was asked, not the answer
+        assert_eq!(c.t.st.mcp.last_call.lock().unwrap()["tool"], "calendar_join");
+    }
+
+    #[tokio::test]
     async fn guards_token_origin_methods_and_switch() {
         let c = C::new("mcp-guard").await;
         let ping = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
@@ -1375,7 +1472,7 @@ mod tests {
             .await;
         assert_eq!(s, StatusCode::ACCEPTED);
         let (_, v) = c.rpc("tools/list", json!({}), &[("mcp-protocol-version", "2025-11-25")], false).await;
-        assert_eq!(v["result"]["tools"].as_array().unwrap().len(), 12);
+        assert_eq!(v["result"]["tools"].as_array().unwrap().len(), 15);
         let (s, v) = c.rpc("tools/list", json!({}), &[("mcp-protocol-version", "1999-01-01")], false).await;
         assert_eq!((s, v["error"]["code"].as_i64()), (StatusCode::BAD_REQUEST, Some(UNSUPPORTED_VERSION)));
         let (s, v) = c.rpc("nope/nope", json!({}), &[], false).await;
@@ -1653,7 +1750,7 @@ mod tests {
             .filter(|t| t["approval"] == true)
             .filter_map(|t| t["name"].as_str())
             .collect();
-        assert_eq!(approval, ["open_url", "open_app", "quick_command"]);
+        assert_eq!(approval, ["open_url", "open_app", "quick_command", "calendar_join"]);
         assert!(body["calls"].as_u64().unwrap() >= 1);
         let resp = c.app.clone().oneshot(get("/api/mcp/terminal/install", "POST", "{}")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
