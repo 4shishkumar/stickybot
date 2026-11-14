@@ -12,6 +12,12 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Fixed
+- **The Mac app no longer sits on a dead Bluetooth link.** macOS could keep the stick "connected"
+  while no message got through (every write timed out), sometimes for hours, until the app was
+  restarted. After three messages in a row the stick doesn't take, the app now drops the link
+  and connects again.
+
 ## [2.5.0] - 2026-11-12
 
 ### Added
