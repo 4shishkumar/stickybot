@@ -45,19 +45,19 @@ void test_starts_portrait_and_follows_each_side() {
   TEST_ASSERT_EQUAL((int)Orient::PORTRAIT, (int)s.t.current());
 }
 
-void test_dwell_needs_about_half_a_second() {
+void test_dwell_needs_about_a_quarter_second() {
   Sim s;
-  s.hold(RIGHT_UP, 300);
+  s.hold(RIGHT_UP, 160);
   TEST_ASSERT_EQUAL((int)Orient::PORTRAIT, (int)s.t.current());  // not yet
-  s.hold(RIGHT_UP, 300);
+  s.hold(RIGHT_UP, 160);
   TEST_ASSERT_EQUAL((int)Orient::LANDSCAPE_RIGHT, (int)s.t.current());
 }
 
 void test_brief_turns_are_ignored() {
   Sim s;
   for (int i = 0; i < 5; i++) {  // flicking back and forth: never long enough on one side
-    s.hold(RIGHT_UP, 300);
-    s.hold(UPRIGHT, 200);
+    s.hold(RIGHT_UP, 160);
+    s.hold(UPRIGHT, 160);
   }
   TEST_ASSERT_EQUAL((int)Orient::PORTRAIT, (int)s.t.current());
 }
@@ -65,13 +65,13 @@ void test_brief_turns_are_ignored() {
 void test_hysteresis_around_45_degrees() {
   Sim s;
   float a[3];
-  tilted(50, a);  // just past 45°: still portrait (inside the 15° margin)
+  tilted(50, a);  // just past 45°: still portrait (inside the 10° margin)
   s.hold(a, 2000);
   TEST_ASSERT_EQUAL((int)Orient::PORTRAIT, (int)s.t.current());
   tilted(65, a);  // clearly past: landscape
   s.hold(a, 2000);
   TEST_ASSERT_EQUAL((int)Orient::LANDSCAPE_RIGHT, (int)s.t.current());
-  tilted(40, a);  // back to 40°: stays landscape (needs < 30°)
+  tilted(40, a);  // back to 40°: stays landscape (needs < 35°)
   s.hold(a, 2000);
   TEST_ASSERT_EQUAL((int)Orient::LANDSCAPE_RIGHT, (int)s.t.current());
   tilted(25, a);
@@ -86,9 +86,16 @@ void test_flat_keeps_the_last_one() {
   TEST_ASSERT_EQUAL((int)Orient::LANDSCAPE_LEFT, (int)s.t.current());
   s.hold(FACEDOWN, 3000);
   TEST_ASSERT_EQUAL((int)Orient::LANDSCAPE_LEFT, (int)s.t.current());
-  const float tiltedFlat[3] = {0.3f, 0.3f, 0.9f};  // a little tilt on the desk: still flat
+  const float tiltedFlat[3] = {0.2f, 0.2f, 0.96f};  // a little tilt on the desk: still flat
   s.hold(tiltedFlat, 3000);
   TEST_ASSERT_EQUAL((int)Orient::LANDSCAPE_LEFT, (int)s.t.current());
+}
+
+void test_leaning_back_still_turns() {
+  Sim s;
+  const float leanRight[3] = {0.42f, 0, 0.9f};  // held leaning back ~25° above flat, right edge up
+  s.hold(leanRight, 700);
+  TEST_ASSERT_EQUAL((int)Orient::LANDSCAPE_RIGHT, (int)s.t.current());
 }
 
 void test_moving_holds_off() {
@@ -99,11 +106,11 @@ void test_moving_holds_off() {
   const float swing[3] = {1.4f, 0, 0};  // swung (1.4 g): no change either
   s.hold(swing, 2000);
   TEST_ASSERT_EQUAL((int)Orient::PORTRAIT, (int)s.t.current());
-  s.hold(RIGHT_UP, 300);  // a moving sample restarts the dwell
+  s.hold(RIGHT_UP, 160);  // a moving sample restarts the dwell
   s.t.feed(s.now += 20, RIGHT_UP, spin);
-  s.hold(RIGHT_UP, 300);
+  s.hold(RIGHT_UP, 160);
   TEST_ASSERT_EQUAL((int)Orient::PORTRAIT, (int)s.t.current());
-  s.hold(RIGHT_UP, 300);
+  s.hold(RIGHT_UP, 160);
   TEST_ASSERT_EQUAL((int)Orient::LANDSCAPE_RIGHT, (int)s.t.current());
 }
 
@@ -145,10 +152,11 @@ void test_reset() {
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_starts_portrait_and_follows_each_side);
-  RUN_TEST(test_dwell_needs_about_half_a_second);
+  RUN_TEST(test_dwell_needs_about_a_quarter_second);
   RUN_TEST(test_brief_turns_are_ignored);
   RUN_TEST(test_hysteresis_around_45_degrees);
   RUN_TEST(test_flat_keeps_the_last_one);
+  RUN_TEST(test_leaning_back_still_turns);
   RUN_TEST(test_moving_holds_off);
   RUN_TEST(test_last_portrait_is_kept_while_landscape);
   RUN_TEST(test_choose_follows_the_settings);

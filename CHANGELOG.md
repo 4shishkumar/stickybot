@@ -45,6 +45,11 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   don't update a Plus2 from the app (it would send the StickS3 firmware). The StickS3 build is
   unchanged.
 
+### Changed
+- **Auto-rotate reacts faster (firmware).** The screen now turns after a quarter second held the
+  new way (was half a second), needs a smaller turn (55° instead of 60°), and still follows the
+  stick when it's held leaning back (down to about 20° above flat, was 30°).
+
 ## [2.5.0] - 2026-11-12
 
 ### Added

@@ -18,10 +18,10 @@ namespace orientation {
 
 enum class Orient : uint8_t { PORTRAIT, PORTRAIT_FLIPPED, LANDSCAPE_RIGHT, LANDSCAPE_LEFT };
 
-constexpr uint32_t DWELL_MS     = 500;    // a new way up must hold this long
-constexpr float    FLAT_G       = 0.5f;   // less gravity than this in the screen's plane = lying flat
-constexpr float    HYSTERESIS   = 15.0f;  // degrees past the 45° line before leaving the current one
-constexpr float    MOVING_DPS   = 90.0f;  // turning faster than this = still moving
+constexpr uint32_t DWELL_MS     = 250;    // a new way up must hold this long
+constexpr float    FLAT_G       = 0.35f;  // less gravity than this in the screen's plane = lying flat (~20° of tilt)
+constexpr float    HYSTERESIS   = 10.0f;  // degrees past the 45° line before leaving the current one
+constexpr float    MOVING_DPS   = 120.0f; // turning faster than this = still moving
 constexpr float    MOVING_G     = 0.25f;  // |a| this far from 1 g = being shaken / swung
 
 class Tracker {
