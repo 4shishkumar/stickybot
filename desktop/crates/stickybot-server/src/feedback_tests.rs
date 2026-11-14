@@ -16,6 +16,13 @@ fn known() -> Known {
         repos: vec!["acme/rocket-web".into()],
         titles: vec!["Fix the login redirect loop".into()],
         wifi: vec!["HomeNet 5G".into()],
+        meetings: vec![
+            "Quarterly numbers".into(),
+            "Teammate A".into(),
+            "https://meet.google.com/abc-defg-hij".into(),
+            "1:1".into(),
+            "Gym".into(),
+        ],
     }
 }
 
@@ -171,8 +178,38 @@ fn diagnostics_are_redacted_and_fit_the_form() {
 }
 
 #[test]
+fn meeting_titles_attendees_and_links_go() {
+    let k = known();
+    let out = redact(
+        "refresh: Quarterly numbers with Teammate A\nopened https://meet.google.com/abc-defg-hij for you\nthe quarterly NUMBERS again\nit is a 1:1 today, then the Gym, not gymnastics\n",
+        &k,
+    );
+    for gone in ["Quarterly numbers", "quarterly NUMBERS", "Teammate", "meet.google.com", "abc-defg-hij"] {
+        assert!(!out.contains(gone), "{gone} left in:\n{out}");
+    }
+    assert!(out.contains("refresh: [meeting] with [meeting]"), "{out}");
+    // a short title goes too, but only as a whole word: other words are left alone
+    assert!(out.contains("it is a [meeting] today, then the [meeting], not gymnastics"), "{out}");
+    // the reminder's own log line carries no text at all; a debug line that did would still go
+    assert_eq!(redact("event meeting_soon -> headsup", &k), "event meeting_soon -> headsup");
+    assert_eq!(
+        redact("event meeting_soon -> headsup: Standup in 5 min / 10:30 · Google Meet", &Known::default()),
+        "event meeting_soon -> headsup: [event text]"
+    );
+    // a tool call's result is cut like the others
+    assert_eq!(
+        redact("mcp: Agent: calendar_next() -> (from your calendar) (4 ms)", &Known::default()),
+        "mcp: Agent: calendar_next(…)"
+    );
+}
+
+#[test]
 fn features_say_on_and_off_but_no_free_text() {
     let mut cfg = crate::config::defaults();
+    assert!(features(&cfg, true).contains(&"calendar=off".to_string()));
+    cfg.insert("connections".into(), json!({"calendar": {"on": true, "calendars": ["work-id-1"]}}));
+    let f = features(&cfg, true).join(", ");
+    assert!(f.contains("calendar=on") && !f.contains("work-id"), "{f}");
     cfg.insert("github".into(), json!({"on": false, "primary_repo": "acme/secret"}));
     cfg.insert("model".into(), json!("a model with spaces / and a path"));
     let f = features(&cfg, true).join(", ");

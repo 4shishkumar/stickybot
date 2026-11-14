@@ -74,6 +74,7 @@ loads it in ~0.7 s; `GET /api/speech` and `speech` events show the progress.
 | `crates/stickybot-server` | axum: the dashboard page + `static/` from `mac-agent/stick_agent/` (rust-embed: read from disk in debug builds, embedded in release), the API slice, config + token in `~/.stickybot-rs/`, the SSE event feed, the Python-agent check. `talk.rs` (hold B: core.py's flow), `speech.rs` (model download + STT worker), `commands.rs` (quick commands), `brain.rs` (Claude Code session), `approvals.rs`, `clips.rs`, `firmware.rs`, `wmic.rs` (the wireless Wispr mic: core.py's wispr parts + `Holds`), `faces.rs` (face packages), `ir.rs` (the IR remote), `setup.rs` (setup page, components, onboarding, restart / window; tests in `setup_tests.rs`), `hooks.rs` (Claude Code's hooks: `--hook permission|prompt|stop`), `sysrun.rs` (programs the setup page runs, behind `System`), `appctl.rs` (restart / window, set by the menu bar app). Bin `stickybot-headless`. Tests `tests/talk_e2e.rs`, `tests/wmic_e2e.rs`. |
 | `crates/stickybot-app` | Tauri 2 shell: the menu bar menu of the Python app (`tray.rs`: status line, update / *Finish setup…* items while needed, Open StickyBot, Open in browser, Check for Updates…, Stick volume, Sounds on the stick, Pause / Resume, Restart, Quit; refreshed every 0.5 s, through the server's functions) with the state icon (`icon.rs`: the brand mark as a template image, the Python states + the approval badge), webview window on `http://localhost:8670/` (`window.rs`: other links open in the browser, reopening the app shows it), no Dock icon (`ActivationPolicy::Accessory` + `LSUIElement`). `appctl.rs`: `/api/restart` (Tauri restart) and `/api/window` (show / focus / create the window at `#page`). `--hook …` runs Claude Code's hook and exits. |
 | `crates/macos-audio` | The wireless mic's audio side (`spikes/TAP.md`). Plain Rust, tested anywhere: `carrier.rs` (`pick_carrier`: tap / BlackHole), `device.rs` (`StickMicDevice`: the aggregate + tap, `recording()`, the -80 dBFS check, cleanup by *our* UID only), `jitter.rs` (sequencer, jitter buffer, resampler), `player.rs` (`WisprPlayer`: the stick's audio into the carrier, gated on the tap), `fake.rs` (Core Audio and outputs in memory), `naming.rs`. macOS: `system.rs` (the HAL + cpal backends), `hal.rs`, `tap.rs`, `mic.rs` (the live-object registry). `examples/tapmic.rs` (the spike's self-check). |
+| `crates/macos-calendar` | The Mac's Calendar, read-only: the `CalendarSource` trait (access, request, calendars, events, change callback; **no write method exists**), `fake.rs` (`FakeCalendar`, also the `--fake-stick` demo day) and, on macOS, `eventkit.rs` (a thin EventKit converter; made on first use, never by tests). `examples/calendar_dump.rs`: `--status` (never asks), `--list`, `--today` (asks), `--help`. The server's `connections/` module holds the rules (`agenda.rs`, pure) and the Calendar connection (`calendar.rs`). |
 | `crates/stt` | Speech to text: sherpa-onnx Parakeet TDT 0.6b v3 with word hints (hotwords) by default (`spikes/STT.md`; whisper behind `--features whisper`, FluidAudio behind `fluid`). `examples/hotwords.rs`. |
 
 ### Why CoreBluetooth via objc2, not btleplug
@@ -392,6 +393,28 @@ so Wispr's ranking needs no change.
 6. `POST /api/window {"page":"install"}` opens / focuses the window at `#install`, also after the
    window was closed.
 7. The *Your stick* step's onboarding marks (firmware, named) with the real stick.
+
+### Connections: Calendar (never done by the tests)
+
+Needs a real signed bundle (`scripts/build-app.sh`, which checks the calendars entitlement is in the
+signature: the hardened runtime refuses EventKit without it).
+
+1. `cargo run -p macos-calendar --example calendar_dump -- --status` (no prompt), `--list`, then
+   `--today` (the prompt names the terminal app; allow it) show the calendars and today's events.
+2. Dashboard → Connections → Connect: macOS asks for Calendars; allow Full Access. The pill turns
+   Connected, the calendars and today's meetings are listed (the first Connect on a Mac that was
+   never asked lists events at once, with no restart or second Connect: the app swaps its event
+   store for a fresh one after the grant). Deny it once: the card says how to
+   turn it on in System Settings → Privacy & Security → Calendars, and *Connect again* works after.
+3. Next meeting on the stick's home card, pinned 15 min before the start until 5 min after; a
+   `meeting_soon` heads-up (orange, until a button) `Remind me` minutes before, once per meeting;
+   nothing for declined or all-day events. Quiet hours: shown, silent. (Needs firmware that draws
+   the `meeting` card kind: every released one does.)
+4. Voice: "what's my next meeting", "what's my day like", "join my meeting" (a meeting with a Meet /
+   Zoom / Teams / Webex link opens it). The phrases are in Quick commands after the first connect.
+5. Add, move and delete an event in Calendar.app: the card and the list follow within seconds.
+6. Disconnect: the card goes. Diagnostics (Feedback) show `[meeting]` instead of titles, and
+   `app.log` has no meeting text.
 
 ## Wireless mic and Bluetooth output
 
