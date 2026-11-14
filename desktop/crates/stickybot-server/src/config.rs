@@ -165,6 +165,8 @@ pub fn defaults() -> Map<String, Value> {
             // the Rust app's own: a Dock icon even with the window closed; the "Report an issue"
             // web app ("" = the compiled-in one, feedback.rs)
             m.insert("dock_always".into(), json!(false));
+            // install an app update by itself when idle (selfupdate.rs)
+            m.insert("update_auto".into(), json!(false));
             m.insert("feedback_url".into(), json!(""));
             m
         }
@@ -228,6 +230,11 @@ pub fn invalid(body: &Map<String, Value>) -> String {
         && !c.as_str().is_some_and(|c| macos_audio::carrier::PREFS.contains(&c))
     {
         return "wireless_mic_carrier must be one of: auto, tap, blackhole".into();
+    }
+    if let Some(b) = body.get("update_auto")
+        && !b.is_boolean()
+    {
+        return "update_auto must be true or false".into();
     }
     if let Some(b) = body.get("wireless_mic")
         && !b.is_boolean()

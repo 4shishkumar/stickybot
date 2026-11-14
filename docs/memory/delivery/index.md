@@ -12,4 +12,4 @@ description: "How changes and releases reach people: branches, pull requests, CI
 | File | Description |
 |------|-------------|
 | [ci-and-review](ci-and-review.md) | Getting a change into main: a branch and a pull request, the CI jobs that run per touched part (firmware, agent, mac-app, secrets, changelog, workflows) summed up as CI passed, one approval from someone else, squash merge, labels. |
-| [releases](releases.md) | Releases: one version vX.Y.Z for the Mac apps set by tools/release.sh, a separate FW_VERSION for the firmware, both in manifest.json; a tag runs the release workflow (tests, firmware parts, StickyBot.app zip); CHANGELOG.md is the release notes. |
+| [releases](releases.md) | Releases: one version vX.Y.Z for the Mac apps set by tools/release.sh, a separate FW_VERSION for the firmware, both in manifest.json; a tag runs the release workflow (tests, firmware parts, StickyBot.app zip, signed updater tarball and latest.json); CHANGELOG.md is the release notes. |

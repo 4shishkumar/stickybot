@@ -15,13 +15,21 @@
   release_tool.py add-app MANIFEST ZIP PLATFORM VERSION
                                            list a Mac app download (the release asset ZIP) in
                                            the release's manifest.json, under "apps"
+  release_tool.py latest-json OUT --version X.Y.Z --tag vX.Y.Z --sig FILE.sig --asset NAME
+                                  [--repo OWNER/NAME] [--pub-date ISO]
+                                           write latest.json, the file the Mac app's updater
+                                           (Tauri's static update JSON) reads: the version, its
+                                           changelog entry as notes, and where to get the signed
+                                           StickyBot.app.tar.gz and its signature
 
 Standard library only (runs with the system python3).
 """
+import argparse
 import hashlib
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -165,6 +173,56 @@ def add_app(manifest_path, zip_path, platform, version):
     return entry
 
 
+UPDATER_PLATFORM = "darwin-aarch64"  # Tauri's name for an Apple silicon Mac (the only one StickyBot.app is built for)
+NAME_PART = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+BASE64 = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
+
+
+def release_url(repo, tag, asset):
+    """https://github.com/<repo>/releases/download/<tag>/<asset>, or Fail if any part isn't a plain name."""
+    owner, _, name = repo.partition("/")
+    if not (NAME_PART.match(owner) and NAME_PART.match(name)):
+        raise Fail(f"{repo!r} isn't a repo like owner/name")
+    if not NAME_PART.match(tag):
+        raise Fail(f"{tag!r} isn't a plain tag name")
+    if not NAME_PART.match(asset) or not asset.endswith(".app.tar.gz"):
+        raise Fail(f"{asset!r} isn't the name of a StickyBot-<version>-macos-arm64.app.tar.gz release asset")
+    return f"https://github.com/{repo}/releases/download/{tag}/{asset}"
+
+
+def rfc3339_utc(value=None):
+    """now, or VALUE (an ISO 8601 time with a zone), as 2026-11-20T10:00:00Z."""
+    if value is None:
+        when = datetime.now(timezone.utc)
+    else:
+        try:
+            when = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            raise Fail(f"{value!r} isn't a time like 2026-11-20T10:00:00Z") from None
+        if when.tzinfo is None:
+            raise Fail(f"{value!r} has no time zone (use Z for UTC)")
+    return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def latest_json(out, version, tag, sig_path, asset, repo="4shishkumar/stickybot", pub_date=None):
+    """Writes OUT: Tauri's static update JSON for the Mac app's updater. `signature` is the .sig file's
+    text (base64, as the Tauri signer wrote it); `url` is the release asset. The updater checks the
+    signature against the public key built into the app, so a wrong or empty one is refused here
+    instead of shipping a release nobody can install."""
+    check(version)
+    if tag != f"v{version}":
+        raise Fail(f"tag {tag} isn't v{version}")
+    signature = Path(sig_path).read_text().strip()
+    if not signature:
+        raise Fail(f"{sig_path} is empty — the update isn't signed (is TAURI_SIGNING_PRIVATE_KEY set?)")
+    if not BASE64.match(signature):
+        raise Fail(f"{sig_path} doesn't look like a Tauri .sig file (one line of base64)")
+    data = {"version": version, "notes": notes(version), "pub_date": rfc3339_utc(pub_date),
+            "platforms": {UPDATER_PLATFORM: {"signature": signature, "url": release_url(repo, tag, asset)}}}
+    Path(out).write_text(json.dumps(data, indent=2) + "\n")
+    return data
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__)
@@ -189,6 +247,17 @@ def main(argv):
             print(check_tag(args[0]))
         elif cmd == "add-app":
             print(json.dumps(add_app(args[0], args[1], args[2], args[3])))
+        elif cmd == "latest-json":
+            ap = argparse.ArgumentParser(prog="release_tool.py latest-json")
+            ap.add_argument("out")
+            ap.add_argument("--version", required=True)
+            ap.add_argument("--tag", required=True)
+            ap.add_argument("--sig", required=True)
+            ap.add_argument("--asset", required=True)
+            ap.add_argument("--repo", default="4shishkumar/stickybot")
+            ap.add_argument("--pub-date")
+            a = ap.parse_args(args)
+            latest_json(a.out, a.version, a.tag, a.sig, a.asset, a.repo, a.pub_date)
         else:
             print(__doc__)
             return 2
