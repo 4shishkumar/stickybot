@@ -5,6 +5,7 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 import types
 from pathlib import Path
 
@@ -152,6 +153,98 @@ def test_add_app_lists_the_mac_app_and_older_agents_still_read_the_manifest(tmp_
     assert len(json.loads((tmp_path / "manifest.json").read_text())["apps"]) == 1
     with pytest.raises(tool.Fail):
         tool.add_app(tmp_path / "manifest.json", z, "macos-arm64", "v2.4.0")
+
+
+# --- latest.json (the Mac app's updater) -----------------------------------------------
+
+ASSET = "StickyBot-1.7.2-macos-arm64.app.tar.gz"
+
+
+@pytest.fixture
+def signed(tmp_path, monkeypatch):
+    """A changelog with [1.7.2] and a .sig file as the Tauri signer writes it (one line of base64)."""
+    import base64
+    log = tmp_path / "CHANGELOG.md"
+    log.write_text(LOG)
+    monkeypatch.setattr(tool, "CHANGELOG", log)
+    sig = tmp_path / ASSET.replace(".tar.gz", ".tar.gz.sig")
+    sig.write_text(base64.b64encode(b"untrusted comment: test signature\n" + b"x" * 60).decode() + "\n")
+    return types.SimpleNamespace(sig=sig, out=tmp_path / "latest.json")
+
+
+def test_latest_json_is_tauris_static_update_file(signed):
+    import json
+    tool.latest_json(signed.out, "1.7.2", "v1.7.2", signed.sig, ASSET, pub_date="2026-11-20T10:00:00Z")
+    got = json.loads(signed.out.read_text())
+    assert got == {
+        "version": "1.7.2",
+        "notes": "### Added\n- the first release",  # the `## [1.7.2]` section, as `notes` prints it
+        "pub_date": "2026-11-20T10:00:00Z",
+        "platforms": {"darwin-aarch64": {
+            "signature": signed.sig.read_text().strip(),
+            "url": f"https://github.com/4shishkumar/stickybot/releases/download/v1.7.2/{ASSET}"}}}
+    assert got["notes"] == tool.notes("1.7.2")
+    # another repo, a prerelease, the time in another zone (written as UTC), now when none is given
+    (signed.out.parent / "CHANGELOG.md").write_text(LOG.replace("## [1.7.2]", "## [1.8.0-beta.1]"))
+    beta_asset = "StickyBot-1.8.0-beta.1-macos-arm64.app.tar.gz"
+    tool.latest_json(signed.out, "1.8.0-beta.1", "v1.8.0-beta.1", signed.sig, beta_asset,
+                     repo="acme/rocket", pub_date="2026-11-20T12:00:00+02:00")
+    got = json.loads(signed.out.read_text())
+    assert got["pub_date"] == "2026-11-20T10:00:00Z"
+    assert got["platforms"]["darwin-aarch64"]["url"].startswith("https://github.com/acme/rocket/releases/download/v1.8.0-beta.1/")
+    tool.latest_json(signed.out, "1.8.0-beta.1", "v1.8.0-beta.1", signed.sig, "x.app.tar.gz")
+    assert json.loads(signed.out.read_text())["pub_date"].endswith("Z")
+
+
+def test_latest_json_refuses_what_would_ship_a_release_nobody_can_install(signed):
+    def make(**kw):
+        args = {"version": "1.7.2", "tag": "v1.7.2", "sig": signed.sig, "asset": ASSET, **kw}
+        return tool.latest_json(signed.out, args["version"], args["tag"], args["sig"], args["asset"],
+                                **{k: v for k, v in kw.items() if k in ("repo", "pub_date")})
+
+    empty = signed.sig.parent / "empty.sig"
+    empty.write_text("\n")
+    with pytest.raises(tool.Fail, match="empty"):
+        make(sig=empty)
+    junk = signed.sig.parent / "junk.sig"
+    junk.write_text("untrusted comment: raw minisign file\nRWQ=\n")
+    with pytest.raises(tool.Fail, match="base64"):
+        make(sig=junk)
+    for version in ("v1.7.2", "1.7", "latest"):
+        with pytest.raises(tool.Fail):
+            make(version=version, tag=f"v{version}")
+    with pytest.raises(tool.Fail, match="isn't v1.7.2"):
+        make(tag="v1.7.3")
+    # a URL that wouldn't be github.com/<repo>/releases/download/<tag>/<asset>
+    for asset in ("../evil.app.tar.gz", "a/b.app.tar.gz", "StickyBot.zip", "", "x y.app.tar.gz", "x?y=1.app.tar.gz"):
+        with pytest.raises(tool.Fail):
+            make(asset=asset)
+    for repo in ("acme", "acme/", "/rocket", "acme/rock/et", "acme/rock et", "https://evil.example/x"):
+        with pytest.raises(tool.Fail, match="repo"):
+            make(repo=repo)
+    for when in ("tomorrow", "2026-11-20T10:00:00", "20/11/2026"):
+        with pytest.raises(tool.Fail, match="time"):
+            make(pub_date=when)
+    with pytest.raises(tool.Fail, match="no entry"):
+        tool.latest_json(signed.out, "9.9.9", "v9.9.9", signed.sig, ASSET)
+    assert not signed.out.exists(), "nothing is written when it is refused"
+
+
+def test_latest_json_on_the_command_line(signed):
+    run = lambda *a: subprocess.run([sys.executable, str(ROOT / "tools/release_tool.py"), "latest-json", *a],
+                                    capture_output=True, text=True)
+    version = tool.current()
+    asset = f"StickyBot-{version}-macos-arm64.app.tar.gz"
+    ok = run(str(signed.out), "--version", version, "--tag", f"v{version}", "--sig", str(signed.sig), "--asset", asset)
+    # the real CHANGELOG.md is read here (the release's own entry): that can only fail on "no entry"
+    assert ok.returncode in (0, 1), ok.stderr
+    if ok.returncode == 0:
+        assert f"/releases/download/v{version}/{asset}" in signed.out.read_text()
+    empty = signed.sig.parent / "empty2.sig"
+    empty.write_text("")
+    bad = run(str(signed.out), "--version", version, "--tag", f"v{version}", "--sig", str(empty), "--asset", asset)
+    assert bad.returncode == 1 and "empty" in bad.stderr
+    assert run().returncode == 2  # the arguments are required
 
 
 # --- tools/release.sh -------------------------------------------------------------------

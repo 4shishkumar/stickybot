@@ -76,11 +76,20 @@ the stick, the wireless Wispr mic, firmware updates. It needs a Mac with **Apple
    [m5-stick-s3/](m5-stick-s3/)).
 
 **Updating**: the app checks for releases (Settings → Updates). When there's a newer StickyBot,
-the menu shows **Update available: vX — download…** (it opens the release page) and the dashboard
-says so too; it can't install itself yet: download the new zip, quit StickyBot and replace
-StickyBot.app in /Applications (`~/.stickybot-rs/` stays). New stick firmware is downloaded for
-you and offered on the Stick page. **Building it yourself** (or signing it with your own
-certificate, so permissions survive updates): [desktop/README.md](desktop/README.md).
+the menu shows **Install update vX and restart…** and the dashboard's banner (and Settings →
+Updates) has **Install and restart**: StickyBot downloads the update in the background, checks it
+against the update key it carries (anything not signed with it is refused), replaces itself and
+opens again, and says "Updated to vX". It waits while the stick is busy (a firmware update, a
+talk, a permission prompt, the wireless mic) and never asks for your password; settings and data
+in `~/.stickybot-rs/` stay. **Install updates automatically** (Settings → Updates, off by
+default) does it by itself after 10 quiet minutes. Where StickyBot can't replace itself (it runs
+from a download folder or an Applications folder you can't write to, or it's a release without
+the update file) the menu says **Update available: vX — download…** and opens the release page:
+download the new zip, quit StickyBot and replace StickyBot.app in /Applications. **The first
+version with this (after 2.5.0) has to be installed by hand once**, the way you installed
+StickyBot; versions before it can't update themselves. New stick firmware is downloaded for you and
+offered on the Stick page. **Building it yourself** (or signing it with your own certificate, so
+permissions survive updates): [desktop/README.md](desktop/README.md).
 
 **Coming from the Python app** (`install.sh`, `~/.stick-agent/`): StickyBot.app notices it on its
 first start (that folder, or the app answering on port 8660) and doesn't take its place. The

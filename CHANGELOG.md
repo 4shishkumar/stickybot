@@ -21,6 +21,21 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   Google Meet, Zoom, Teams or Webex link of the meeting). Claude Code sessions can ask too. It reads
   the calendars you already have in macOS (iCloud, Google, Exchange), only reads, and keeps
   your meetings only in memory. macOS asks for Calendar access the first time you press Connect.
+- **StickyBot.app installs its own updates.** When a new version is out, the menu bar shows
+  **Install update vX and restart…** and the dashboard's banner and Settings → Updates show
+  **Install and restart**. StickyBot downloads the update in the background (with a progress bar),
+  checks that it was signed with StickyBot's own update key (a download that doesn't match is
+  thrown away, never installed), replaces itself, opens again and says **Updated to vX** — on the
+  dashboard and on the stick. While the stick is busy (a firmware update, a talk, a permission
+  prompt, the wireless mic) it waits, says why, and goes on when the stick is free; **Cancel**
+  stops it. It never installs an older version and never asks for your Mac password: where it can't
+  replace itself (a copy running from a download folder, or an Applications folder you can't write
+  to) it points to the release page instead. Settings → Updates → **Install updates
+  automatically** (off by default) does it by itself after the stick has been idle for 10
+  minutes. Versions up to 2.5.0 can't do this: install the first version that can by hand, once
+  (download the zip, quit StickyBot, replace StickyBot.app); updates after it install themselves.
+  Because StickyBot.app is signed ad hoc, macOS still asks for Bluetooth and System Audio
+  Recording again after each update.
 - **A second stick model: the M5StickC Plus2 (first bring-up, not in releases yet).** The
   firmware now builds for it too (`pio run -e stickc_plus2`, `make flash-plus2`): the screen,
   buttons, Bluetooth keyboard and the Mac link run from the same sources. What the board lacks is
