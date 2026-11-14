@@ -1,7 +1,10 @@
 #include "mic.h"
 #include <M5Unified.h>
+#include "board.h"
+#if BOARD_HAS_USB_MIC
 #include <USB.h>
 #include <StickUSBAudio.h>  // arduino-esp32's USBAudioCard, vendored in lib/ to name the mic
+#endif
 #include <nvs.h>
 #include <nvs_flash.h>
 #include "netlog.h"
@@ -27,6 +30,7 @@ constexpr size_t   RING         = 48;    // ~1 s of frames: pre-roll + slack
 constexpr int      SEND_PER_CHUNK = 2;   // drain up to 2 frames per 10 ms (catch up 2x; 3x lost frames)
 constexpr uint32_t END_TIMEOUT_MS = 1500;
 
+#if BOARD_HAS_USB_MIC
 // The mic's name follows the stick's ("stickybot-usb-mic", or "<name>-usb-mic"). USB starts before setup() and
 // before the core opens NVS, so this reads the saved name itself (renaming restarts the stick).
 static const char* usbMicName() {
@@ -47,6 +51,10 @@ static const char* usbMicName() {
 // (the core starts USB before setup(), like the serial port).
 [[maybe_unused]] static const bool namedUac = (StickUSBAudio::setNameProvider(usbMicName), true);
 static StickUSBAudio uac(RATE, UAC_BPS_16, UAC_SPK_NONE, UAC_MIC_MONO, "stickybot-usb-mic");
+static void usbWrite(const int16_t* s, size_t bytes) { uac.write(s, bytes); }
+#else
+static void usbWrite(const int16_t*, size_t) {}  // no native USB on this board: Bluetooth mic only
+#endif
 
 struct Frame { uint8_t len; uint8_t data[HEADER + MAX_SAMPLES / 2]; };
 
@@ -126,7 +134,7 @@ static void process(int16_t* buf, int chunkNo) {
   int p = 0;
   for (size_t i = 0; i < CHUNK; i++) p = max(p, abs((int)buf[i]));
   lastPeak = p;
-  if (usbOn && isStreaming) uac.write(buf, CHUNK * sizeof(int16_t));
+  if (usbOn && isStreaming) usbWrite(buf, CHUNK * sizeof(int16_t));
   if (armed && !ending) addSamples(buf, CHUNK);
 }
 
@@ -157,21 +165,25 @@ static void task(void*) {
     }
     taskInMic = false;
     i = primed = chunkNo = 0;
-    if (isStreaming) uac.write(zeros, sizeof zeros);
+    if (isStreaming) usbWrite(zeros, sizeof zeros);
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 
+#if BOARD_HAS_USB_MIC
 static void onEvent(void*, esp_event_base_t, int32_t id, void* data) {
   if (id != ARDUINO_USB_AUDIO_CARD_INTERFACE_ENABLE_EVENT) return;
   auto* d = (arduino_usb_audio_card_event_data_t*)data;
   if (d->interface_enable.interface != UAC_INTERFACE_MIC) return;
   isStreaming = d->interface_enable.enable;
 }
+#endif
 
 void begin() {
+#if BOARD_HAS_USB_MIC
   uac.onEvent(onEvent);
   uac.begin();
+#endif
   auto cfg = M5.Mic.config();
   cfg.magnification = GAIN;
   cfg.noise_filter_level = 0;
@@ -263,7 +275,11 @@ bool usbStreaming() { return isStreaming; }
 
 static bool vbus = false;
 void setUsbPower(bool on) { vbus = on; }
+#if BOARD_HAS_USB_MIC
 bool usbMounted() { return wispr::usbMounted((bool)USB, vbus); }
+#else
+bool usbMounted() { return false; }
+#endif
 bool live() { return micOn; }
 int  peak() { return lastPeak; }
 

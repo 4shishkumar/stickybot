@@ -2,6 +2,7 @@
 #include <M5Unified.h>
 #include <Preferences.h>
 #include "mic.h"
+#include "board.h"
 #include "settings.h"
 #include "netlog.h"
 #include "sounds_clips.h"
@@ -179,14 +180,7 @@ static uint8_t  step = 0;
 static uint32_t stepEnd = 0, queuedAt = 0;
 static bool     pending = false, speakerOn = false, resumeMic = false, keep_ = false;
 
-// The speaker amp's power: the power chip's GPIO3 (M5Unified sets the output
-// bit but doesn't make the pin an output; our standby leaves it low).
-static void amp(bool on) {
-  auto& pm = M5.Power.M5pm1;
-  pm.setGPIOFunction(m5::M5PM1_Class::gpio3, m5::M5PM1_Class::gpio);
-  pm.setGPIOMode(m5::M5PM1_Class::gpio3, m5::M5PM1_Class::output);
-  pm.setGPIOOutput(m5::M5PM1_Class::gpio3, on);
-}
+static void amp(bool on) { board::speakerAmp(on); }  // the speaker amp's power
 
 void begin() {
   amp(false);

@@ -1,0 +1,37 @@
+id: lll6
+name: 261113-lll6-stickc-plus2-board-bringup
+created: 2026-11-13T05:29:11Z
+created_by: ""
+change_type: test
+issues: []
+progress:
+    intake: ready
+    apply: pending
+    review: pending
+    hydrate: pending
+    ship: pending
+    review-pr: pending
+plan:
+    generated: false
+    task_count: 0
+    acceptance_count: 0
+    acceptance_completed: 0
+confidence:
+    certain: 7
+    confident: 1
+    tentative: 0
+    unresolved: 0
+    score: 4.8
+    fuzzy: true
+    dimensions:
+        signal: 83.1
+        reversibility: 78.1
+        competence: 86.3
+        disambiguation: 85.0
+stage_metrics:
+    intake: {started_at: "2026-11-13T05:29:11Z", driver: fab-new, iterations: 1}
+prs: []
+base_branch: main
+# base_branch: written by /git-branch or /fab-new when the change's branch is created (no placeholder here).
+# true_impact: lazily created on first stage-finish that computes it (no placeholder here).
+last_updated: 2026-11-13T05:30:07Z
