@@ -3,14 +3,16 @@
 //! (weather + feed every minute, the GitHub watcher), the events, the pet.
 //!
 //! The card is pinned when something needs you (approvals waiting: urgent, orange on the stick),
-//! then a line a Claude session put there (`put`, the stick tools later); otherwise it rotates
-//! every 16 s between your last answer (3 min), Claude Code sessions open, the feed, and a
-//! greeting. Sent as `{"k","a","b","u"}` (+ `"i","n"` for the source dots).
+//! then a line a Claude session put there (`put`, the stick tools later), then a meeting that is
+//! about to start (Calendar connection); otherwise it rotates every 16 s between a meeting today,
+//! your last answer (3 min), Claude Code sessions open, the feed, and a greeting. Sent as
+//! `{"k","a","b","u"}` (+ `"i","n"` for the source dots).
 
 use crate::AppState;
 use crate::feed::Feed;
 use crate::net::Http;
 use crate::pet::Pet;
+use crate::connections::agenda::MeetingCard;
 use crate::talk::stick_text;
 use crate::weather::Weather;
 use crate::{events, github};
@@ -148,6 +150,8 @@ pub struct CardInput {
     pub ticker: bool,
     pub now: f64,
     pub hour: u32,
+    /// the Calendar connection's next / current meeting, if it has one to show
+    pub meeting: Option<MeetingCard>,
 }
 
 /// The card (home.py `Home.card`), before it's made stick-safe.
@@ -164,8 +168,16 @@ pub fn card(home: &Home, inp: &CardInput) -> Value {
     if let Some((c, _, _)) = rot.slots.values().max_by(|a, b| a.2.total_cmp(&b.2)) {
         return c.clone();
     }
+    // a meeting about to start (or just started) comes before the rotation, but not before something
+    // that waits for a button or a line a Claude session put there; not urgent: orange is for buttons
+    if let Some(m) = inp.meeting.as_ref().filter(|m| m.pinned) {
+        return m.card.clone();
+    }
     // rotation candidates, rebuilt each time
     let mut cands: Vec<Option<Value>> = Vec::new(); // None = the feed
+    if let Some(m) = &inp.meeting {
+        cands.push(Some(m.card.clone()));
+    }
     if let Some(r) = &inp.last_reply
         && inp.now - r["t"].as_f64().unwrap_or(0.0) < FRESH_REPLY_S
     {
@@ -200,6 +212,8 @@ fn card_input(st: &AppState) -> CardInput {
     let status = st.approvals.list();
     let prompts =
         status.as_array().into_iter().flatten().map(|p| p["tool"].as_str().unwrap_or("").to_string()).collect();
+    // before the settings lock: the Calendar connection reads the settings too
+    let meeting = crate::connections::calendar::meeting_card(st);
     let cfg = st.cfg.lock().unwrap();
     CardInput {
         prompts,
@@ -215,6 +229,7 @@ fn card_input(st: &AppState) -> CardInput {
         ticker: cfg.get("ticker").and_then(Value::as_bool).unwrap_or(true),
         now: crate::hub::now(),
         hour: chrono::Local::now().hour(),
+        meeting,
     }
 }
 
@@ -467,7 +482,7 @@ mod tests {
     }
 
     fn inp(now: f64) -> CardInput {
-        CardInput { prompts: vec![], asks: vec![], last_reply: None, ticker: true, now, hour: 9 }
+        CardInput { prompts: vec![], asks: vec![], last_reply: None, ticker: true, now, hour: 9, meeting: None }
     }
 
     #[test]
@@ -493,6 +508,55 @@ mod tests {
         h.put("progress", "Tests", "3/10", 600.0);
         assert_eq!(card(&h, &i), json!({"k": "claude", "a": "Tests", "b": "3/10"}));
         assert!(h.clear("progress"));
+    }
+
+    fn meeting(pinned: bool) -> Option<MeetingCard> {
+        Some(MeetingCard { card: json!({"k": "meeting", "a": "Standup", "b": "in 12 min · 10:30"}), pinned })
+    }
+
+    #[test]
+    fn a_meeting_about_to_start_comes_before_the_rotation_but_not_before_what_waits_for_you() {
+        let (h, _) = home("meeting-pin", 2);
+        h.feed.lock().unwrap().items = vec![json!({"k": "fact", "a": "Fun fact", "b": "x"})];
+        let mut i = inp(1000.0);
+        i.last_reply = Some(json!({"t": 990.0, "text": "Sunny"}));
+        i.meeting = meeting(true);
+        let meeting_card = json!({"k": "meeting", "a": "Standup", "b": "in 12 min · 10:30"});
+        // every turn of the rotation is the meeting: it is pinned, not urgent (no orange)
+        for _ in 0..4 {
+            assert_eq!(card(&h, &i), meeting_card);
+            i.now += ROTATE_S;
+        }
+        // a session's line and then an approval stay on top of it
+        h.put("pin", "PR 12", "waiting for review", 600.0);
+        assert_eq!(card(&h, &i), json!({"k": "claude", "a": "PR 12", "b": "waiting for review"}));
+        i.prompts = vec!["Bash".into()];
+        assert_eq!(card(&h, &i)["k"], "approval");
+        i.prompts.clear();
+        i.asks = vec![("web".into(), "Ship it?".into())];
+        assert_eq!(card(&h, &i)["a"], "web asks");
+        // without the meeting nothing changes
+        i.asks.clear();
+        assert!(h.clear("pin"));
+        i.meeting = None;
+        assert_ne!(card(&h, &i)["k"], "meeting");
+    }
+
+    #[test]
+    fn a_meeting_later_today_is_one_more_turn_of_the_rotation() {
+        let (h, _) = home("meeting-rot", 0);
+        let mut i = inp(1000.0);
+        i.meeting = meeting(false);
+        i.last_reply = Some(json!({"t": 990.0, "text": "Sunny"}));
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            let c = card(&h, &i);
+            assert_eq!(c["n"], 2);
+            seen.push(c["k"].as_str().unwrap().to_string());
+            i.now += ROTATE_S;
+        }
+        seen.sort();
+        assert_eq!(seen, ["meeting", "meeting", "reply", "reply"]);
     }
 
     #[test]

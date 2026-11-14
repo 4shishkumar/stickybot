@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Signed into the app by `cargo tauri build` (bundle.macOS.entitlements in tauri.conf.json).
+     The app is signed with the hardened runtime, under which macOS refuses EventKit (the Calendar
+     connection) without this entitlement, without even showing the permission question.
+     Bluetooth and the audio tap need no entitlement here: they work without one. -->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.personal-information.calendars</key>
+  <true/>
+</dict>
+</plist>
