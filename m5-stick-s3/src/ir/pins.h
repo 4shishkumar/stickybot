@@ -8,15 +8,16 @@
 // screen G21/G39/G40/G41/G45, the mic / speaker (I2S) G14-G18.
 #pragma once
 #include <driver/gpio.h>
+#include "../board.h"
 
 namespace ir {
 
 #ifdef IR_PINS_SWAPPED
-constexpr gpio_num_t TX_PIN = GPIO_NUM_42;
-constexpr gpio_num_t RX_PIN = GPIO_NUM_46;
+constexpr gpio_num_t TX_PIN = board::IR_RX_PIN;
+constexpr gpio_num_t RX_PIN = board::IR_TX_PIN;
 #else
-constexpr gpio_num_t TX_PIN = GPIO_NUM_46;
-constexpr gpio_num_t RX_PIN = GPIO_NUM_42;
+constexpr gpio_num_t TX_PIN = board::IR_TX_PIN;   // other boards: board.h
+constexpr gpio_num_t RX_PIN = board::IR_RX_PIN;   // GPIO_NUM_NC on a board without a receiver
 #endif
 
 constexpr bool     RX_ACTIVE_LOW = true;      // the receiver pulls its output low while it sees a carrier
