@@ -182,6 +182,15 @@ jobs:
           fi
           echo "$SHERPA_ONNX_SHA256  $dir/$SHERPA_ONNX_ARCHIVE" | shasum -a 256 -c -
           echo "SHERPA_ONNX_ARCHIVE_DIR=$dir" >> "$GITHUB_ENV"
+      # The build script unpacks the libraries into target/sherpa-onnx-prebuilt, which rust-cache
+      # empties but leaves as folders; the script then takes the empty lib folder for a finished
+      # unpack and the link fails ("could not find native static library"). So the folder goes and
+      # the build script runs again every time (a few seconds).
+      - name: Unpack the sherpa-onnx libraries afresh (rust-cache empties them)
+        run: |
+          rm -rf target/sherpa-onnx-prebuilt
+          cargo clean --locked -p sherpa-onnx-sys
+          cargo clean --locked --release -p sherpa-onnx-sys
       - name: Tests
         run: cargo test --workspace --locked
       - name: Clippy
