@@ -1,6 +1,6 @@
 ---
 type: memory
-description: "The Mac apps: StickyBot.app in Rust (Tauri 2, axum, ~/.stickybot-rs, com.stickybot.rs) that ships, the legacy Python app (~/.stick-agent), the dashboard files both serve, ports 8660 and 8670, ad-hoc signing, macOS permissions and the signed-in Calendar entitlement."
+description: "The Mac apps: StickyBot.app in Rust (Tauri 2, axum, ~/.stickybot-rs, com.stickybot.rs) that ships, the legacy Python app (~/.stick-agent), the dashboard files both serve, ports 8660 and 8670, ad-hoc signing, in-app updates, macOS permissions and the signed-in Calendar entitlement."
 ---
 # Mac Apps
 
@@ -61,6 +61,48 @@ entitlement is missing. The EventKit code itself is in the `macos-calendar` crat
 `stickybot-server` builds into `AppState`; the app crate needs only these bundle files. What
 Calendar does is in [connections](/apps/connections.md).
 
+### Requirement: StickyBot.app installs its own updates
+The update state machine, busy gate, channel to endpoint rule and API live in
+`stickybot-server/src/selfupdate.rs` behind an `Installer` trait (no Tauri type in the server
+crate; the headless binary has `NoInstaller` and says only the menu bar app updates itself, with
+the release page as the way out). `stickybot-app/src/updater.rs` implements it with
+`tauri-plugin-updater`: the signature is checked against the public key in `tauri.conf.json`
+(`plugins.updater.pubkey`, `requireSignedVersion`) before anything is replaced, https only. It
+reports in words when the app is not in a `.app`, runs translocated, or its folder is not
+writable (no admin prompt).
+
+`/api/update` reports `state` (`idle | checking | available | downloading | installing |
+restarting | error`), `progress {bytes,total}`, `waiting`, `install_error {kind,message}` with
+kinds `signature | network | not-writable | no-update | other`, `updated {from,to}`, `auto` and
+`install.can_update` / `why` / `download`; the older fields are kept, and each state change is a
+hub `update` event (progress at most about 5 a second). `POST /api/update/install` answers 202 and
+starts, or 409 with words (an install already running, no app update, a release that is not newer
+than this app, no `latest.json`, installer unavailable); `POST /api/update/cancel` drops a waiting
+install; `POST /api/update/agent` behaves as install. All need the API token. The config key
+`update_auto` (default `false`) lets the check loop install an available update when the gate is
+open, no stick button was pressed for 10 min (counted from the later of the last button and app
+start), `update_check` is on and that version was not tried in the last 24 h; quiet hours do not
+block it.
+
+#### Scenario: A verified update while the stick is busy
+- **GIVEN** an install has downloaded and verified while a firmware update, a voice request, a permission prompt or stick question, a wireless-mic hold or a face install is running
+- **WHEN** the state is read
+- **THEN** it is `available` with `waiting: "busy — will install when idle: <reason>"`, nothing is replaced, and the app re-checks every 5 s for at most 30 min and continues by itself when idle (paused is not busy)
+
+#### Scenario: Around the restart
+- **GIVEN** the gate is open
+- **WHEN** the install replaces the app
+- **THEN** the stick is notified "Updating StickyBot…" and `pending {from,to,at}` is written to `updates.json`, the busy gate is looked at again, `bye` is sent and the app relaunches
+- **AND** on the next start with that version the app emits `updated`, notifies the stick "Updated to vX" once and clears `pending`; a pending version that did not take is reported once as an error
+
+The menu reads "Install update vX and restart…" when the app can install in place (a click
+starts it) and "Update available: vX — download…" (release page) otherwise. The dashboard's
+`updates.js` shows the banner and Settings card (notes, Install and restart, progress, waiting
+with Cancel, errors with Try again and the download page, a one-time "Updated to vX", the
+`update_auto` toggle) only when `/api/update` has `state`; without it (the Python app, older Rust
+apps) the old card and `/api/update/agent` path behave as before. The stick sees only ordinary
+notify messages; the protocol is unchanged.
+
 ### Requirement: Tests run without hardware
 `cargo test --workspace` and the Python test suite use a fake stick, an in-memory Core Audio, a
 fake Claude and temporary homes. Tests against real Core Audio or a real stick are opt-in.
@@ -69,9 +111,27 @@ fake Claude and temporary homes. Tests against real Core Audio or a real stick a
 
 ### Ad-hoc signing, with permissions re-asked per version
 **Decision**: Release builds are signed ad hoc by GitHub Actions (no Apple Developer ID, not notarized).
-**Why**: No Apple certificate has to live in CI; only the built-in `GITHUB_TOKEN` is used. [INFERRED] The ad-hoc signature still uses the hardened runtime, so the entitlements an API needs (the calendars one) are signed in and checked by `build-app.sh`.
+**Why**: No Apple certificate has to live in CI; the release workflow uses the built-in `GITHUB_TOKEN` and, on tag pushes only, the update-signing secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. [INFERRED] The ad-hoc signature still uses the hardened runtime, so the entitlements an API needs (the calendars one) are signed in and checked by `build-app.sh`.
 **Rejected**: A Developer ID signature with notarization, which needs a paid certificate held as a CI secret. [INFERRED] What ad hoc costs: macOS sees each version as a new app, so Bluetooth, System Audio Recording and Calendar are asked again after every update, and the first open needs right-click → Open. A local build can use a stable identity (`STICKYBOT_SIGNING_IDENTITY`) to keep its permissions.
 *Introduced by*: predates fab; see `README.md` "Install the Mac app"
+
+### Tauri's updater plugin behind a server-side trait
+**Decision**: `tauri-plugin-updater` does the download, signature check and bundle swap inside `stickybot-app`; `stickybot-server/src/selfupdate.rs` owns the state machine, gate, endpoint and API behind `Installer`, with a fake for tests. The minisign update key, not Apple signing, is the trust anchor.
+**Why**: The server crate has no Tauri (headless binary, tests with fakes); the plugin already does the dangerous parts and is what the Tauri CLI's artifacts are made for.
+**Rejected**: An own updater in the server (own tar extraction, swap and signature code to maintain); calling the plugin from the dashboard's JS (the page is also served over HTTP to browsers and has no Tauri IPC).
+*Introduced by*: 261112-xkmx-in-app-updates
+
+### The gate sits between "verified" and "replace"
+**Decision**: The update is downloaded and verified at once; waiting for the stick to be free happens only before replacing and relaunching.
+**Why**: A download disturbs nothing; the restart is what would cut a talk, a prompt or a firmware update.
+**Rejected**: Refusing the click while busy (the person would have to come back and try again).
+*Introduced by*: 261112-xkmx-in-app-updates
+
+### No endpoint override in release builds
+**Decision**: In release builds the update endpoint comes only from the compiled-in repo, the channel and a validated tag; debug and test builds accept `STICKYBOT_RS_UPDATE_ENDPOINT` only for an `http://127.0.0.1` / `http://localhost` URL.
+**Why**: No config file or environment value may point the updater at another feed.
+**Rejected**: A configurable feed URL.
+*Introduced by*: 261112-xkmx-in-app-updates
 
 ### Claude Code is the default brain
 **Decision**: Voice requests go to a long-lived headless Claude Code session; approvals reach the stick through Claude Code's hooks; an OpenRouter model is the optional other brain with only the stick tools.
@@ -82,5 +142,5 @@ fake Claude and temporary homes. Tests against real Core Audio or a real stick a
 ## Sources
 
 `desktop/README.md`, `desktop/SWITCHOVER.md`, `docs/ARCHITECTURE.md`, `README.md`,
-`mac-agent/README.md`. Related: [Mac link](/link/mac-link.md), [wireless mic](/link/wireless-mic.md),
+`mac-agent/README.md`, `desktop/crates/stickybot-server/src/selfupdate.rs`. Related: [Mac link](/link/mac-link.md), [wireless mic](/link/wireless-mic.md),
 [releases](/delivery/releases.md).

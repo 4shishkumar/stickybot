@@ -6,9 +6,11 @@
 //!
 //! A newer StickyBot.app — the latest release is newer than this app's version (`CARGO_PKG_VERSION`,
 //! set by `tools/release_tool.py bump`) and has the `StickyBot-<version>-macos-arm64.zip` asset — is
-//! `agent_update` ("Update available: vX"), with the release page in `install.download`. The app
-//! doesn't install it itself (`selfupdate.py` isn't ported: `POST /api/update/agent` answers 409
-//! with where to download it). State: `~/.stickybot-rs/updates.json`.
+//! `agent_update` ("Update available: vX"), with the release page in `install.download`. When that
+//! release also has its `latest.json` (the signed update the release workflow makes) and the menu
+//! bar app is the one running, `install.can_update` is true and `selfupdate.rs` installs it: the
+//! status then also carries `state`, `progress`, `waiting`, `install_error`, `updated`. Otherwise
+//! `install.why` says why, with the release page as the way out. State: `~/.stickybot-rs/updates.json`.
 
 use crate::releases::{self, ReleaseError, Source};
 use serde_json::{Map, Value, json};
@@ -19,8 +21,6 @@ use std::time::Duration;
 pub const CHECK_EVERY: Duration = Duration::from_secs(24 * 3600);
 pub const FIRST_CHECK: Duration = Duration::from_secs(20);
 pub const TICK: Duration = Duration::from_secs(60);
-pub const NO_SELF_UPDATE: &str =
-    "the Rust app doesn't update itself yet — download the new StickyBot-<version>-macos-arm64.zip from the release (README: Install the Mac app), or build it from the repo";
 
 /// The release asset with StickyBot.app for this Mac (the release workflow's `mac-app` job).
 pub const APP_ASSET_SUFFIX: &str = "-macos-arm64.zip";
@@ -62,13 +62,16 @@ pub struct Updates {
     sources: Mutex<Sources>,
     s: Mutex<State>,
     lock: tokio::sync::Mutex<()>,
+    /// installing the update itself (`selfupdate.rs`): the installer, the state, what was tried
+    pub run: crate::selfupdate::Run,
 }
 
 impl Updates {
     pub fn new(home: &std::path::Path) -> Self {
         let path = home.join("updates.json");
         let mut s = State::default();
-        if let Some(v) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
+        let saved = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok());
+        if let Some(v) = saved.clone() {
             s.checked_at = v.get("checked_at").and_then(Value::as_f64).unwrap_or(0.0);
             s.latest = v.get("latest").filter(|l| l.is_object()).cloned();
             s.notified = v
@@ -87,17 +90,34 @@ impl Updates {
             sources: Mutex::new(Arc::new(move || releases::sources(&r2))),
             s: Mutex::new(s),
             lock: tokio::sync::Mutex::new(()),
+            run: crate::selfupdate::Run::load(saved.as_ref()),
         }
+    }
+
+    /// The last check's release (`tag`, `version`, `app_asset`, `updater_asset`, …).
+    pub(crate) fn latest(&self) -> Option<Value> {
+        self.s.lock().unwrap().latest.clone()
+    }
+
+    pub(crate) fn current(&self) -> &str {
+        &self.current
+    }
+
+    pub(crate) fn repo(&self) -> &str {
+        &self.repo
     }
 
     pub fn set_sources(&self, s: Sources) {
         *self.sources.lock().unwrap() = s;
     }
 
-    fn save(&self) {
+    pub(crate) fn save(&self) {
         let s = self.s.lock().unwrap();
         let keep = s.notified.len().saturating_sub(20);
-        let v = json!({"checked_at": s.checked_at, "latest": s.latest, "notified": s.notified[keep..]});
+        let mut v = json!({"checked_at": s.checked_at, "latest": s.latest, "notified": s.notified[keep..]});
+        if let Some(o) = v.as_object_mut() {
+            self.run.save_into(o);
+        }
         if let Err(e) = std::fs::write(&self.path, serde_json::to_string_pretty(&v).unwrap_or_default()) {
             log::warn!("couldn't save {}: {e}", self.path.display());
         }
@@ -115,7 +135,7 @@ impl Updates {
         let lat = s.latest.clone();
         let fw = lat.as_ref().and_then(|l| l.get("firmware")).and_then(Value::as_str).map(str::to_string);
         let firmware_update = fw.is_some() && s.stick_fw.is_some() && releases::newer(fw.as_deref(), s.stick_fw.as_deref());
-        // a newer StickyBot.app: only when the release has the download (it can't install itself)
+        // a newer StickyBot.app: only when the release has the Mac app's download (installable in-app only with `latest.json` too: `selfupdate::plan`)
         let tag = lat.as_ref().and_then(|l| l.get("tag")).and_then(Value::as_str).unwrap_or("").to_string();
         let ver = lat.as_ref().and_then(|l| l.get("version")).and_then(Value::as_str).map(str::to_string);
         let has_app = lat.as_ref().is_some_and(|l| l.get("app_asset").is_some_and(Value::is_string));
@@ -127,19 +147,38 @@ impl Updates {
         } else {
             String::new()
         };
+        let page = self.page_of(lat.as_ref());
+        // can the app install it itself, and if not, why not
+        let (can_update, why) = match self.plan_with(lat.as_ref(), cfg) {
+            Ok(_) => (true, String::new()),
+            Err(r) => (false, r.words()),
+        };
         let latest = lat.map(|mut l| {
             if !notes && let Some(o) = l.as_object_mut() {
                 o.remove("notes");
             }
             l
         });
-        json!({"enabled": cfg.get("update_check").and_then(Value::as_bool) != Some(false),
+        let phase = self.run.phase();
+        let state = match phase.state() {
+            Some(st) => st,
+            None if s.checking && phase != crate::selfupdate::Phase::Waiting => "checking",
+            None if agent_update => "available",
+            None => "idle",
+        };
+        let mut st = json!({"enabled": cfg.get("update_check").and_then(Value::as_bool) != Some(false),
                "channel": channel(cfg), "checking": s.checking,
                "checked_at": if s.checked_at > 0.0 { json!(s.checked_at) } else { Value::Null },
                "error": s.error, "note": s.note,
                "current": {"agent": self.current, "firmware": s.stick_fw},
                "latest": latest, "agent_update": agent_update, "firmware_update": firmware_update,
-               "available": agent_update || firmware_update, "title": title})
+               "available": agent_update || firmware_update, "title": title,
+               "state": state, "auto": cfg.get("update_auto").and_then(Value::as_bool).unwrap_or(false),
+               "install": {"can_update": can_update, "why": why}});
+        if let Some(o) = st.as_object_mut() {
+            o.extend(self.run.fields(&page));
+        }
+        st
     }
 
     /// `GET /api/update`: the status with notes, how this app is installed, the updaters.
@@ -147,22 +186,34 @@ impl Updates {
         let mut st = self.status(cfg, true);
         let page = self.download_page(&st);
         let file = st["latest"]["app_asset"].as_str().unwrap_or("StickyBot-<version>-macos-arm64.zip").to_string();
-        st["install"] = json!({"kind": "rust", "path": std::env::current_exe().ok(), "can_update": false,
-                               "why": NO_SELF_UPDATE, "head": null, "branch": null, "download": page,
-                               "instructions": [format!("{page}  ({file}: unzip, quit StickyBot, replace /Applications/StickyBot.app)"),
-                                                "or from the repo: desktop/scripts/build-app.sh"]});
+        if let Some(o) = st["install"].as_object_mut() {
+            o.insert("kind".into(), json!("rust"));
+            o.insert("path".into(), json!(std::env::current_exe().ok()));
+            o.insert("head".into(), Value::Null);
+            o.insert("branch".into(), Value::Null);
+            o.insert("download".into(), json!(page));
+            o.insert(
+                "instructions".into(),
+                json!([format!("{page}  ({file}: unzip, quit StickyBot, replace /Applications/StickyBot.app)"),
+                       "or from the repo: desktop/scripts/build-app.sh"]),
+            );
+        }
         // Bluetooth has its own button (POST /api/firmware/ota), USB too: no other updaters
         st["firmware_updaters"] = json!([]);
         st
     }
 
-    /// Where to get the new app: the latest release's page, else the releases' latest page.
-    pub fn download_page(&self, status: &Value) -> String {
-        status["latest"]["url"]
-            .as_str()
+    fn page_of(&self, latest: Option<&Value>) -> String {
+        latest
+            .and_then(|l| l["url"].as_str())
             .filter(|u| u.starts_with("https://"))
             .map(str::to_string)
             .unwrap_or_else(|| format!("https://github.com/{}/releases/latest", self.repo))
+    }
+
+    /// Where to get the new app: the latest release's page, else the releases' latest page.
+    pub fn download_page(&self, status: &Value) -> String {
+        self.page_of(Some(&status["latest"]))
     }
 
     /// The app's version to compare releases with (tests pretend another).
@@ -186,6 +237,9 @@ impl Updates {
         info["firmware"] = Value::Null;
         // the Mac app's download (StickyBot-<version>-macos-arm64.zip), if the release has one
         info["app_asset"] = rel.assets.keys().find(|n| is_app_asset(n)).map_or(Value::Null, |n| json!(n));
+        // its signed update (`latest.json`): what "Install and restart" reads (selfupdate.rs)
+        info["updater_asset"] =
+            if rel.assets.contains_key(crate::selfupdate::UPDATER_ASSET) { json!(crate::selfupdate::UPDATER_ASSET) } else { Value::Null };
         if rel.assets.contains_key(releases::MANIFEST) {
             match releases::download_firmware(&rel, src, root, &|l| log::info!("{l}")) {
                 Ok((_, m)) => info["firmware"] = m["version"].clone(),
@@ -241,6 +295,9 @@ pub fn spawn(st: Arc<crate::AppState>) {
     let weak = Arc::downgrade(&st);
     drop(st);
     tokio::spawn(async move {
+        if let Some(st) = weak.upgrade() {
+            crate::selfupdate::after_restart(&st); // "Updated to vX", or "didn't take"
+        }
         tokio::time::sleep(FIRST_CHECK).await;
         let mut asked = None::<tokio::time::Instant>;
         loop {
@@ -255,6 +312,7 @@ pub fn spawn(st: Arc<crate::AppState>) {
                 emit(&st);
             }
             notify(&st).await;
+            crate::selfupdate::auto_tick(&st); // `update_auto`: installs by itself when idle
             drop(st);
             tokio::time::sleep(TICK).await;
         }
@@ -305,7 +363,7 @@ pub fn emit(st: &crate::AppState) {
     let cfg = st.cfg.lock().unwrap().clone();
     let s = st.updates.status(&cfg, false);
     let mut ev = Map::new();
-    for k in ["available", "title", "agent_update", "firmware_update", "error", "note"] {
+    for k in ["available", "title", "agent_update", "firmware_update", "error", "note", "state", "progress", "waiting", "install_error", "updated"] {
         ev.insert(k.into(), s[k].clone());
     }
     st.hub.emit("update", Value::Object(ev));

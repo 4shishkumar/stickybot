@@ -303,6 +303,7 @@ async function save() {
     claude_path: v("claudePath").value.trim(),
     update_channel: v("updChannel").value,
     update_check: v("updCheck").checked,
+    ...(v("updAuto") ? {update_auto: v("updAuto").checked} : {}),  // only the Rust app has it
   });
   if (report(r, "Settings saved")) refreshStatus();
 }

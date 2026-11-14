@@ -154,7 +154,7 @@ stick. The token stays the Python one (harmless; the old Rust token is in `token
 | reopening the app shows the window | the same (`RunEvent::Reopen`) | done |
 | LaunchAgent with `KeepAlive` (restarted after a crash) | `SMAppService` login item: started at login, **not** restarted after a crash | no; reopen it from /Applications |
 | `stickybot` CLI (run/start/stop/restart/status/logs/open/install-page/app/flash/setup/mcp/uninstall) | none: the dashboard does status / logs / setup / flashing / MCP; `--hook` only | no |
-| self-update (git + venv + rebuild) | none (`NO_SELF_UPDATE`): it says when a release has a newer app and opens its download page; firmware updates are ported | no: download the new zip |
+| self-update (git + venv + rebuild) | **Install update vX and restart…** (menu) / *Install and restart* (dashboard): downloads the signed `StickyBot.app.tar.gz`, checks it against the key built into the app, swaps the bundle and reopens (`selfupdate.rs`, `updater.rs`); waits while the stick is busy; where it can't replace itself, or for a release without `latest.json`, it opens the release page. Releases up to 2.5.0 can't: install the first one with it by hand once | done |
 | BlackHole: downloads and installs the pkg | shows `brew install --cask blackhole-2ch` (the Apple audio tap needs no driver) | no |
 | window remembers its size and place; Dock icon while it's open | neither (menu bar only) | no |
 | first start opens the setup page by itself | the menu's *Finish setup…* | no |

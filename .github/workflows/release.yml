@@ -8,17 +8,30 @@
 #                        offsets, sizes, sha256, flash params)
 #   mac-app  (macos-15,  the Rust Mac app (desktop/): cargo test + clippy, StickyBot.app built and
 #             arm64)     signed ad hoc (no Apple identity: unsigned for Gatekeeper, see README.md
-#                        "Install the Mac app"), zipped as StickyBot-<version>-macos-arm64.zip
-#   publish  (ubuntu)    adds the zip to manifest.json ("apps"), creates the release with the
-#                        firmware parts, the zip and the notes from CHANGELOG.md
+#                        "Install the Mac app"), zipped as StickyBot-<version>-macos-arm64.zip;
+#                        with the update key (below) also the signed update for the in-app
+#                        updater, StickyBot-<version>-macos-arm64.app.tar.gz and its .sig
+#   publish  (ubuntu)    adds the zip to manifest.json ("apps"), writes latest.json (the file the
+#                        app's updater reads) when there is a signed update, creates the release
+#                        with the firmware parts, the zip, the update files and the notes from
+#                        CHANGELOG.md
 # The agent downloads the firmware assets (stick_agent/releases.py) and checks every part's sha256
 # against the manifest; it ignores "apps", so older agents read the new manifest as before.
 #
+# The update key: the repository secrets TAURI_SIGNING_PRIVATE_KEY and
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD (docs/RELEASING.md, "Update signing key"). The Mac app carries
+# the matching public key and installs only updates signed with the private one. The key is handed
+# to the build on a tag push only: a run by hand (workflow_dispatch, on any branch) never gets it,
+# so unreviewed code is never built with the key; it builds unsigned, without update files, and
+# passes. The same goes for a run without the secrets (a fork); a tag without them still publishes
+# the release, with a warning that it can't be installed from inside the app.
+#
 # Run it by hand (Actions → Release → Run workflow, on any branch) to try the Mac app build before
-# tagging: only mac-app runs, nothing is published, and the zip is a workflow artifact.
+# tagging: only mac-app runs, nothing is published, and the zip is a workflow artifact (never the
+# update files: the signing key only reaches a tag build).
 #
 # The agent's tests here leave out its macOS-only libraries (rumps, MLX, PortAudio), which they
-# don't need, as CI on pull requests does (ci.yml). Only GITHUB_TOKEN is used.
+# don't need, as CI on pull requests does (ci.yml). Secrets: GITHUB_TOKEN and, on a tag, the two TAURI_SIGNING_* ones.
 name: Release
 
 on:
@@ -128,6 +141,8 @@ jobs:
     timeout-minutes: 60
     outputs:
       zip: ${{ steps.names.outputs.zip }}
+      tarball: ${{ steps.names.outputs.tarball }}
+      updater: ${{ steps.updater.outputs.present }}   # "true" when the signed update was made and checked
     defaults:
       run:
         working-directory: desktop
@@ -144,8 +159,11 @@ jobs:
           else   # a test build: the repo's version, the commit in the file name
             version="$(python3 ../tools/release_tool.py current)"; label="$version-dev.${GITHUB_SHA::7}"
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "zip=StickyBot-$label-macos-arm64.zip" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$version"
+            echo "zip=StickyBot-$label-macos-arm64.zip"
+            echo "tarball=StickyBot-$label-macos-arm64.app.tar.gz"
+          } >> "$GITHUB_OUTPUT"
           echo "StickyBot $version -> StickyBot-$label-macos-arm64.zip"
 
       - name: Rust (stable, with clippy)
@@ -194,9 +212,13 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: Build StickyBot.app (ad-hoc signature)
+      - name: Build StickyBot.app (ad-hoc signature, and the signed update when the key is set)
         env:
           STICKYBOT_VERSION: ${{ steps.names.outputs.version }}
+          # only on a tag push, and empty when the secrets aren't set (or on a run by hand, which
+          # may build any branch): build-app.sh then skips the update files
+          TAURI_SIGNING_PRIVATE_KEY: ${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: |
           unset APPLE_SIGNING_IDENTITY STICKYBOT_SIGNING_IDENTITY
           scripts/build-app.sh
@@ -214,12 +236,47 @@ jobs:
           ditto -c -k --keepParent target/release/bundle/macos/StickyBot.app "../dist-app/$ZIP"
           ls -l ../dist-app && shasum -a 256 "../dist-app/$ZIP"
 
+      - name: Check the signed update and name it for the release
+        id: updater
+        env:
+          TARBALL: ${{ steps.names.outputs.tarball }}
+        run: |
+          bundle=target/release/bundle/macos
+          if [ ! -s "$bundle/StickyBot.app.tar.gz" ]; then
+            # build-app.sh made no update: there was no key
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            if [ "$GITHUB_EVENT_NAME" = push ]; then
+              echo "::warning title=No update signing key::TAURI_SIGNING_PRIVATE_KEY is not set, so this release has no update file and cannot be installed from inside the app (docs/RELEASING.md, Update signing key)"
+            else
+              echo "no update signing key: updater artifacts skipped"
+            fi
+            exit 0
+          fi
+          test -s "$bundle/StickyBot.app.tar.gz.sig" || { echo "::error::the update has no signature file"; exit 1; }
+          # the ad-hoc signature must still be valid inside the tarball, with the hardened runtime
+          check="$(mktemp -d)"
+          tar -xzf "$bundle/StickyBot.app.tar.gz" -C "$check"
+          ls "$check"
+          app="$check/StickyBot.app"
+          codesign --verify --deep --strict --verbose=1 "$app"
+          info="$(codesign -dv "$app" 2>&1)"
+          echo "$info"
+          echo "$info" | grep -q '^Signature=adhoc' || { echo "::error::the app in the update is not signed ad hoc"; exit 1; }
+          echo "$info" | grep -Eq '^CodeDirectory .*flags=0x[0-9a-f]+\([^)]*runtime' || { echo "::error::the app in the update has no hardened runtime flag"; exit 1; }
+          cp "$bundle/StickyBot.app.tar.gz" "../dist-app/$TARBALL"
+          cp "$bundle/StickyBot.app.tar.gz.sig" "../dist-app/$TARBALL.sig"
+          ls -l ../dist-app
+          echo "present=true" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         with:
           name: mac-app
-          path: dist-app/${{ steps.names.outputs.zip }}
+          path: |
+            dist-app/${{ steps.names.outputs.zip }}
+            dist-app/*.app.tar.gz
+            dist-app/*.app.tar.gz.sig
           if-no-files-found: error
-          compression-level: 0   # already a zip
+          compression-level: 0   # the zip and the update are compressed already
           retention-days: 14
 
   publish:
@@ -251,15 +308,33 @@ jobs:
           cat dist/manifest.json
           (cd dist && sha256sum ./*)
 
+      - name: latest.json for the in-app updater
+        env:
+          VERSION: ${{ needs.tests.outputs.version }}
+          UPDATER: ${{ needs.mac-app.outputs.updater }}
+          TARBALL: ${{ needs.mac-app.outputs.tarball }}
+        run: |
+          if [ "$UPDATER" != true ]; then
+            echo "::warning title=No update file::this release has no signed update (no signing key), so it cannot be installed from inside the app"
+            exit 0
+          fi
+          python3 tools/release_tool.py latest-json dist/latest.json --version "$VERSION" --tag "$GITHUB_REF_NAME" \
+            --sig "dist/$TARBALL.sig" --asset "$TARBALL" --repo "$GITHUB_REPOSITORY"
+          cat dist/latest.json
+
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.tests.outputs.version }}
           PRERELEASE: ${{ needs.tests.outputs.prerelease }}
           ZIP: ${{ needs.mac-app.outputs.zip }}
+          UPDATER: ${{ needs.mac-app.outputs.updater }}
+          TARBALL: ${{ needs.mac-app.outputs.tarball }}
         run: |
           python3 tools/release_tool.py notes "$VERSION" > "$RUNNER_TEMP/notes.md"
           set -- --title "StickyBot $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
           if [ "$PRERELEASE" = true ]; then set -- "$@" --prerelease; fi
-          gh release create "$GITHUB_REF_NAME" "$@" \
-            dist/manifest.json dist/bootloader.bin dist/partitions.bin dist/boot_app0.bin dist/app.bin "dist/$ZIP"
+          set -- "$@" dist/manifest.json dist/bootloader.bin dist/partitions.bin dist/boot_app0.bin dist/app.bin "dist/$ZIP"
+          # the signed update, its signature and latest.json, when the build made them
+          if [ "$UPDATER" = true ]; then set -- "$@" "dist/$TARBALL" "dist/$TARBALL.sig" dist/latest.json; fi
+          gh release create "$GITHUB_REF_NAME" "$@"
