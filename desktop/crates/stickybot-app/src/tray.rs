@@ -2,6 +2,8 @@
 //!
 //! ```text
 //! <status line>                      the agent's state ("Ready — hold B on the stick", "Waiting for approval (1)"…)
+//! Install update vX and restart…     an app update this app can install (its progress while it runs)
+//! Update available: vX — download…   one it can't (translocated, read-only folder…) → the release page
 //! Stick firmware X available — …     only while there is one → Settings
 //! Finish setup…                      only while a recommended setup step is open → the setup page
 //! ───
@@ -55,8 +57,8 @@ pub struct Snapshot {
     pub paused: bool,
     /// the stick's sound settings, as it last reported them
     pub sounds: Option<Value>,
-    /// "Stick firmware X available", or empty
-    pub update_title: String,
+    /// the update status (`Updates::status`): the title, the install state, its progress
+    pub update: Value,
 }
 
 impl Snapshot {
@@ -71,7 +73,7 @@ impl Snapshot {
             prompts: st.prompts_waiting(),
             paused: st.link.paused(),
             sounds: st.sounds(),
-            update_title: st.updates.status(&cfg, false)["title"].as_str().unwrap_or("").to_string(),
+            update: st.updates.status(&cfg, false),
         }
     }
 
@@ -158,20 +160,67 @@ pub fn check_result(s: &Value) -> String {
     format!("Up to date (v{})", s["current"]["agent"].as_str().unwrap_or("?"))
 }
 
-/// The "Update available" item's title, `None` = hidden.
-pub fn update_text(title: &str) -> Option<String> {
-    (!title.is_empty()).then(|| {
-        if title.starts_with("Update available") {
-            format!("{title} — download…")
-        } else {
-            format!("{title} — open the dashboard")
-        }
-    })
+/// What a click on the update item does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateClick {
+    /// start "Install and restart" (`selfupdate::start`)
+    Install,
+    /// the release page: this app can't install it itself
+    Page(String),
+    /// the dashboard's Settings (firmware, or watching an install run)
+    Dashboard,
 }
 
-/// Where the "Update available" item goes: the release page for a new app, `None` = the dashboard.
-pub fn update_link(status: &Value, page: &str) -> Option<String> {
-    (status["agent_update"] == true).then(|| page.to_string())
+fn working(s: &Value) -> bool {
+    s["waiting"].is_string() || matches!(s["state"].as_str(), Some("downloading" | "installing" | "restarting"))
+}
+
+/// The update item's title, `None` = hidden. An app update this app can install reads "Install
+/// update vX and restart…" and then shows where the install is; one it can't keeps "Update
+/// available: vX — download…" (the release page).
+pub fn update_text(s: &Value) -> Option<String> {
+    let title = s["title"].as_str().unwrap_or("");
+    if let Some(w) = s["waiting"].as_str() {
+        let why = w.strip_prefix("busy — will install when idle: ").unwrap_or(w);
+        return Some(format!("Update waits: {why}"));
+    }
+    match s["state"].as_str() {
+        Some("downloading") => {
+            let p = &s["progress"];
+            return Some(match (p["bytes"].as_u64(), p["total"].as_u64().filter(|t| *t > 0)) {
+                (Some(b), Some(t)) => format!("Downloading update… {} %", (b * 100 / t).min(100)),
+                _ => "Downloading update…".into(),
+            });
+        }
+        Some("installing") => return Some("Installing update…".into()),
+        Some("restarting") => return Some("Restarting StickyBot…".into()),
+        _ => {}
+    }
+    if title.is_empty() {
+        return None;
+    }
+    if s["agent_update"] == true {
+        let can = s["install"]["can_update"] == true;
+        let v = s["latest"]["version"].as_str().unwrap_or("");
+        return Some(match (can, s["state"] == "error") {
+            (true, true) => format!("Update failed — try again (install v{v} and restart)…"),
+            (true, false) => format!("Install update v{v} and restart…"),
+            (false, _) => format!("{title} — download…"),
+        });
+    }
+    Some(format!("{title} — open the dashboard"))
+}
+
+/// What the update item does when clicked: `page` is the release page.
+pub fn update_click(s: &Value, page: &str) -> UpdateClick {
+    if working(s) {
+        return UpdateClick::Dashboard;
+    }
+    match (s["agent_update"] == true, s["install"]["can_update"] == true) {
+        (true, true) => UpdateClick::Install,
+        (true, false) => UpdateClick::Page(page.to_string()),
+        _ => UpdateClick::Dashboard,
+    }
 }
 
 /// What's on screen now (only changes are sent to the menu).
@@ -325,7 +374,7 @@ impl Tray {
             pause: if snap.paused { "Resume" } else { "Pause" }.into(),
             volume: Some(volume_checks(snap.sounds.as_ref())),
             sounds: Some(sounds_on(snap.sounds.as_ref())),
-            update: Some(update_text(&snap.update_title)),
+            update: Some(update_text(&snap.update)),
             setup: Some(*self.setup_pending.lock().unwrap()),
             status,
         };
@@ -402,15 +451,23 @@ impl Tray {
         match id {
             "open" => crate::show_dashboard_at(&self.app, ""),
             "update" => {
-                // a new StickyBot.app: its release page (the app can't install itself); firmware:
-                // the dashboard's update card
                 let cfg = st.cfg.lock().unwrap().clone();
                 let s = st.updates.status(&cfg, false);
-                match update_link(&s, &st.updates.download_page(&s)) {
-                    Some(url) => {
+                match update_click(&s, &st.updates.download_page(&s)) {
+                    UpdateClick::Install => {
+                        let app = self.app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            // a refusal (it changed since the item was drawn): the dashboard says why
+                            if let Err(why) = stickybot_server::selfupdate::start(&st, "the menu") {
+                                log::warn!("update from the menu: {}", why.words());
+                                crate::show_dashboard_at(&app, "settings");
+                            }
+                        });
+                    }
+                    UpdateClick::Page(url) => {
                         let _ = std::process::Command::new("open").arg(url).spawn();
                     }
-                    None => crate::show_dashboard_at(&self.app, "settings"),
+                    UpdateClick::Dashboard => crate::show_dashboard_at(&self.app, "settings"),
                 }
             }
             "setup" => crate::show_dashboard_at(&self.app, "install"),
@@ -519,15 +576,54 @@ mod tests {
         assert_eq!(check_result(&err), format!("Couldn't check for updates: {}", &"offline ".repeat(20)[..60]));
         let fw = json!({"available": true, "title": "Stick firmware 2.6.0 available"});
         assert_eq!(check_result(&fw), "Stick firmware 2.6.0 available — see the item above");
-        assert_eq!(update_text(""), None);
-        assert_eq!(
-            update_text("Stick firmware 2.6.0 available").as_deref(),
-            Some("Stick firmware 2.6.0 available — open the dashboard")
-        );
-        // a new app: the item says so and goes to the release page
-        assert_eq!(update_text("Update available: v2.5.0").as_deref(), Some("Update available: v2.5.0 — download…"));
-        let page = "https://github.com/acme/stickybot/releases/tag/v2.5.0";
-        assert_eq!(update_link(&json!({"agent_update": true}), page).as_deref(), Some(page));
-        assert_eq!(update_link(&json!({"agent_update": false, "firmware_update": true}), page), None);
+    }
+
+    fn update(extra: Value) -> Value {
+        let mut base = json!({"title": "Update available: v2.6.0", "agent_update": true, "state": "available",
+                              "progress": null, "waiting": null, "latest": {"version": "2.6.0"},
+                              "install": {"can_update": true}});
+        base.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        base
+    }
+
+    #[test]
+    fn the_update_item_offers_the_install_when_the_app_can_do_it() {
+        assert_eq!(update_text(&json!({"title": "", "state": "idle"})), None);
+        let s = update(json!({}));
+        assert_eq!(update_text(&s).as_deref(), Some("Install update v2.6.0 and restart…"));
+        let page = "https://github.com/acme/stickybot/releases/tag/v2.6.0";
+        assert_eq!(update_click(&s, page), UpdateClick::Install);
+        // not installable here: the old item, and the release page
+        let s = update(json!({"install": {"can_update": false}}));
+        assert_eq!(update_text(&s).as_deref(), Some("Update available: v2.6.0 — download…"));
+        assert_eq!(update_click(&s, page), UpdateClick::Page(page.into()));
+        // firmware only: the dashboard
+        let fw = json!({"title": "Stick firmware 2.6.0 available", "agent_update": false, "state": "idle",
+                        "install": {"can_update": false}});
+        assert_eq!(update_text(&fw).as_deref(), Some("Stick firmware 2.6.0 available — open the dashboard"));
+        assert_eq!(update_click(&fw, page), UpdateClick::Dashboard);
+    }
+
+    #[test]
+    fn the_update_item_shows_where_the_install_is() {
+        let page = "https://example.invalid/";
+        let dl = update(json!({"state": "downloading", "progress": {"bytes": 12_900_000, "total": 39_800_000}}));
+        assert_eq!(update_text(&dl).as_deref(), Some("Downloading update… 32 %"));
+        assert_eq!(update_click(&dl, page), UpdateClick::Dashboard, "no second install");
+        let unknown = update(json!({"state": "downloading", "progress": {"bytes": 5, "total": null}}));
+        assert_eq!(update_text(&unknown).as_deref(), Some("Downloading update…"));
+        assert_eq!(update_text(&update(json!({"state": "downloading"}))).as_deref(), Some("Downloading update…"));
+        let over = update(json!({"state": "downloading", "progress": {"bytes": 50, "total": 10}}));
+        assert_eq!(update_text(&over).as_deref(), Some("Downloading update… 100 %"));
+        // verified, waiting for the stick
+        let w = update(json!({"waiting": "busy — will install when idle: a firmware update is running"}));
+        assert_eq!(update_text(&w).as_deref(), Some("Update waits: a firmware update is running"));
+        assert_eq!(update_click(&w, page), UpdateClick::Dashboard);
+        assert_eq!(update_text(&update(json!({"state": "installing"}))).as_deref(), Some("Installing update…"));
+        assert_eq!(update_text(&update(json!({"state": "restarting"}))).as_deref(), Some("Restarting StickyBot…"));
+        // failed: try again from the menu
+        let e = update(json!({"state": "error"}));
+        assert_eq!(update_text(&e).as_deref(), Some("Update failed — try again (install v2.6.0 and restart)…"));
+        assert_eq!(update_click(&e, page), UpdateClick::Install);
     }
 }

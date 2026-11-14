@@ -567,6 +567,16 @@ pub mod tests {
         }
     }
 
+    impl FakeGitHub {
+        /// Gives release `tag` its signed update file (`latest.json`, as the release workflow does).
+        pub fn add_updater(&mut self, tag: &str) {
+            let r = self.releases.iter_mut().find(|r| r["tag_name"] == tag).expect("add_release first");
+            r["assets"].as_array_mut().unwrap().push(json!({"name": "latest.json", "size": 2, "digest": format!("sha256:{}", sha(b"{}")),
+                                                           "browser_download_url": format!("https://example.invalid/{tag}/latest.json")}));
+            self.files.insert((tag.into(), "latest.json".into()), b"{}".to_vec());
+        }
+    }
+
     impl Source for FakeGitHub {
         fn name(&self) -> &str {
             "fake"
