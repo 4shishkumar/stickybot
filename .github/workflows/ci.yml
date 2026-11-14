@@ -100,6 +100,14 @@ jobs:
           pct="$(echo "$line" | grep -oE '[0-9]+\.[0-9]+%' | tr -d %)"
           echo "### Firmware flash: $line" >> "$GITHUB_STEP_SUMMARY"
           awk -v p="$pct" -v l="$FLASH_LIMIT_PCT" 'BEGIN { if (p+0 > l+0) { print "flash " p "% is over the " l "% limit"; exit 1 } }'
+      - name: M5StickC Plus2 — build, and the flash-size limit
+        working-directory: m5-stick-s3
+        run: |
+          pio run -e stickc_plus2 | tee build-plus2.log
+          line="$(grep -E '^Flash:' build-plus2.log | tail -1)"
+          pct="$(echo "$line" | grep -oE '[0-9]+\.[0-9]+%' | tr -d %)"
+          echo "### Plus2 firmware flash: $line" >> "$GITHUB_STEP_SUMMARY"
+          awk -v p="$pct" -v l="$FLASH_LIMIT_PCT" 'BEGIN { if (p+0 > l+0) { print "flash " p "% is over the " l "% limit"; exit 1 } }'
       - name: XIAO ESP32-C3 — build
         working-directory: xiao-esp32-c3
         run: pio run -e xiao_c3

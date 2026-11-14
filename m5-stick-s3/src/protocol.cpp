@@ -374,13 +374,12 @@ static void runHuman(const String& line) {
     Log.printf("%s | combo %s | %s | Wi-Fi %s %s\n", hid::name().c_str(),
                   comboToString(settings::combo()).c_str(), btName(hid::state()),
                   web::mode(), web::url().c_str());
-    bool chgEnabled = false;
-    M5.Power.M5pm1.getBatteryCharge(&chgEnabled);
+    bool chgEnabled = board::chargerEnabled();
     Log.printf("  battery %d%% (%d mV%s) | %s | standby %u min\n", battery::level(), battery::millivolts(),
                   battery::charging() ? ", charging" : "", battery::etaLabel().c_str(), settings::standbyMin());
     Log.printf("  USB %u mV | charger %s | power source 0x%02x | charger restarts %d\n",
                   M5.Power.getVBUSVoltage(), chgEnabled ? "enabled" : "DISABLED",
-                  (unsigned)M5.Power.M5pm1.getPowerSource(), battery::chargerRestarts());
+                  (unsigned)board::powerSource(), battery::chargerRestarts());
     for (uint8_t n = 1; n <= settings::SLOTS; n++)
       Log.printf("  slot %u: %s%s\n", n, hid::paired(n) ? "paired" : "empty",
                     n == hid::slot() ? " (active)" : "");
@@ -473,7 +472,7 @@ static void runHuman(const String& line) {
     return;
   }
   else if (cmd == "led") {  // test: does the power chip's LED_EN pin drive the green LED?
-    M5.Power.M5pm1.setLedEnLevel(rest == "on");
+    board::statusLed(rest == "on");
     Log.printf("LED_EN %s\n", rest == "on" ? "high" : "low");
     return;
   }

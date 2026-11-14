@@ -36,6 +36,14 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   (download the zip, quit StickyBot, replace StickyBot.app); updates after it install themselves.
   Because StickyBot.app is signed ad hoc, macOS still asks for Bluetooth and System Audio
   Recording again after each update.
+- **A second stick model: the M5StickC Plus2 (first bring-up, not in releases yet).** The
+  firmware now builds for it too (`pio run -e stickc_plus2`, `make flash-plus2`): the screen,
+  buttons, Bluetooth keyboard and the Mac link run from the same sources. What the board lacks is
+  switched off in the new `src/board.h`: the USB microphone (Bluetooth mic only), the IR receiver,
+  and the charger controls. It reports itself as `m5-stickc-plus2` in the hello line. Battery,
+  sounds on its buzzer, the mic, IR sending and updates from the Mac app come later; until then
+  don't update a Plus2 from the app (it would send the StickS3 firmware). The StickS3 build is
+  unchanged.
 
 ### Changed
 - **Auto-rotate reacts faster (firmware).** The screen now turns after a quarter second held the
