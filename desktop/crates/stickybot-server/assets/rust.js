@@ -2,12 +2,17 @@
 // Settings → "Import from StickyBot": takes over the Python app's settings (POST /api/import).
 // Settings → Dock: "Always show in the Dock" (config dock_always; the app's dock.rs).
 // The Feedback page ("Report an issue", feedback.js) in the nav, before Logs.
+// The Connections page (the Mac's Calendar, connections.js) in the nav, before Feedback.
+// Events: the meeting reminder's own name in the list (the shared page only knows the older kinds).
 import {h, card, get, post, put, toast, ask} from "/static/lib.js";
 import * as feedback from "/static-rs/feedback.js";
+import * as connections from "/static-rs/connections.js";
 
 if (window.stickyAddPage) {
   window.stickyAddPage("feedback", "Feedback", feedback,
     '<path d="M4 4h16v12H8l-4 4z"/><path d="M12 7.5v4M12 13.8v.2"/>', "logs");
+  window.stickyAddPage("connections", "Connections", connections,
+    '<path d="M9 3v4M15 3v4"/><path d="M6 7h12v4a6 6 0 0 1-12 0z"/><path d="M12 17v4"/>', "feedback");
 }
 
 function dockCard(cfg) {
@@ -116,6 +121,14 @@ async function maybeAdd() {
   } finally { busy = false; }
 }
 
+function relabelEvents() {
+  const title = document.getElementById("pageTitle");
+  if (!title || title.textContent !== "Events") return;
+  for (const b of document.querySelectorAll("#page .ev-row .what b")) {
+    if (b.textContent === "meeting_soon") b.textContent = "Meeting reminder";
+  }
+}
+
 const page = document.getElementById("page");
-if (page) new MutationObserver(maybeAdd).observe(page, {childList: true, subtree: false});
+if (page) new MutationObserver(() => { maybeAdd(); relabelEvents(); }).observe(page, {childList: true, subtree: false});
 maybeAdd();

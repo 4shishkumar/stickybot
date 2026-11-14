@@ -12,6 +12,16 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- **Connections, and your Mac's Calendar as the first one** (the Mac app, dashboard → Connections; no
+  new stick firmware needed). Connect it once and the stick shows your next meeting on its home
+  card (pinned from 15 minutes before it starts), gives a heads-up a few minutes ahead (new event
+  *Meeting reminder* on the Events page; you pick 1-15 minutes or off), and answers by voice
+  without Claude: "what's my next meeting", "what's my day like", "join my meeting" (opens the
+  Google Meet, Zoom, Teams or Webex link of the meeting). Claude Code sessions can ask too. It reads
+  the calendars you already have in macOS (iCloud, Google, Exchange), only reads, and keeps
+  your meetings only in memory. macOS asks for Calendar access the first time you press Connect.
+
 ### Changed
 - **Auto-rotate reacts faster (firmware).** The screen now turns after a quarter second held the
   new way (was half a second), needs a smaller turn (55° instead of 60°), and still follows the

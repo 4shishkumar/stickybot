@@ -1,0 +1,25 @@
+[package]
+name = "macos-calendar"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "StickyBot's read-only view of the Mac's Calendar (EventKit) behind a trait, with a fake for tests"
+
+[dependencies]
+
+# Everything that touches EventKit is macOS-only; the types, the trait and the fake build (and test)
+# anywhere.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSArray", "NSDate", "NSError", "NSNotification", "NSOperation", "NSURL", "NSObject", "NSEnumerator", "block2"] }
+# only what the read-only code uses: no reminders, alarms, recurrence rules, maps or AppKit
+objc2-event-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-core-graphics", "EKCalendar", "EKCalendarItem", "EKEvent", "EKEventStore", "EKObject", "EKParticipant", "EKSource", "EKTypes"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGColor"] }
+
+[dev-dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[[example]]
+name = "calendar_dump"

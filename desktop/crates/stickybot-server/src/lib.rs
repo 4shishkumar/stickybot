@@ -12,6 +12,7 @@ pub mod brains;
 pub mod clips;
 pub mod commands;
 pub mod config;
+pub mod connections;
 pub mod events;
 pub mod feed;
 pub mod feedback;
@@ -174,6 +175,9 @@ pub struct AppState {
     pub setup: setup::Setup,
     /// "Report an issue": the rate limit and the form poster (`feedback.rs`; fake: never posts)
     pub feedback: feedback::Feedback,
+    /// the Mac's Calendar, read-only (`connections/calendar.rs`); with the fake stick a made-up day:
+    /// the real Calendar is never touched there
+    pub calendar: connections::calendar::Calendar,
     me: OnceLock<Weak<AppState>>,
 }
 
@@ -261,6 +265,11 @@ impl AppState {
                 Arc::new(sysrun::MacSystem)
             }),
             feedback: feedback::Feedback::new(fake),
+            calendar: connections::calendar::Calendar::new(if fake {
+                Arc::new(macos_calendar::fake::FakeCalendar::sample(hub::now() as i64))
+            } else {
+                macos_calendar::system()
+            }),
             me: OnceLock::new(),
         });
         let _ = st.me.set(Arc::downgrade(&st));
@@ -552,6 +561,7 @@ impl AppState {
             let mut cfg = self.cfg.lock().unwrap();
             stick_changed = changes.get("stick").is_some_and(|s| cfg.get("stick") != Some(s));
             hints_changed = changes.get("stt_hints").is_some_and(|s| cfg.get("stt_hints") != Some(s));
+            let changes = connections::merge_changes(&cfg, changes);
             cfg.extend(changes);
             config::save(&self.paths, &cfg).map_err(|e| format!("couldn't save the settings: {e}"))?;
             cfg.clone()
@@ -570,6 +580,7 @@ impl AppState {
         if let Some(st) = self.me.get().and_then(Weak::upgrade) {
             wmic::config_changed(&st, &changed_keys);
             home::config_changed(&st, &changed_keys);
+            connections::config_changed(&st, &changed_keys);
         }
         self.hub.emit("config", json!({"config": snapshot}));
         Ok(snapshot)
@@ -644,6 +655,7 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     updates::spawn(state.clone());
     wmic::spawn(state.clone());
     home::spawn(state.clone());
+    connections::spawn(state.clone());
     tokio::spawn(wmic::startup(state.clone())); // left-overs of a crashed run, then the tap check
     if !state.fake {
         wmic::install_crash_cleanup(&state); // a crash / SIGTERM removes the device on the way out

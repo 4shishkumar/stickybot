@@ -456,6 +456,20 @@ pub async fn handle_text(st: Arc<AppState>, text: String, source: &str) {
             st.set_idle();
             return;
         }
+        if let Some(what) = cmd.get("calendar").and_then(Value::as_str) {
+            // a question about the day (connections/calendar.rs): answered from the Mac's Calendar, no model
+            let (ok, result) = crate::connections::calendar::voice(&st, what).await;
+            st.count("quick");
+            st.hub.emit("reply", json!({"text": result, "via": "quick", "ms": ms_since(started)}));
+            tell_stick(&st, if ok { "done" } else { "error" }, &text, &result).await;
+            // the Activity log is a file: it keeps that the question was asked, not the meetings in the answer
+            st.history(&with(json!({"via": "quick", "command": cmd.get("name"), "reply": "(from your calendar)"})));
+            st.set_idle();
+            if ok {
+                crate::speak::speak(&st, &result, true, false);
+            }
+            return;
+        }
         let (apps, runner) = (st.apps.clone(), st.runner());
         let c = cmd.clone();
         let result =
