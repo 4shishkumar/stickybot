@@ -102,6 +102,9 @@ struct Inner<C: Connector> {
     opts: Options,
     current: Mutex<Option<Arc<C::Conn>>>,
     write_lock: tokio::sync::Mutex<()>,
+    /// messages in a row that couldn't be written; at [`DEAD_AFTER`] the link is dropped
+    send_fails: AtomicUsize,
+    dead: tokio::sync::Notify,
     ctl: watch::Sender<Control>,
     state: watch::Sender<LinkState>,
     messages: broadcast::Sender<Value>,
@@ -120,6 +123,10 @@ struct Inner<C: Connector> {
 
 /// The status line while the picked stick doesn't answer a connect (asleep, out of range, off).
 pub const NOT_FOUND_REASON: &str = "stick not found — is it awake?";
+
+/// Messages in a row the stick doesn't take before the link counts as dead. macOS can keep a
+/// connection "up" that no longer carries writes; dropping it lets the link connect afresh.
+const DEAD_AFTER: usize = 3;
 
 /// The link. Cheap to clone; every clone is the same link.
 pub struct Link<C: Connector> {
@@ -146,6 +153,8 @@ impl<C: Connector> Link<C> {
                 opts,
                 current: Mutex::new(None),
                 write_lock: tokio::sync::Mutex::new(()),
+                send_fails: AtomicUsize::new(0),
+                dead: tokio::sync::Notify::new(),
                 ctl,
                 state,
                 messages: broadcast::channel(256).0,
@@ -271,9 +280,13 @@ impl<C: Connector> Link<C> {
             if let Err(e) = write_chunk(&*conn, part).await {
                 let first = msg.as_object().and_then(|o| o.keys().next().cloned()).unwrap_or_else(|| "?".into());
                 log::warn!("send failed ({first}, {} bytes): {e}", data.len());
+                if self.inner.send_fails.fetch_add(1, Ordering::Relaxed) + 1 == DEAD_AFTER {
+                    self.inner.dead.notify_one();
+                }
                 return false;
             }
         }
+        self.inner.send_fails.store(0, Ordering::Relaxed);
         true
     }
 
@@ -472,6 +485,10 @@ impl<C: Connector> Link<C> {
         self.inner.mtu.store(conn.mtu(), Ordering::Relaxed);
         *self.inner.current.lock().unwrap() = Some(conn.clone());
         self.set_state(LinkState::Connected);
+        self.inner.send_fails.store(0, Ordering::Relaxed);
+        let dead = self.inner.dead.notified();
+        tokio::pin!(dead);
+        dead.as_mut().enable(); // only failures from now on count
         let hello = self.inner.opts.hello_every.map(|every| {
             let me = self.clone();
             tokio::spawn(async move {
@@ -512,6 +529,10 @@ impl<C: Connector> Link<C> {
                         leaving = true;
                         break;
                     }
+                }
+                _ = &mut dead => {
+                    log::warn!("the stick took none of the last {DEAD_AFTER} messages: dropping the link");
+                    break;
                 }
             }
         }
@@ -880,6 +901,30 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(10)).await;
         fake.drop_connection();
         assert_eq!(req.await.unwrap(), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_link_that_takes_no_writes_is_dropped_and_made_again() {
+        let fake = FakeStick::new();
+        let link = connected(&fake, Options::default()).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(fake.connects(), 1);
+        fake.set_busy(DEAD_AFTER, "the write timed out");
+        tokio::time::sleep(Duration::from_secs(8 * DEAD_AFTER as u64 + 5)).await;
+        assert_eq!(fake.disconnects(), 1);
+        assert_eq!(fake.connects(), 2);
+        assert!(link.connected());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn one_failed_write_does_not_drop_the_link() {
+        let fake = FakeStick::new();
+        let _link = connected(&fake, Options::default()).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        fake.set_busy(DEAD_AFTER - 1, "the write timed out");
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        assert_eq!(fake.disconnects(), 0);
+        assert_eq!(fake.connects(), 1);
     }
 
     #[tokio::test(start_paused = true)]
