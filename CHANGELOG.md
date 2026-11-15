@@ -46,7 +46,7 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   unchanged.
 
 ### Changed
-- **Auto-rotate reacts faster (firmware).** The screen now turns after a quarter second held the
+- **Auto-rotate reacts faster (firmware 2.8.0).** The screen now turns after a quarter second held the
   new way (was half a second), needs a smaller turn (55° instead of 60°), and still follows the
   stick when it's held leaning back (down to about 20° above flat, was 30°).
 
