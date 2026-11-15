@@ -116,6 +116,9 @@ void begin(uint8_t slot) {
   // switch to the slot's own address straight away.
   kb->setRandomAddress(true);
   kb->setSharedHosts(settings::sharedHosts());
+  kb->setDiagnosticSink([](bool verbose) {
+    Log.event(verbose ? diagnostics::Event::HidInput : diagnostics::Event::Hid);
+  });
   kb->setSecurityMode(HIDSecurity::Passkey);
   kb->onPairingComplete([](bool ok) { if (ok) authEvent = true; });
   kb->begin();
@@ -141,7 +144,7 @@ void begin(uint8_t slot) {
         mapChanged_ = true;
         NimBLEDevice::getServer()->sendServiceChangedIndication();
         p.putUChar("map", HID_MAP_VERSION);
-        Log.printf("HID report map v%u (mouse added): Service Changed queued for the paired Macs\n", HID_MAP_VERSION);
+        Log.event(diagnostics::Event::Pairing);
       }
       p.end();
     }
@@ -154,7 +157,7 @@ uint32_t pairingCode() { return pendingCode; }
 void confirmPairing(bool accept) {
   if (!pendingCode || !pendingConn) return;
   NimBLEDevice::injectConfirmPasskey(*pendingConn, accept);
-  Log.printf("Pairing %s\n", accept ? "accepted" : "rejected");
+  Log.event(diagnostics::Event::Pairing);
   pendingCode = 0;
 }
 
@@ -175,7 +178,7 @@ void loop() {
     NimBLEDevice::deleteBond(NimBLEAddress(std::string(saved.c_str()), type));
   }
   settings::savePeer(slot_, addr, id.getType());
-  Log.printf("Slot %u paired with %s\n", slot_, addr.c_str());
+  Log.event(diagnostics::Event::Pairing);
 }
 
 uint8_t slot() { return slot_; }

@@ -23,6 +23,16 @@ use std::io::Write;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+tokio::task_local! { static DEVICE_TARGETED: bool; }
+
+/// Explicit API/tool targets take precedence over background notification delivery policy.
+pub async fn for_device<F: std::future::Future>(future: F) -> F::Output {
+    DEVICE_TARGETED.scope(true, future).await
+}
+pub fn device_targeted() -> bool {
+    DEVICE_TARGETED.try_with(|targeted| *targeted).unwrap_or(false)
+}
+
 pub const LEVELS: &[&str] = &["celebrate", "nice", "headsup", "off"];
 
 /// kind -> (default level, icon, sample title, sample sub); the samples are for the Test buttons.
@@ -205,7 +215,10 @@ pub async fn notify(
     let destinations = cfg.get("notification_devices").and_then(Value::as_array).cloned();
     let mut sent = false;
     let mut destination_ids = Vec::new();
-    if let Some(ids) = destinations {
+    if device_targeted() {
+        destination_ids.push(st.device_id.clone());
+        sent = st.link.send(&json!({"src":"agent","event":ev})).await;
+    } else if let Some(ids) = destinations {
         for id in ids {
             if let Some(device) = id.as_str().and_then(|id| st.devices.resolve(id)) {
                 destination_ids.push(device.device_id.clone());

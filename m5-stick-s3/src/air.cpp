@@ -151,12 +151,12 @@ static void startMode(Mode m) {
   shownSecond = UINT32_MAX;
   dirty = true;
   ui::wake(m == Mode::PRESENTER ? 120000 : SCREEN_MS);
-  Log.printf("Remote mode: %s\n", modeName(m));
+  Log.event(diagnostics::Event::Mode);
 }
 
 static void endMode(const char* why) {
   releaseMouse();
-  Log.printf("Remote mode %s ended (%s)\n", modeName(mode_), why);
+  Log.event(diagnostics::Event::Mode);
   mode_ = Mode::OFF;
   motion::setFast(false);
   ui::wake(SCREEN_MS);
@@ -484,7 +484,7 @@ bool command(const String& action, const std::function<String(const char*)>& arg
       return true;
     }
     save(s);
-    Log.printf("Remote settings: sensitivity %u, scroll %u, talk %u min\n", s.sens, s.scroll, s.talkMin);
+    Log.event(diagnostics::Event::Mode);
     status = 200;
     json = "{\"ok\":true," + stateJson() + "}";
     return true;

@@ -120,7 +120,7 @@ static String q(const String& s) {
 
 static void refuse(const char* error, const String& why = "") {
   send(String("\"state\":\"refused\",\"error\":\"") + error + "\"" + (why.length() ? ",\"why\":" + q(why) : String()));
-  Log.printf("Faces: install refused (%s%s%s)\n", error, why.length() ? ": " : "", why.c_str());
+  Log.event(diagnostics::Event::FaceFailed);
 }
 
 static void showToast(const String& line, uint16_t bg) {
@@ -167,14 +167,12 @@ static void after(const otarx::Reply& r) {
   using K = otarx::Reply::Kind;
   receiving_ = rx.receiving();
   if (r.kind == K::DONE) {
-    Log.printf("Faces: installed %s %s (%lu bytes, %lu ms)\n", sink.part.id, sink.info.version,
-               (unsigned long)rx.size(), (unsigned long)(millis() - startedAt));
+    Log.event(diagnostics::Event::FaceInstall);
+    Log.count(diagnostics::Counter::FaceBytes, rx.size());
     pkg::installed(sink.part.id);
     showToast(String("Installed ") + (sink.info.name[0] ? sink.info.name : sink.part.id), ui::blend(ui::GROUND, ui::OK, 0.6f));
   } else if (r.kind == K::ERROR && r.error != otarx::Error::INCOMPLETE) {
-    const bool face = r.error == otarx::Error::IMAGE;
-    Log.printf("Faces: install of %s failed (%s%s%s)\n", sink.part.id, face ? sink.error : otarx::errorName(r.error),
-               face ? ": " : "", face ? sink.why.c_str() : "");
+    Log.event(diagnostics::Event::FaceFailed);
     showToast(String("Couldn't install ") + name_, ui::blend(ui::GROUND, ui::ERR, 0.7f));
   }
 }
@@ -238,7 +236,6 @@ static void put(JsonObjectConst p) {
     if (mem) ring = new (mem) Ring();
   }
   if (!ring) return refuse("full", "out of memory");
-  const bool wasReceiving = rx.receiving();
   const otarx::Reply r = rx.begin(b, c, millis());
   if (r.kind == otarx::Reply::Kind::READY) {
     portENTER_CRITICAL(&mux);
@@ -251,8 +248,8 @@ static void put(JsonObjectConst p) {
     name_ = strlen(name) && strlen(name) <= 24 ? String(name) : String(id);
     toastUntil = 0;
     ui::wake(15000);
-    Log.printf("Faces: %s %s %s (%lu bytes) from %lu%s\n", r.resumed ? "resuming" : "receiving", id, b.version,
-               (unsigned long)size, (unsigned long)r.offset, wasReceiving && !r.resumed ? " (the last one dropped)" : "");
+    Log.event(diagnostics::Event::FaceInstall);
+    Log.count(diagnostics::Counter::FaceBytes, rx.size());
   } else if (r.kind == otarx::Reply::Kind::ERROR) {  // the part file didn't open
     send(String("\"state\":\"error\",\"error\":\"") + otarx::errorName(r.error) + "\",\"offset\":0");
     receiving_ = rx.receiving();
@@ -276,7 +273,8 @@ void control(JsonObjectConst msg) {
   if (msg["cancel"].is<int>() || msg["cancel"].is<bool>()) {
     otarx::Reply r = rx.cancel();
     if (r.kind == otarx::Reply::Kind::CANCELLED) {
-      Log.printf("Faces: install of %s cancelled by the agent\n", sink.part.id);
+      Log.event(diagnostics::Event::FaceInstall);
+    Log.count(diagnostics::Counter::FaceBytes, rx.size());
       toastUntil = 0;
     } else {
       r.kind = otarx::Reply::Kind::CANCELLED;  // nothing running: say so anyway, the agent is waiting
@@ -302,7 +300,7 @@ void cancelByUser() {
   otarx::Reply r = rx.cancel();
   receiving_ = rx.receiving();
   if (r.kind != otarx::Reply::Kind::CANCELLED) return;
-  Log.printf("Faces: install of %s cancelled on the stick\n", sink.part.id);
+  Log.event(diagnostics::Event::FaceInstall);
   reply(r, "stick");
   showToast("Install cancelled", ui::blend(ui::GROUND, ui::ASK, 0.6f));
 }

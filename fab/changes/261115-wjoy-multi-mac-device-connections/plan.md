@@ -57,57 +57,68 @@ Native firmware logic tests, Rust fake tests, shared dashboard JS/Python checks 
 
 ### Phase 2: Core implementation
 - [x] T002 [P] Implement bounded host/session/focus logic and native tests in m5-stick-s3/src/logic/hosts.* and test/test_hosts/. <!-- R1 -->
-- [x] T003 [P] Integrate per-peer HID, buddy RX/TX/audio/transfer ownership in m5-stick-s3/src/{hid,buddy,ota,mic}.cpp and lib/HijelHID_BLEKeyboard/. <!-- R2 -->
+- [x] T003 [P] Integrate per-peer HID, buddy RX/TX/audio/transfer ownership in m5-stick-s3/src/{hid,buddy,ota,mic}.cpp and lib/HijelHID_BLEKeyboard/. <!-- R2 --> <!-- rework: Clear held mouse state on disconnect before selecting another host. -->
 - [x] T004 [P] Integrate shared-mode persistence, peer passwords, host picker and names in firmware settings/protocol/menu/main/ui. <!-- R3 -->
 - [x] T005 [P] Add Rust host identity/name validation and hello/session exchange in stickybot-server/hosts.rs, lib.rs, home.rs, config.rs and stick-link. <!-- R4 -->
-- [x] T006 [P] Build device registry/session lifecycle and independent runtime in stickybot-server/devices.rs, lib.rs and stick-link/corebt.rs. <!-- R5 -->
-- [x] T007 [P] Add scoped API, default routing, device events and MCP selection in stickybot-server/{api,devices,mcp,hub}.rs. <!-- R6 -->
+- [x] T006 [P] Build device registry/session lifecycle and independent runtime in stickybot-server/devices.rs, lib.rs and stick-link/corebt.rs. <!-- R5 --> <!-- rework: Keep home display and rotation state per device while sharing polling services. -->
+- [x] T007 [P] Add scoped API, default routing, device events and MCP selection in stickybot-server/{api,devices,mcp,hub}.rs. <!-- R6 --> <!-- rework: Preserve explicit primary MCP notification targeting. -->
 - [x] T008 [P] Add dashboard device cards/selector and host labels/controls in static/pages/devices.js, static/lib.js and static/app.js. <!-- R6 -->
 
 ### Phase 3: Integration and edge cases
-- [x] T009 Implement source-bound approvals, notification destinations and shared speech contention in stickybot-server/{approvals,talk,wmic,events}.rs. <!-- R7 -->
+- [x] T009 Implement source-bound approvals, notification destinations and shared speech contention in stickybot-server/{approvals,talk,wmic,events}.rs. <!-- R7 --> <!-- rework: Scope approval queries and bind question resend and cleanup to originating generation. -->
 - [x] T010 Add board-aware bundle selection and pre-write validation in stickybot-server/{firmware,flasher,releases}.rs and release tooling. <!-- R8 -->
-- [x] T011 Add migration and mixed-peer/device isolation tests across Rust, firmware and shared JS; retain legacy Python fallback. <!-- R3 -->
-- [x] T012 Run required checks/builds; update CHANGELOG.md and hardware/UI checklists; record exact validation evidence. <!-- R9 -->
+- [x] T011 Add migration and mixed-peer/device isolation tests across Rust, firmware and shared JS; retain legacy Python fallback. <!-- R3 --> <!-- rework: Add permanent reproductions for cross-device cards, explicit routing, stale questions and held mouse disconnect. -->
+- [x] T012 Run required checks/builds; update CHANGELOG.md and hardware/UI checklists; record exact validation evidence. <!-- R9 --> <!-- rework: Rerun checks for review fixes and update evidence. -->
+
+### Phase 4: Diagnostic privacy boundary
+- [x] T013 Audit payload-bearing firmware diagnostics and prevent host/private values reaching USB or TCP diagnostic sinks; retain intentional protocol responses and add production-path sentinel regression coverage. <!-- R1; rework: shared-host prompt/event data reaches TeeLog beyond buddy suppression -->
 
 ## Execution Order
-T001 establishes the interface for firmware (T002–T004), Rust (T005–T007,T009) and dashboard (T008). These groups own disjoint files. T010 follows the Rust interface, and T011–T012 integrate all groups.
+T001 establishes the interface for firmware (T002–T004), Rust (T005–T007,T009) and dashboard (T008). These groups own disjoint files. T010 follows the Rust interface, and T011–T012 integrate all groups. T013 closes the diagnostic privacy boundary; repeat the affected T012 checks after it.
 
 ## Acceptance
 
 ### Functional Completeness
-- [ ] A-001 R1: Peer/session binding and targeted data paths prevent interleaved message and read leakage.
-- [ ] A-002 R2: Focus switching releases input, rejects busy switches and never silently steals another host's focus.
-- [ ] A-003 R3: Legacy slots/bonds work unchanged by default; shared-mode enablement and password assignment are explicit.
-- [ ] A-004 R4: Full computer name and editable short label appear on dashboard and stick and update without re-pairing.
-- [ ] A-005 R5: Two configured device sessions connect independently and isolate state, replies, jobs and reconnects.
-- [ ] A-006 R6: Scoped API, dashboard selectors, default hooks and MCP targeting preserve operation identity.
-- [ ] A-007 R7: Approvals resolve once with origin ownership; notification policy is explicit; competing mic requests fail busy.
-- [ ] A-008 R8: Wrong-board and unknown images are rejected before writing, including USB and BLE paths.
-- [ ] A-009 R9: Appropriate automated checks pass, with exact hardware evidence limits documented.
+- [x] A-001 R1: Peer/session binding and targeted data paths prevent interleaved message and read leakage. <!-- Review cycle 3: authenticated peer/session routing and notify-only private characteristics verified; fixed diagnostics remove the remaining USB/TCP payload path. Scoped native host/HID/netlog tests passed 19/19. -->
+- [x] A-002 R2: Focus switching releases input, rejects busy switches and never silently steals another host's focus. <!-- Review cycle 2: HeldReports clears keyboard/Fn, consumer and mouse holds on disconnect/end and before selection; native regressions passed. -->
+- [x] A-003 R3: Legacy slots/bonds work unchanged by default; shared-mode enablement and password assignment are explicit.
+- [x] A-004 R4: Full computer name and editable short label appear on dashboard and stick and update without re-pairing.
+- [x] A-005 R5: Two configured device sessions connect independently and isolate state, replies, jobs and reconnects. <!-- Review cycle 2: Device-owned Home rotation/send caches and owner/destination-scoped approval reads verified; device and approval regressions passed. -->
+- [x] A-006 R6: Scoped API, dashboard selectors, default hooks and MCP targeting preserve operation identity. <!-- Review cycle 2: Explicit API/MCP targeting overrides default notification policy, including spawned RPC calls; regression passed. -->
+- [x] A-007 R7: Approvals resolve once with origin ownership; notification policy is explicit; competing mic requests fail busy. <!-- Review cycle 2: Question resend and cleanup retain captured generation; cancellation and first-valid fanout decision regressions passed. -->
+- [x] A-008 R8: Wrong-board and unknown images are rejected before writing, including USB and BLE paths.
+- [x] A-009 R9: Appropriate automated checks pass, with exact hardware evidence limits documented.
 
 ### Edge Cases and Security
-- [ ] A-010 R1: Invalid, unencrypted, stale-session and oversized host payloads are rejected without corrupting other peers.
-- [ ] A-011 R2: Active-peer disconnect, busy transfer, held keys, and delayed approval responses retain safe ownership.
-- [ ] A-012 R3: A cable to another Mac cannot receive the active host's dictation; secrets are never returned/logged.
-- [ ] A-013 R4: Empty, duplicate, unicode, oversized and control-character labels have bounded deterministic handling.
+- [x] A-010 R1: Invalid, unencrypted, stale-session and oversized host payloads are rejected without corrupting other peers.
+- [x] A-011 R2: Active-peer disconnect, busy transfer, held keys, and delayed approval responses retain safe ownership. <!-- Review cycle 2: Held-input disconnect state clears and questions cancel across reconnect generations; native/Rust regressions passed. -->
+- [x] A-012 R3: A cable to another Mac cannot receive the active host's dictation; secrets are never returned/logged.
+- [x] A-013 R4: Empty, duplicate, unicode, oversized and control-character labels have bounded deterministic handling.
 
 ### Code Quality
-- [ ] A-014: Pure logic uses hardware-free tests; style matches neighboring code and utilities are reused.
-- [ ] A-015: Protocol changes are capability gated on both sides with documented old/new behavior.
-- [ ] A-016: Fixed firmware buffers, bounded queues and flash <=85% are documented from builds.
-- [ ] A-017: No test touches live hardware, network accounts, Keychain or personal configuration.
-- [ ] A-018: No unnecessary duplication, new unlicensed assets, hand-edited generated files or manual version bumps.
+- [x] A-014: Pure logic uses hardware-free tests; style matches neighboring code and utilities are reused.
+- [x] A-015: Protocol changes are capability gated on both sides with documented old/new behavior.
+- [x] A-016: Fixed firmware buffers, bounded queues and flash <=85% are documented from builds.
+- [x] A-017: No test touches live hardware, network accounts, Keychain or personal configuration.
+- [x] A-018: No unnecessary duplication, new unlicensed assets, hand-edited generated files or manual version bumps.
 
 ### Compatibility
-- [ ] A-019: Legacy Python/shared dashboard and older firmware remain usable in single-device/legacy mode.
-- [ ] A-020: S3 and Plus2 build; XIAO retains its existing supported HID scope.
+- [x] A-019: Legacy Python/shared dashboard and older firmware remain usable in single-device/legacy mode.
+- [x] A-020: S3 and Plus2 build; XIAO retains its existing supported HID scope.
+
+### Diagnostic Privacy
+- [x] A-022 R1: Private host labels, prompts/options/hints, events and user-supplied payload fields do not reach unsolicited USB/TCP diagnostics; hardware-free sentinel tests exercise the production logging path. <!-- Review cycle 3: actual TeeLog fixed-event/numeric paths and fail-closed Print writes audited across authored firmware including vendored HID; 7 production-path regressions passed. Independent /tmp/wjoy-review3-netlog.cpp probes passed all 256 byte values, interleaved partial client commands, and recycled-client inbox isolation. USB/TCP machine framing and human replies remain requester-only. -->
 
 ### Real Stick Check
-- [ ] A-021: Two-Mac/two-device hardware checklist records pairing, labels, keyboard, voice, approvals, reconnect, sleep/wake and OTA; unperformed checks stay pending and draft carries needs-hardware.
+- [x] A-021: Two-Mac/two-device hardware checklist records pairing, labels, keyboard, voice, approvals, reconnect, sleep/wake and OTA; unperformed checks stay pending and draft carries needs-hardware. <!-- Checklist and draft label verified only; all actual physical checks remain pending. -->
 
 ## Notes
 Apply marks tasks; independent review marks acceptance. Actual physical validation is not asserted by fake tests.
+
+## Deletion Candidates
+
+- `desktop/crates/stickybot-server/src/python_agent.rs::check` — production connections now call `check_target`; only legacy-wrapper tests call `check`. Consider moving those tests to the production path and removing the wrapper.
+- `desktop/crates/stickybot-server/src/mcp.rs::brain_config` — production voice sessions now use `brain_config_device`; only the legacy wrapper's test calls this function. Consider moving that test to the production path and removing the wrapper.
 
 ## Assumptions
 
@@ -132,4 +143,35 @@ Apply marks tasks; independent review marks acceptance. Actual physical validati
 
 - Final Rust workspace: `cargo test --workspace --manifest-path desktop/Cargo.toml` — **660 passed**, zero failures (macos-audio 61, macos-calendar 4, stick-link 65, app 30, server 497, integrations 3; doctests passed). This run includes source-generation guards, root-authoritative config/name/migration writes, default tray routing, and scoped activity/event-history regression tests. Log: `/tmp/wjoy-workspace-final.log`.
 - Final Rust lint: `cargo clippy --workspace --all-targets --manifest-path desktop/Cargo.toml -- -D warnings` — passed (`/tmp/wjoy-clippy-final.log`). Stable Rust was added to PATH and the existing sherpa-onnx static library directory supplied via `SHERPA_ONNX_LIB_DIR`; no app/hardware process ran.
-- Final `git diff --check` — passed. T001–T012 are complete; acceptance items remain unchecked for the independent review. Review must include authored vendored HID changes because connection targeting and read isolation depend on them. No remaining known implementation blocker; physical verification remains pending as described above.
+- Initial apply `git diff --check` — passed. Independent review subsequently reopened T003, T006, T007, T009, T011 and T012 for the four findings recorded above. Rework validation below supersedes the initial completion claim. Review includes authored vendored HID changes because connection targeting and read isolation depend on them; physical verification remains pending.
+
+
+### Rework cycle 1
+
+The independent review reproduced four defects: shared home rotation/cards and unscoped approval reads; explicit primary notifications being rerouted through default policy; questions resent/cleared across connection generations; and held mouse state surviving peer disconnect. Apply uses the FIX CODE path, with permanent regressions and fresh Rust/firmware checks. Acceptance is reserved for the independent reviewer and is not changed by apply.
+
+- Finding 4: the vendored driver now uses pure `HeldReports` state for production keyboard/Fn, consumer and mouse holds and mouse packet construction. Disconnect/end clear it unconditionally; reselection releases/clears the previous state even after disconnect. Permanent tests in `test/test_hid_reports/` are `test_disconnected_host_cannot_carry_buttons_to_new_host_movement`, `test_connected_switch_releases_all_held_reports_before_new_input`, and `test_idle_release_avoids_spurious_consumer_and_mouse_notifications`.
+- Rework firmware checks: `pio test -e native` — **286/286 passed**, 35.625 s. Final `pio run -e sticks3` — passed, **2,464,811/3,342,336 bytes (73.7%)**, RAM **142,828/327,680**. Final Plus2 build — passed, **2,377,615/3,342,336 (71.1%)**, RAM **116,004/327,680**. Logs: `/tmp/wjoy-rework1-native-final.log`, `/tmp/wjoy-rework1-s3-final.log`, and final Plus2 result in `/tmp/wjoy-rework1-firmware.log`. The combined log retains an initial stale-accessor compile error, fixed before both final-source builds. Physical verification remains pending.
+
+- Findings 1–3: each device now owns Home rotation/pins/progress/reply/world-send caches while weather/feed/GitHub/pet providers remain shared. Approval visibility and busy checks use owner/destination scope. Explicit tool/API targets override default/background delivery policy, including primary RPC calls without an argument-level `device_id`. Question disconnect/generation changes return cancellation; resend and asynchronous cleanup retain the captured generation.
+- Permanent Rust regressions: `devices::tests::home_display_slots_reply_cache_and_world_sends_are_per_device`; `devices::tests::explicit_primary_notifications_override_default_and_policy_without_changing_background_delivery` (also scoped primary RPC); `approvals::multi_device_tests::questions_and_home_approval_cards_do_not_leak_or_block_sibling_devices`; `approvals::multi_device_tests::disconnected_question_retires_and_late_cleanup_cannot_clear_new_session`. Existing fanout regression also verifies outsider/destination Home visibility and busy checks.
+- Final rework Rust: `cargo test --workspace --manifest-path desktop/Cargo.toml` — **664 passed**, zero failures (audio 61, calendar 4, link 65, app 30, server 501, integrations 3; doctests passed). `cargo clippy --workspace --all-targets --manifest-path desktop/Cargo.toml -- -D warnings` — passed. Logs: `/tmp/wjoy-rework-workspace.log`, `/tmp/wjoy-rework-clippy.log`.
+- The original unmodified reviewer harness was rerun (`/tmp/wjoy-review-probe`, output `/tmp/wjoy-rework-probe.log`): B no longer displays A's pin/reply/question; clearing B preserves A's pin; explicit primary notification reaches primary and leaves B history empty; B is not falsely busy; old question is not resent after generation 1→3 and its stale answer is rejected. Permanent regressions supply assertions for these outcomes.
+- Final rework `git diff --check` — passed. All four must-fix findings are implemented and T001–T012 are complete. Sources are frozen for fresh independent review. Acceptance marks/comments were not edited by apply. Hardware checks remain pending; no real stick was connected or flashed.
+
+### Rework cycle 2 plan revision
+
+Independent review resolved the four initial findings but identified an uncovered diagnostic output boundary. T013 and A-022 cover all payload-bearing firmware logs (main, buddy, protocol, IR, face install and OTA), with intentional protocol responses kept distinct from unsolicited diagnostics. This extends privacy coverage without changing the approved product behavior.
+
+
+### Rework cycle 2 implementation
+
+- All authored firmware diagnostics now use the fixed `diagnostics::Event` catalogue or typed numeric mechanical counters. The audit covers prompt/options/hints/origins/events in main, buddy RX/TX, protocol settings/name/SSID, web uploads, launcher configuration, IR labels/codes, face IDs/versions/errors, OTA supplied versions, bonded addresses and vendored HID key/pairing debug paths. No raw `Log.print/println/printf/write` callsite remains in authored firmware. Vendored HID logging invokes a payload-free callback and never writes directly to Serial.
+- Production `TeeLog` rejects all raw Print bytes with a fixed omitted-payload marker, independently of legacy/shared mode. Fixed diagnostics retain `ready device`, start/failure/completion status and useful byte/frame/drop/retry/storage/timing counters. Detailed payload-bearing debug prose is intentionally unavailable on broadcast sinks; explicit command responses remain separate.
+- USB/TCP protocol handlers receive a requester-owned `Print&`. TCP commands use the originating client; USB defaults to Serial. Production `machineReply` preserves exact `@` + JSON + CRLF framing. Remaining direct Serial responses in the main loop belong to synchronous USB `event`/`sound` commands. `PROTOCOL.md`, the firmware README, `docs/MULTI_DEVICE.md` and CHANGELOG describe the boundary and pending USB/TCP hardware checks.
+- `test/test_netlog/` compiles actual `netlog.cpp` with fake Arduino/Wi-Fi sinks and the production machine response formatter. Seven regressions cover private sentinels via Print/println/printf/fragmented/raw writes across USB and three TCP sinks; fixed events and startup readiness; numeric counters; USB machine response isolation; TCP machine response isolation; human TCP requester isolation while diagnostics still fan out; and generic human success JSON acknowledgement on only its USB/TCP requester. Only command execution and physical sink I/O are substituted.
+
+- Final cycle-2 native check: `~/.platformio/penv/bin/pio test -e native` from `m5-stick-s3/` — **293/293 passed**, 31.617 s, including **7/7 diagnostic/response regressions** (`/tmp/wjoy-rework2-native-final.log`). Regression names: `test_real_teelog_rejects_private_print_printf_and_raw_fragments_on_all_sinks`, `test_fixed_events_reach_usb_and_tcp_without_payload_or_protocol_prefix`, `test_typed_mechanical_counters_preserve_values_without_private_text`, `test_usb_machine_response_keeps_legacy_frame_and_never_reaches_tcp`, `test_human_success_reply_is_explicit_and_only_goes_to_requester`, `test_tcp_machine_response_reaches_only_its_requesting_client`, and `test_tcp_human_response_is_requester_only_while_events_still_fan_out`.
+
+- Final cycle-2 board builds: `~/.platformio/penv/bin/pio run -e sticks3 -e stickc_plus2`, followed by `~/.platformio/penv/bin/pio run -e sticks3` after restoring the face error discriminator used by the intentional response — **both final-source builds passed**. S3 flash **2,455,779/3,342,336 bytes (73.5%)**, RAM **142,820/327,680**; Plus2 flash **2,368,679/3,342,336 (70.9%)**, RAM **115,996/327,680**. Both remain below the 85% flash budget. Logs: `/tmp/wjoy-rework2-s3-final.log` and final Plus2 result in `/tmp/wjoy-rework2-firmware.log`; the combined log retains the initial corrected S3 compile failure. Existing framework/NimBLE configuration/deprecation and volatile-access compiler warnings remain; no new build failure is outstanding.
+- No Rust, Python or dashboard source changed in cycle 2; their prior full-suite/lint evidence above remains applicable. Final cycle-2 `git diff --check` passed. T001–T013 are complete and source is frozen for independent review. Acceptance marks/comments were not edited by apply. Real USB/TCP, Bluetooth, display, sleep/wake and update checks remain pending in the hardware checklist; no physical hardware was accessed.

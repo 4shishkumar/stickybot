@@ -95,7 +95,7 @@ void update() {
       notChargingSince = 0;
       kicks++;
       board::chargerRestart();
-      Log.println("Charger: on USB but not charging - toggled charge-enable");
+      Log.event(diagnostics::Event::Battery);
     }
   } else {
     notChargingSince = 0;

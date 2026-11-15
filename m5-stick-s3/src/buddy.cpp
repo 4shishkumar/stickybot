@@ -149,7 +149,7 @@ static void send(const String& json, bool log = true) {
     for (int tries = 0; tries < 75 && !tx->notify((const uint8_t*)part.c_str(), part.length(), handle); tries++) delay(4);
     if (s.length() > CHUNK) delay(2);
   }
-  if (log && !shared) Log.printf("buddy> %s\n", json.c_str());
+  if (log && !shared) Log.event(diagnostics::Event::Link);
 }
 
 static void hostError(const char* code, const char* message) {
@@ -213,7 +213,7 @@ void attach() {
   NimBLEAdvertisementData scan;
   scan.setName(hid::name().c_str());
   adv->setScanResponseData(scan);
-  Log.printf("Mac link ready, advertising as \"%s\"\n", hid::name().c_str());
+  Log.event(diagnostics::Event::Link);
 }
 
 static void handleStatus() {
@@ -388,7 +388,7 @@ static void handleAgent(JsonDocument& d) {
   // Paused or quitting on the Mac (2.6.0): the Bluetooth link stays up for the keyboard, so
   // without this the stick would only notice when the hellos stop (AGENT_TIMEOUT_MS).
   if (d["bye"] == true) {
-    if (agentSeen) Log.println("Agent: bye (paused or quit on the Mac)");
+    if (agentSeen) Log.event(diagnostics::Event::Link);
     agentSeen = 0;
     wmic_ = wready_ = false;
     speaking_ = false;
@@ -404,10 +404,12 @@ static void handleAgent(JsonDocument& d) {
     JsonObject r = d["reply"];
     reader::Assembly::Step st = reply_.add(r["rid"] | 0u, r["i"] | -1, r["t"] | "");
     if (st == reader::Assembly::Step::COMPLETE) {
-      Log.printf("Agent: full reply, %u bytes\n", (unsigned)reply_.text().size());
+      Log.event(diagnostics::Event::Reply);
+      Log.count(diagnostics::Counter::ReplyBytes, reply_.text().size());
       viewChanges_++;
     } else if (st == reader::Assembly::Step::BROKEN) {
-      Log.println("Agent: a part of the full reply was lost, the short one stays");
+      Log.event(diagnostics::Event::Reply);
+      Log.count(diagnostics::Counter::ReplyBytes, reply_.text().size());
     }
     return;
   }
@@ -450,7 +452,7 @@ static void handleAgent(JsonDocument& d) {
   if (foreground && (fresh || !usbSent_ || millis() - usbSentAt_ > 20000)) sendUsb();
   if (d["wmic"].is<bool>()) {  // in every hello, and on its own when changed in the dashboard
     bool on = d["wmic"].as<bool>();
-    if (on != wmic_) Log.printf("Agent: wireless Wispr mic %s\n", on ? "on" : "off");
+    if (on != wmic_) Log.event(diagnostics::Event::Mic);
     wmic_ = on;
   }
   if (d["hello"].is<int>()) {
@@ -492,7 +494,7 @@ static void handleAgent(JsonDocument& d) {
     ev.sound = e["sound"] | "";
     events::push(ev);
     faces::onEventKind(e["kind"] | "");  // the faces react too (agents since faces send the kind)
-    if (!shared) Log.printf("event (%s): %s\n", e["level"] | "", ev.title.c_str());
+    if (!shared) Log.event(diagnostics::Event::Event);
     return;
   }
   if (d["world"].is<JsonObject>()) faces::onWorld(d["world"].as<JsonObjectConst>());  // the faces' data
@@ -629,11 +631,11 @@ static void handle(const String& l) {
     if (d["src"] != "agent" && index < 0) return;
   }
   if (d["src"] == "agent") {
-    if (!shared && d["state"].is<const char*>()) Log.printf("agent< %s\n", l.c_str());
+    if (!shared && d["state"].is<const char*>()) Log.event(diagnostics::Event::Link);
     handleAgent(d);
     return;
   }
-  if (!shared) Log.printf("buddy< %s\n", l.c_str());
+  if (!shared) Log.event(diagnostics::Event::Link);
   lastHeard = millis();
 
   if (d["cmd"].is<const char*>()) {
@@ -987,7 +989,7 @@ void setUsbMounted(bool on) {
   if (shared) on = false;
   if (on == usbMounted_) return;
   usbMounted_ = on;
-  Log.printf("USB host %s\n", on ? "connected" : "gone");
+  Log.event(diagnostics::Event::Link);
   if (agentLinked()) sendUsb();
   else usbSent_ = false;
 }

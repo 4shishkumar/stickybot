@@ -101,7 +101,7 @@ void screenOpen() {
   loadDevices();
   lastInput = millis();
   ui::wake(IDLE_MS);
-  Log.println("Remote screen");
+  Log.event(diagnostics::Event::Ir);
 }
 
 bool screenActive() { return open_ || learning() || learnShown; }

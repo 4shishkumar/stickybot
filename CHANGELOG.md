@@ -22,6 +22,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   asking for an approval. Name changes keep the existing pairing.
 
 ### Changed
+- Stick diagnostics no longer echo Mac names, questions, notification text or private settings to
+  USB and network log viewers. Explicit USB/TCP commands reply only to the requesting connection.
 - Firmware updates in StickyBot.app select an image for the connected board and check its chip
   and flash layout before writing. A Plus2 never receives an S3 image. Missing compatible
   firmware is shown as unavailable; USB devices whose model cannot be verified are refused.

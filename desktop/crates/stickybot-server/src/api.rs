@@ -239,7 +239,7 @@ async fn device_dispatch(
         return err(StatusCode::BAD_REQUEST, "Invalid path");
     };
     *req.uri_mut() = uri;
-    session_router(device).oneshot(req).await.unwrap()
+    crate::events::for_device(session_router(device).oneshot(req)).await.unwrap()
 }
 async fn default_dispatch(State(st): State<Arc<AppState>>, req: Request) -> Response {
     use tower::ServiceExt;

@@ -131,10 +131,10 @@ Result run(const String& action, const Args& arg) {
       if (keyIndex(c.key) < 0 || !c.valid()) return fail("Pick a key or at least one modifier");
     }
     settings::saveCombo(c);
-    Log.printf("Combo set to %s\n", comboToString(c).c_str());
+    Log.event(diagnostics::Event::Settings);
     if (!hid::needsRestart(c)) return ok("\"combo\":" + q(comboToString(c)));
     // Fn added or removed: the stick's keyboard identity changes (see hid.h)
-    Log.println("Keyboard identity changes for Fn, restarting - re-pair on the Mac");
+    Log.event(diagnostics::Event::Settings);
     Result r = ok("\"combo\":" + q(comboToString(c)) + ",\"restarting\":true,\"repair\":true");
     r.restart = true;
     return r;
@@ -144,7 +144,7 @@ Result run(const String& action, const Args& arg) {
     int ms = arg("delay").toInt();
     if (ms < 0 || ms > 10000) return fail("Delay must be 0-10000 ms (0 = off)");
     settings::saveEnterDelayMs(ms);
-    Log.printf("Enter after hold: %s\n", ms ? (String(ms) + " ms").c_str() : "off");
+    Log.event(diagnostics::Event::Settings);
     return ok("\"enterDelay\":" + String(ms));
   }
 
@@ -160,14 +160,14 @@ Result run(const String& action, const Args& arg) {
     if (!n) return fail("Slot must be 1-3");
     if (n == hid::slot()) return ok("\"slot\":" + String(n));
     settings::saveSlot(n);
-    Log.printf("Switching to slot %d, restarting\n", n);
+    Log.event(diagnostics::Event::Settings);
     Result r = ok("\"slot\":" + String(n) + ",\"restarting\":true");
     r.restart = true;
     return r;
   }
 
-  if (action == "disconnect") { hid::disconnect(); Log.println("Bluetooth off"); return ok(); }
-  if (action == "reconnect")  { hid::reconnect();  Log.println("Bluetooth on");  return ok(); }
+  if (action == "disconnect") { hid::disconnect(); Log.event(diagnostics::Event::Settings); return ok(); }
+  if (action == "reconnect")  { hid::reconnect();  Log.event(diagnostics::Event::Settings);  return ok(); }
 
   if (action == "forget") {
     if (settings::sharedHosts()) return fail("Disable shared mode before changing legacy slot pairings", 409);
@@ -182,8 +182,7 @@ Result run(const String& action, const Args& arg) {
       hid::forget(n);
       r.restart = (n == hid::slot());
     }
-    Log.printf("Forgot %s%s\n", which == "all" ? "all slots" : ("slot " + which).c_str(),
-                  r.restart ? ", restarting" : "");
+    Log.event(diagnostics::Event::Settings);
     if (r.restart) r.json = "{\"ok\":true,\"restarting\":true}";
     return r;
   }
@@ -192,7 +191,7 @@ Result run(const String& action, const Args& arg) {
     String n = arg("name");
     n.trim();
     if (!settings::saveName(n)) return fail("Name must be 1-20 plain characters");
-    Log.printf("Name set to \"%s\", restarting\n", n.c_str());
+    Log.event(diagnostics::Event::Settings);
     Result r = ok("\"name\":" + q(n) + ",\"restarting\":true");
     r.restart = true;
     return r;
@@ -200,13 +199,13 @@ Result run(const String& action, const Args& arg) {
 
   if (action == "wifi") {
     settings::saveWifi(arg("ssid"), arg("pass"));
-    Log.printf("Home Wi-Fi saved: %s\n", arg("ssid").c_str());
+    Log.event(diagnostics::Event::Settings);
     return ok();
   }
 
   if (action == "password") {
     if (!settings::savePassword(arg("password"))) return fail("Password must be 8-63 characters");
-    Log.println("Device password changed");
+    Log.event(diagnostics::Event::Settings);
     return ok();
   }
 
@@ -214,7 +213,7 @@ Result run(const String& action, const Args& arg) {
     int m = arg("min").toInt();
     if (m < 0 || m > 120) return fail("Standby must be 0-120 minutes (0 = never)");
     settings::saveStandbyMin(m);
-    Log.printf("Standby after %d min on battery%s\n", m, m ? "" : " (off)");
+    Log.event(diagnostics::Event::Settings);
     return ok("\"standby\":" + String(m));
   }
 
@@ -223,14 +222,14 @@ Result run(const String& action, const Args& arg) {
     bool lift = flag("lift", settings::liftWakes()), face = flag("face", settings::faceDownSleeps()),
          shake = flag("shake", settings::shakeEscapes());
     settings::saveMotion(lift, face, shake);
-    Log.printf("Motion: lift %s, face-down %s, shake %s\n", lift ? "on" : "off", face ? "on" : "off", shake ? "on" : "off");
+    Log.event(diagnostics::Event::Settings);
     return ok();
   }
 
   if (action == "macpass") {  // write-only: the password is never sent back
     String pw = arg("pass");
     if (!buddy::setMacPassword(pw)) return fail("Select an authenticated Mac first", 409);
-    Log.println(pw.length() ? "Mac password saved" : "Mac password cleared");
+    Log.event(diagnostics::Event::Settings);
     return ok(String("\"macPassSet\":") + (pw.length() ? "true" : "false"));
   }
 
@@ -255,7 +254,7 @@ Result run(const String& action, const Args& arg) {
   if (action == "clock24") {  // the time as 24-hour (2.4.0)
     String v = arg("on");
     settings::saveClock24(v == "1" || v == "true");
-    Log.printf("Clock: %s\n", settings::clock24() ? "24-hour" : "12-hour");
+    Log.event(diagnostics::Event::Settings);
     return ok(String("\"clock24\":") + (settings::clock24() ? "true" : "false"));
   }
 
@@ -263,13 +262,13 @@ Result run(const String& action, const Args& arg) {
     String demo = arg("demo"), id = arg("id");
     if (demo.length()) {
       if (!faces::demoStart(demo)) return fail("Unknown face: " + demo);
-      Log.printf("Face demo: %s\n", demo.c_str());
+      Log.event(diagnostics::Event::Settings);
       return ok("\"demo\":" + q(demo));
     }
     if (faces::find(id) < 0) return fail("Unknown face: " + id);
     settings::saveFace(id);
     faces::select(id);
-    Log.printf("Face: %s\n", id.c_str());
+    Log.event(diagnostics::Event::Settings);
     return ok("\"face\":" + q(id));
   }
 
@@ -292,7 +291,7 @@ Result run(const String& action, const Args& arg) {
   if (action == "wmic") {
     String v = arg("on");
     settings::saveWirelessMic(v == "1" || v == "true");
-    Log.printf("Wireless Wispr mic %s\n", settings::wirelessMic() ? "on" : "off");
+    Log.event(diagnostics::Event::Settings);
     return ok(String("\"wirelessMic\":") + (settings::wirelessMic() ? "true" : "false"));
   }
 
@@ -369,14 +368,13 @@ Result runLine(const String& line) {
   return run(action, [&](const char* name) { return queryArg(query, name); });
 }
 
-static void runMachine(const String& line) {
+static void runMachine(const String& line, Print& reply) {
   Result r = runLine(line);
-  Log.print('@');
-  Log.println(r.json);
+  machineReply(reply, r.json);
   finish(r);
 }
 
-static void runHuman(const String& line) {
+static void runHuman(const String& line, Print& reply) {
   int sp = line.indexOf(' ');
   String cmd = line.substring(0, sp < 0 ? line.length() : sp);
   String rest = sp < 0 ? "" : line.substring(sp + 1);
@@ -385,22 +383,22 @@ static void runHuman(const String& line) {
 
   Result r;
   if (cmd == "help") {
-    Log.println("Commands: show | set <combo> | enter off|<ms> | name <text> | slot <1-3> | disconnect | reconnect | "
+    reply.println("Commands: show | set <combo> | enter off|<ms> | name <text> | slot <1-3> | disconnect | reconnect | "
                    "forget <1-3|all> | web on | web off | standby <min> | brightness <pct> | face <id> | face demo [<id>] | "
                    "screens [landscape|faces] | mode mouse|presenter|media|home | launcher [<tiles>|reset] | ir list|diag|listen|send|learn ...");
     return;
   } else if (cmd == "show") {
-    Log.printf("%s | combo %s | %s | Wi-Fi %s %s\n", hid::name().c_str(),
+    reply.printf("%s | combo %s | %s | Wi-Fi %s %s\n", hid::name().c_str(),
                   comboToString(settings::combo()).c_str(), btName(hid::state()),
                   web::mode(), web::url().c_str());
     bool chgEnabled = board::chargerEnabled();
-    Log.printf("  battery %d%% (%d mV%s) | %s | standby %u min\n", battery::level(), battery::millivolts(),
+    reply.printf("  battery %d%% (%d mV%s) | %s | standby %u min\n", battery::level(), battery::millivolts(),
                   battery::charging() ? ", charging" : "", battery::etaLabel().c_str(), settings::standbyMin());
-    Log.printf("  USB %u mV | charger %s | power source 0x%02x | charger restarts %d\n",
+    reply.printf("  USB %u mV | charger %s | power source 0x%02x | charger restarts %d\n",
                   M5.Power.getVBUSVoltage(), chgEnabled ? "enabled" : "DISABLED",
                   (unsigned)board::powerSource(), battery::chargerRestarts());
     for (uint8_t n = 1; n <= settings::SLOTS; n++)
-      Log.printf("  slot %u: %s%s\n", n, hid::paired(n) ? "paired" : "empty",
+      reply.printf("  slot %u: %s%s\n", n, hid::paired(n) ? "paired" : "empty",
                     n == hid::slot() ? " (active)" : "");
     return;
   } else if (cmd == "set")        r = run("combo", with("text"));
@@ -417,7 +415,7 @@ static void runHuman(const String& line) {
     int low = 0, n = 0;
     for (uint32_t t0 = millis(); millis() - t0 < 10000; delay(100), n++)
       if (M5.Power.isCharging() == m5::Power_Class::is_charging_t::is_charging) low++;
-    Log.printf("CHRG pin low (charging) in %d of %d samples | USB %u mV | battery %d mV | state: %s\n", low, n,
+    reply.printf("CHRG pin low (charging) in %d of %d samples | USB %u mV | battery %d mV | state: %s\n", low, n,
                   M5.Power.getVBUSVoltage(), (int)M5.Power.getBatteryVoltage(), battery::line().c_str());
     return;
   }
@@ -434,8 +432,8 @@ static void runHuman(const String& line) {
       vbMin = min(vbMin, vb); vbMax = max(vbMax, vb); vaMin = min(vaMin, va); vaMax = max(vaMax, va);
       if (n % 2 == 0) tl += c ? '#' : '.';
     }
-    Log.printf("CHG %d%% (%d flips) | USB %d-%d mV | BAT %d-%d mV\n", low * 100 / n, flips, vbMin, vbMax, vaMin, vaMax);
-    Log.printf("timeline (# = charging, 100 ms each): %s\n", tl.c_str());
+    reply.printf("CHG %d%% (%d flips) | USB %d-%d mV | BAT %d-%d mV\n", low * 100 / n, flips, vbMin, vbMax, vaMin, vaMax);
+    reply.printf("timeline (# = charging, 100 ms each): %s\n", tl.c_str());
     return;
   }
   else if (cmd == "macpass") {  // macpass <password> | macpass clear
@@ -451,13 +449,13 @@ static void runHuman(const String& line) {
     }
     if (rest == "dump") {
       for (int i = 0; i < recN; i++)
-        Log.printf("%5.1f a %5.2f %5.2f %5.2f | g %6d %6d %6d\n", i / 10.0f, rec[i][0] / 100.0f, rec[i][1] / 100.0f,
+        reply.printf("%5.1f a %5.2f %5.2f %5.2f | g %6d %6d %6d\n", i / 10.0f, rec[i][0] / 100.0f, rec[i][1] / 100.0f,
                    rec[i][2] / 100.0f, rec[i][3], rec[i][4], rec[i][5]);
-      Log.printf("imurec: %d samples\n", recN);
+      reply.printf("imurec: %d samples\n", recN);
       return;
     }
     int secs = constrain(rest.toInt() > 0 ? rest.toInt() : 30, 1, 60);
-    Log.printf("imurec: recording %d s...\n", secs);
+    reply.printf("imurec: recording %d s...\n", secs);
     recN = 0;
     for (; recN < secs * 10; recN++) {
       float ax, ay, az, gx, gy, gz;
@@ -471,7 +469,7 @@ static void runHuman(const String& line) {
       store.putBytes("data", rec, recN * sizeof rec[0]);
       store.end();
     }
-    Log.println("imurec: done (saved) - 'imurec dump' to read it");
+    reply.println("imurec: done (saved) - 'imurec dump' to read it");
     return;
   }
   else if (cmd == "imulog") {  // calibration: 5 s of accel + gyro at 10 Hz
@@ -479,7 +477,7 @@ static void runHuman(const String& line) {
       float ax, ay, az, gx, gy, gz;
       M5.Imu.getAccel(&ax, &ay, &az);
       M5.Imu.getGyro(&gx, &gy, &gz);
-      Log.printf("a %5.2f %5.2f %5.2f | g %6.0f %6.0f %6.0f\n", ax, ay, az, gx, gy, gz);
+      reply.printf("a %5.2f %5.2f %5.2f | g %6.0f %6.0f %6.0f\n", ax, ay, az, gx, gy, gz);
       delay(100);
     }
     return;
@@ -487,12 +485,12 @@ static void runHuman(const String& line) {
   else if (cmd == "imu") {  // debug: raw accelerometer reading
     float x, y, z;
     motion::accel(x, y, z);
-    Log.printf("accel x %.2f  y %.2f  z %.2f g\n", x, y, z);
+    reply.printf("accel x %.2f  y %.2f  z %.2f g\n", x, y, z);
     return;
   }
   else if (cmd == "led") {  // test: does the power chip's LED_EN pin drive the green LED?
     board::statusLed(rest == "on");
-    Log.printf("LED_EN %s\n", rest == "on" ? "high" : "low");
+    reply.printf("LED_EN %s\n", rest == "on" ? "high" : "low");
     return;
   }
   else if (cmd == "face") {  // face <id> | face demo [<id>]
@@ -503,7 +501,7 @@ static void runHuman(const String& line) {
   }
   else if (cmd == "ir") {  // ir list | ir diag | ir send dev=tv btn=power | ir learn dev=tv btn=power ...
     Result ir = runLine("@ir " + rest);
-    Log.println(ir.json);
+    reply.println(ir.json);
     return;
   }
   else if (cmd == "standby")      r = run("standby", with("min"));
@@ -512,24 +510,24 @@ static void runHuman(const String& line) {
     Result l = run("launcher", [=](const char* n) {
       return String(n) == "reset" ? String(rest == "reset" ? "1" : "") : String(n) == "tiles" && rest != "reset" ? rest : String();
     });
-    Log.println(l.json);
+    reply.println(l.json);
     return;
   }
   else if (cmd == "brightness")   r = run("brightness", with("pct"));
   else if (cmd == "web")          r = run(rest == "off" ? "web-off" : "web-on", with(""));
   else {
-    Log.println("Unknown command. Type: help");
+    reply.println("Unknown command. Type: help");
     return;
   }
-  if (r.status != 200) Log.println(r.json);
+  humanReply(reply, r.json);
   finish(r);
 }
 
-void serialLine(String line) {
+void serialLine(String line, Print& reply) {
   line.trim();
   if (line.isEmpty()) return;
-  if (line[0] == '@') runMachine(line);
-  else runHuman(line);
+  if (line[0] == '@') runMachine(line, reply);
+  else runHuman(line, reply);
 }
 
 }  // namespace protocol

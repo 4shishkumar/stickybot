@@ -31,6 +31,10 @@ Each shared host needs its own password assignment. The previous global slot pas
 used on newly enrolled Macs. Passwords remain write-only. In shared mode audio uses Bluetooth:
 USB can be connected for charging without sending the selected Mac's dictation to the cable's Mac.
 
+USB and TCP diagnostics also omit host names and private prompt, reply, notification and settings
+payloads. They report safe event/status codes instead. An explicit USB or TCP command still gets
+its normal response, only on the connection that requested it; other log viewers do not receive it.
+
 Firmware bundles carry the board, chip, separate part offsets, size and hashes. StickyBot.app
 refuses incompatible or unidentified images before writing. If a matching bundle is unavailable,
 there is no update to install. USB update needs running firmware that can identify its model;
@@ -57,6 +61,9 @@ real stick, started the real app or changed the person's app configuration.
   from two sticks and late answers after a reconnect.
 - Start recordings/playback/transfers on each host/device; verify busy refusals, cancellation and
   correct reply/audio destination. Connect USB to the other Mac and verify no dictation reaches it.
+- With USB attached to the other Mac and two TCP log viewers, display private prompts/events and
+  verify their text and host labels are absent from diagnostics. Query `@state` from each transport
+  and verify the response reaches only its requester.
 - Run the Mac with both boards, pause/remove one, and verify the other's state, conversation,
   firmware job and face install continue. Change dashboard selection during a transfer.
 - Offer an S3-only bundle with a Plus2 selected: verify unavailable and no write. With matching

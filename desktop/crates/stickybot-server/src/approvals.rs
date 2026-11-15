@@ -42,6 +42,21 @@ pub struct Approvals {
 }
 
 impl Approvals {
+    pub fn pending_for(&self, device: &str) -> bool {
+        self.prompts
+            .lock()
+            .unwrap()
+            .values()
+            .any(|p| p.owner == device || p.destinations.iter().any(|(id, _)| id == device))
+    }
+    pub fn asking_for(&self, device: &str) -> bool {
+        self.asks
+            .lock()
+            .unwrap()
+            .values()
+            .any(|p| p.owner == device || p.destinations.iter().any(|(id, _)| id == device))
+    }
+
     pub fn list_for(&self, device: &str) -> Value {
         json!(
             self.prompts
@@ -216,10 +231,10 @@ pub async fn ask_permission(
 
 /// Why the stick can't take a question now ("" = it can) (core.py `busy_reason`).
 pub fn busy_reason(st: &AppState) -> &'static str {
-    if st.approvals.pending() {
+    if st.approvals.pending_for(&st.device_id) {
         return "an approval prompt is waiting on the stick";
     }
-    if st.approvals.asking() {
+    if st.approvals.asking_for(&st.device_id) {
         return "another question is waiting on the stick";
     }
     if matches!(st.agent_state().as_str(), "listening" | "transcribing") {
@@ -237,6 +252,7 @@ struct AskGuard {
     st: Arc<AppState>,
     id: String,
     shown: bool,
+    generation: u64,
     answer: String,
 }
 
@@ -245,9 +261,10 @@ impl Drop for AskGuard {
         self.st.approvals.asks.lock().unwrap().remove(&self.id);
         let st = self.st.clone();
         let (shown, id, answer) = (self.shown, self.id.clone(), std::mem::take(&mut self.answer));
+        let generation = self.generation;
         let clear = async move {
-            if shown && !st.approvals.pending() {
-                st.link.send(&clear_message(&st, &id)).await; // only this question
+            if shown && !st.approvals.pending_for(&st.device_id) {
+                st.link.with_generation(generation, st.link.send(&clear_message(&st, &id))).await; // only this question/session
             }
             st.hub.emit("ask_done", json!({"id": id, "answer": answer}));
         };
@@ -267,6 +284,11 @@ pub async fn ask_user(st: &Arc<AppState>, question: &str, options: &[String], wa
     if !st.link.connected() {
         return "stick not connected".into();
     }
+    let generation = st.link.bound_generation();
+    if st.link.generation() != generation {
+        return "cancelled".into();
+    }
+    let mut connection = st.link.watch_state();
     let why = busy_reason(st);
     if !why.is_empty() {
         return format!("busy: {why}");
@@ -280,7 +302,7 @@ pub async fn ask_user(st: &Arc<AppState>, question: &str, options: &[String], wa
     st.approvals.asks.lock().unwrap().insert(
         id.clone(),
         Ask {
-            destinations: vec![(st.device_id.clone(), st.link.generation())],
+            destinations: vec![(st.device_id.clone(), generation)],
             owner: st.device_id.clone(),
             question: q.clone(),
             options: labels.clone(),
@@ -288,7 +310,7 @@ pub async fn ask_user(st: &Arc<AppState>, question: &str, options: &[String], wa
             answer: Some(tx),
         },
     );
-    let mut guard = AskGuard { st: st.clone(), id: id.clone(), shown: false, answer: "cancelled".into() };
+    let mut guard = AskGuard { st: st.clone(), id: id.clone(), shown: false, generation, answer: "cancelled".into() };
     st.hub.emit(
         "ask",
         json!({"id": id, "question": question, "options": labels, "origin": origin, "timeout_s": wait.as_secs()}),
@@ -305,21 +327,29 @@ pub async fn ask_user(st: &Arc<AppState>, question: &str, options: &[String], wa
     let deadline = tokio::time::Instant::now() + wait;
     let mut answer = None;
     while tokio::time::Instant::now() < deadline {
-        let step = if st.approvals.pending() {
-            guard.shown = false; // an approval is on the stick: wait for it
+        if !st.link.connected() || st.link.generation() != generation {
+            answer = Some("cancelled".into());
+            break;
+        }
+        let step = if st.approvals.pending_for(&st.device_id) {
+            guard.shown = false;
             Duration::from_millis(500)
         } else {
-            guard.shown = st.link.send(&prompt).await || guard.shown;
+            guard.shown = st.link.with_generation(generation, st.link.send(&prompt)).await || guard.shown;
             resend
         };
         let until = (tokio::time::Instant::now() + step).min(deadline);
-        match tokio::time::timeout_at(until, &mut rx).await {
-            Ok(Ok(a)) => {
-                answer = Some(a);
-                break;
+        tokio::select! {
+            result=tokio::time::timeout_at(until,&mut rx) => match result {
+                Ok(Ok(choice))=>{answer=Some(choice);break;},
+                Ok(Err(_))=>break,
+                Err(_)=>{},
+            },
+            result=connection.changed()=>{
+                if result.is_err() || !st.link.connected() || st.link.generation()!=generation {
+                    answer=Some("cancelled".into()); break;
+                }
             }
-            Ok(Err(_)) => break,
-            Err(_) => {}
         }
     }
     let answer = answer.unwrap_or_else(|| "timeout".into());
@@ -415,6 +445,82 @@ mod multi_device_tests {
     use crate::talk::tests::agent;
     use stick_link::Backend;
 
+    async fn wait_for_question(st: &AppState) -> String {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(id) = st.approvals.asks_for(&st.device_id)[0]["id"].as_str() {
+                    return id.to_owned();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+    #[tokio::test]
+    async fn questions_and_home_approval_cards_do_not_leak_or_block_sibling_devices() {
+        let t = agent("question-siblings", false).await;
+        t.st.devices.init(&t.st).unwrap();
+        let b = t.st.devices.add(&t.st, "B", "Two").unwrap();
+        let mut bw = b.link.watch_state();
+        bw.wait_for(|s| *s == stick_link::LinkState::Connected).await.unwrap();
+        let a = t.st.clone();
+        let question = tokio::spawn(async move {
+            ask_user(&a, "A private question", &["Yes".into(), "No".into()], Duration::from_secs(3), "A project").await
+        });
+        let id = wait_for_question(&t.st).await;
+        assert!(!crate::home::home_card(&b).to_string().contains("A private"));
+        assert_eq!(busy_reason(&b), "");
+        assert_eq!(b.prompts_waiting(), 0);
+        assert_eq!(
+            ask_user(&b, "B question", &["Yes".into(), "No".into()], Duration::from_millis(30), "B project").await,
+            "timeout"
+        );
+        assert!(t.st.approvals.decide_from_device(&id, "once", &t.st));
+        assert_eq!(question.await.unwrap(), "Yes");
+        t.st.devices.remove(&t.st, &b.device_id).unwrap();
+    }
+
+    #[tokio::test]
+    async fn disconnected_question_retires_and_late_cleanup_cannot_clear_new_session() {
+        let t = agent("question-generation", false).await;
+        *t.st.approvals.resend.lock().unwrap() = Some(Duration::from_millis(20));
+        let generation = t.st.link.generation();
+        let a = t.st.clone();
+        let old = tokio::spawn(async move {
+            ask_user(&a, "Old private question", &["Yes".into(), "No".into()], Duration::from_secs(3), "old").await
+        });
+        let old_id = wait_for_question(&t.st).await;
+        t.st.link.pause(true);
+        let mut states = t.st.link.watch_state();
+        states.wait_for(|s| *s == stick_link::LinkState::Paused).await.unwrap();
+        assert_eq!(tokio::time::timeout(Duration::from_secs(1), old).await.unwrap().unwrap(), "cancelled");
+        assert!(!t.st.approvals.asking_for(&t.st.device_id));
+        t.st.link.pause(false);
+        states.wait_for(|s| *s == stick_link::LinkState::Connected).await.unwrap();
+        assert_ne!(t.st.link.generation(), generation);
+        let before = t.fake.writes().len();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(!String::from_utf8(t.fake.writes()[before..].concat()).unwrap().contains("Old private question"));
+        assert!(!t.st.approvals.decide_from_device(&old_id, "once", &t.st));
+        let a = t.st.clone();
+        let fresh = tokio::spawn(async move {
+            ask_user(&a, "New question", &["Yes".into(), "No".into()], Duration::from_secs(3), "new").await
+        });
+        let fresh_id = wait_for_question(&t.st).await;
+        let before = t.fake.writes().len();
+        drop(AskGuard { st: t.st.clone(), id: old_id, shown: true, generation, answer: "cancelled".into() });
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let after: Vec<Value> = String::from_utf8(t.fake.writes()[before..].concat())
+            .unwrap()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        assert!(!after.iter().any(|m| m["src"] == "cli" && m.get("prompt").is_none()));
+        assert!(t.st.approvals.decide_from_device(&fresh_id, "once", &t.st));
+        assert_eq!(fresh.await.unwrap(), "Yes");
+    }
+
     #[tokio::test]
     async fn fanout_accepts_one_destination_answer_and_clears_every_copy() {
         let t = agent("fanout-devices", false).await;
@@ -432,6 +538,10 @@ mod multi_device_tests {
             );
         tokio::time::sleep(Duration::from_millis(30)).await;
         let id = t.st.approvals.list()[0]["id"].as_str().unwrap().to_owned();
+        assert_eq!(busy_reason(&outsider), "");
+        assert!(busy_reason(&child).contains("approval"));
+        assert!(!crate::home::home_card(&outsider).to_string().contains("Bash"));
+        assert!(crate::home::home_card(&child).to_string().contains("Bash"));
         assert!(!t.st.approvals.decide_from_device(&id, "once", &outsider));
         assert!(t.st.approvals.decide_from_device(&id, "once", &child));
         assert!(!t.st.approvals.decide_from_device(&id, "deny", &t.st));

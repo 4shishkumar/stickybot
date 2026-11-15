@@ -160,8 +160,9 @@ struct ClipQueueSink : clip::Sink {
   void end() override {
     if (!clipBuf) return;
     clipReady = true;
-    Log.printf("clip: %lu of %lu frames, %.1f s\n", (unsigned long)clipAsm.frames,
-               (unsigned long)clipAsm.expectedFrames(), clipSamples / (float)clipRate);
+    Log.event(diagnostics::Event::Sound);
+    Log.count(diagnostics::Counter::ClipFrames, clipAsm.frames);
+    Log.count(diagnostics::Counter::ClipExpectedFrames, clipAsm.expectedFrames());
   }
 };
 
@@ -302,7 +303,7 @@ static bool speakerUp() {
     speakerOn = M5.Speaker.begin();
     M5.Speaker.setVolume(settings::soundVolume());
     M5.In_I2C.writeRegister8(0x18, 0x32, DAC_GAIN, 400000);
-    if (!speakerOn) Log.println("sound: speaker failed to start");
+    if (!speakerOn) Log.event(diagnostics::Event::SoundFailed);
   }
   return speakerOn;
 }

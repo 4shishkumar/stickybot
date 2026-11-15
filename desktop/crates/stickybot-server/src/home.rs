@@ -63,22 +63,39 @@ struct Rotation {
 
 /// Everything behind the home screen and the faces.
 pub struct Home {
-    pub weather: Mutex<Weather>,
-    pub feed: Mutex<Feed>,
-    pub pet: Mutex<Pet>,
+    pub weather: Arc<Mutex<Weather>>,
+    pub feed: Arc<Mutex<Feed>>,
+    pub pet: Arc<Mutex<Pet>>,
     /// the GitHub watcher's state (`github_state.json`), `None` before the first look
-    pub gh_state: Mutex<Option<Value>>,
+    pub gh_state: Arc<Mutex<Option<Value>>>,
     /// `{"ok", "error", "tracked"}` for `/api/status`
-    gh_status: Mutex<(f64, String)>,
-    pub notifier: events::Notifier,
+    gh_status: Arc<Mutex<(f64, String)>>,
+    pub notifier: Arc<events::Notifier>,
     rot: Mutex<Rotation>,
     pub(crate) world_sent: Mutex<Option<Value>>,
-    http: Mutex<Arc<dyn Http>>,
-    gh: Mutex<Arc<dyn github::Gh>>,
-    sessions: Mutex<SessionCounter>,
+    http: Arc<Mutex<Arc<dyn Http>>>,
+    gh: Arc<Mutex<Arc<dyn github::Gh>>>,
+    sessions: Arc<Mutex<SessionCounter>>,
 }
 
 impl Home {
+    /// Shared polling/provider state, with a fresh device-owned display and send cache.
+    pub fn for_device(&self) -> Self {
+        Self {
+            weather: self.weather.clone(),
+            feed: self.feed.clone(),
+            pet: self.pet.clone(),
+            gh_state: self.gh_state.clone(),
+            gh_status: self.gh_status.clone(),
+            notifier: self.notifier.clone(),
+            http: self.http.clone(),
+            gh: self.gh.clone(),
+            sessions: self.sessions.clone(),
+            rot: Mutex::default(),
+            world_sent: Mutex::new(None),
+        }
+    }
+
     pub fn new(home: &std::path::Path, http: Arc<dyn Http>, gh: Arc<dyn github::Gh>, sessions: SessionCounter) -> Self {
         let gh_state = std::fs::read_to_string(home.join("github_state.json"))
             .ok()
@@ -91,17 +108,17 @@ impl Home {
             .map(|p| p.values().filter(|p| p["merged"] == true).count() as i64)
             .unwrap_or(0);
         Self {
-            weather: Mutex::new(Weather::default()),
-            feed: Mutex::new(Feed::default()),
-            pet: Mutex::new(Pet::load(&home.join("pet.json"), merged)),
-            gh_state: Mutex::new(gh_state),
-            gh_status: Mutex::new((0.0, String::new())),
-            notifier: events::Notifier::default(),
+            weather: Arc::new(Mutex::new(Weather::default())),
+            feed: Arc::new(Mutex::new(Feed::default())),
+            pet: Arc::new(Mutex::new(Pet::load(&home.join("pet.json"), merged))),
+            gh_state: Arc::new(Mutex::new(gh_state)),
+            gh_status: Arc::new(Mutex::new((0.0, String::new()))),
+            notifier: Arc::new(events::Notifier::default()),
             rot: Mutex::new(Rotation::default()),
             world_sent: Mutex::new(None),
-            http: Mutex::new(http),
-            gh: Mutex::new(gh),
-            sessions: Mutex::new(sessions),
+            http: Arc::new(Mutex::new(http)),
+            gh: Arc::new(Mutex::new(gh)),
+            sessions: Arc::new(Mutex::new(sessions)),
         }
     }
 
@@ -210,7 +227,7 @@ pub fn card(home: &Home, inp: &CardInput) -> Value {
 }
 
 fn card_input(st: &AppState) -> CardInput {
-    let status = st.approvals.list();
+    let status = st.approvals.list_for(&st.device_id);
     let prompts =
         status.as_array().into_iter().flatten().map(|p| p["tool"].as_str().unwrap_or("").to_string()).collect();
     // before the settings lock: the Calendar connection reads the settings too
@@ -220,7 +237,7 @@ fn card_input(st: &AppState) -> CardInput {
         prompts,
         asks: st
             .approvals
-            .asks()
+            .asks_for(&st.device_id)
             .as_array()
             .into_iter()
             .flatten()
@@ -266,7 +283,7 @@ pub fn world(st: &AppState) -> Value {
     let mut pet = st.home.pet.lock().unwrap();
     let merged = pet.s["merged"].as_i64().unwrap_or(0);
     json!({"mergedToday": pet.merged_today(), "merged": merged, "ci": crate::pet::ci_state(gh.as_ref()),
-           "asks": st.approvals.list().as_array().map_or(0, Vec::len),
+           "asks": st.approvals.list_for(&st.device_id).as_array().map_or(0, Vec::len),
            "reviews": gh.as_ref().and_then(|g| g["asks"].as_object().map(Map::len)).unwrap_or(0),
            "claude": sessions, "pet": pet.pet_json()})
 }

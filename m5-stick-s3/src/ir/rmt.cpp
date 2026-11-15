@@ -38,12 +38,12 @@ bool txReady() {
   rmt_copy_encoder_config_t ec = {};
   if (rmt_new_tx_channel(&cfg, &txCh) != ESP_OK || rmt_new_copy_encoder(&ec, &copyEnc) != ESP_OK ||
       rmt_enable(txCh) != ESP_OK) {
-    Log.println("IR: the RMT TX channel couldn't be made");
+    Log.event(diagnostics::Event::IrFailed);
     txFailed = true;
     txCh = nullptr;
     return false;
   }
-  Log.printf("IR: TX on G%d\n", (int)TX_PIN);
+  Log.event(diagnostics::Event::Ir);
   return true;
 }
 
@@ -201,10 +201,10 @@ static void rxLoop(void*) {
       ch = nullptr;
   }
   if (!ch) {
-    Log.println("IR: the RMT RX channel couldn't be made");
+    Log.event(diagnostics::Event::IrFailed);
     rxError = true;
   } else {
-    Log.printf("IR: listening on G%d (%s)\n", (int)RX_PIN, cfg.flags.with_dma ? "DMA" : "no DMA");
+    Log.event(diagnostics::Event::Ir);
   }
   rxRunning = ch != nullptr;
   while (rxWant && ch) {

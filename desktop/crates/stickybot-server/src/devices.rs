@@ -373,7 +373,10 @@ mod tests {
         let b = root.devices.add(&root, "B", "Travel stick").unwrap();
         assert!(!Arc::ptr_eq(&a, &b));
         assert!(Arc::ptr_eq(&a.speech, &b.speech));
-        assert!(Arc::ptr_eq(&a.home, &b.home));
+        assert!(!Arc::ptr_eq(&a.home, &b.home));
+        assert!(Arc::ptr_eq(&a.home.weather, &b.home.weather));
+        assert!(Arc::ptr_eq(&a.home.feed, &b.home.feed));
+        assert!(Arc::ptr_eq(&a.home.pet, &b.home.pet));
         assert!(Arc::ptr_eq(&a.keys, &b.keys));
         assert!(Arc::ptr_eq(&a.calendar, &b.calendar));
         assert!(Arc::ptr_eq(&a.approvals, &b.approvals));
@@ -467,6 +470,88 @@ mod tests {
         assert!(crate::events::history(&b, 10).is_empty());
         root.devices.remove(&root, &a.device_id).unwrap();
         root.devices.remove(&root, &b.device_id).unwrap();
+    }
+
+    #[tokio::test]
+    async fn home_display_slots_reply_cache_and_world_sends_are_per_device() {
+        let root = root("home-display");
+        let a = root.devices.add(&root, "A", "One").unwrap();
+        let b = root.devices.add(&root, "B", "Two").unwrap();
+        let mut aw = a.link.watch_state();
+        aw.wait_for(|s| *s == stick_link::LinkState::Connected).await.unwrap();
+        let mut bw = b.link.watch_state();
+        bw.wait_for(|s| *s == stick_link::LinkState::Connected).await.unwrap();
+        crate::home::put(&a, "pin", "A private pin", "A details", 30.);
+        assert!(!crate::home::home_card(&b).to_string().contains("A private"));
+        assert!(!crate::home::clear(&b, "pin"));
+        assert_eq!(crate::home::home_card(&a)["a"], "A private pin");
+        crate::home::clear(&a, "pin");
+        crate::home::put(&a, "progress", "A private progress", "3/10", 30.);
+        assert!(!crate::home::home_card(&b).to_string().contains("A private"));
+        crate::home::clear(&a, "progress");
+        *a.last_reply.lock().unwrap() = Some(json!({"t":hub::now(),"text":"A private reply"}));
+        *b.last_reply.lock().unwrap() = Some(json!({"t":hub::now(),"text":"B private reply"}));
+        assert_eq!(crate::home::home_card(&a)["b"], "A private reply");
+        assert_eq!(crate::home::home_card(&b)["b"], "B private reply");
+        assert!(Arc::ptr_eq(&a.home.weather, &b.home.weather));
+        assert!(Arc::ptr_eq(&a.home.gh_state, &b.home.gh_state));
+        assert!(crate::home::push_world(&a, true).await);
+        assert!(crate::home::push_world(&b, true).await);
+        assert!(!crate::home::push_world(&a, true).await);
+        assert!(!crate::home::push_world(&b, true).await);
+        root.devices.remove(&root, &a.device_id).unwrap();
+        root.devices.remove(&root, &b.device_id).unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicit_primary_notifications_override_default_and_policy_without_changing_background_delivery() {
+        let root = root("explicit-primary");
+        root.update_config(json!({"stick":{"address":"A","name":"Primary"}}).as_object().unwrap().clone()).unwrap();
+        let root_worker = root.link.spawn();
+        root.link.set_target(root.stick());
+        let b = root.devices.add(&root, "B", "Two").unwrap();
+        let mut aw = root.link.watch_state();
+        aw.wait_for(|s| *s == stick_link::LinkState::Connected).await.unwrap();
+        let mut bw = b.link.watch_state();
+        bw.wait_for(|s| *s == stick_link::LinkState::Connected).await.unwrap();
+        root.devices.default_to(&root, &b.device_id).unwrap();
+        root.update_config(json!({"notification_devices":[b.device_id]}).as_object().unwrap().clone()).unwrap();
+        let Backend::Fake(a_fake) = &root.backend else { panic!("fake only") };
+        let Backend::Fake(b_fake) = &b.backend else { panic!("fake only") };
+        let (a_before, b_before) = (a_fake.writes().len(), b_fake.writes().len());
+        let outcome =
+            crate::mcp::call(&root, "notify", &json!({"device_id":"primary","text":"Only primary MCP"}), "test").await;
+        assert!(!outcome.1, "{outcome:?}");
+        let (code, _) = request(&root, "POST", "/api/devices/primary/api/events/test", json!({"kind":"test"})).await;
+        assert_eq!(code, StatusCode::OK);
+        *root.mcp.alerts.lock().unwrap() = crate::mcp::RateLimit::new(0., 1000);
+        let (code,rpc)=request(&root,"POST","/api/devices/primary/mcp",json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"notify","arguments":{"text":"Scoped primary RPC"}}})).await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(rpc["result"]["isError"], false, "{rpc}");
+        let a_wire = String::from_utf8(a_fake.writes()[a_before..].concat()).unwrap();
+        let b_wire = String::from_utf8(b_fake.writes()[b_before..].concat()).unwrap();
+        assert!(a_wire.contains("Only primary MCP"));
+        assert!(a_wire.contains("Test event"));
+        assert!(a_wire.contains("Scoped primary RPC"));
+        assert!(!b_wire.contains("Only primary MCP"));
+        assert!(!b_wire.contains("Test event"));
+        assert!(!b_wire.contains("Scoped primary RPC"));
+        let history = crate::events::history(&root, 10);
+        for row in history.iter().filter(|r| {
+            r["title"] == "Only primary MCP" || r["title"] == "Test event" || r["title"] == "Scoped primary RPC"
+        }) {
+            assert_eq!(row["device_id"], "primary");
+            assert_eq!(row["device_ids"], json!(["primary"]));
+        }
+        assert!(crate::events::history(&b, 10).is_empty());
+        crate::events::notify(&root, "test", "Background policy", "", None, None, None).await;
+        assert!(String::from_utf8(b_fake.writes()[b_before..].concat()).unwrap().contains("Background policy"));
+        assert_eq!(crate::events::history(&b, 1)[0]["device_ids"], json!([b.device_id]));
+        root.update_config(json!({"notification_devices":null}).as_object().unwrap().clone()).unwrap();
+        crate::events::notify(&root, "test", "Background default", "", None, None, None).await;
+        assert!(String::from_utf8(b_fake.writes()[b_before..].concat()).unwrap().contains("Background default"));
+        root.devices.remove(&root, &b.device_id).unwrap();
+        root_worker.abort();
     }
 
     #[test]

@@ -64,6 +64,19 @@ URL-encoded parameters as the HTTP API (section 4). Each produces exactly
 **one** response line: `@` followed by JSON. All other lines are log output
 and can be ignored.
 
+On S3/Plus2 firmware, command replies belong to their requesting transport: a USB command
+receives its reply only on USB; a TCP console command receives its reply only on that client,
+not USB or other TCP viewers. The machine wire format stays `@` + JSON + `\r\n`; human
+command output follows the same requester-only rule. Human setting commands acknowledge success
+or failure with the result JSON on that connection; `show` and help retain their readable output.
+BLE replies remain addressed to the originating authenticated connection.
+
+Unsolicited USB/TCP diagnostics are a separate output path. They contain fixed event/status
+codes and safe operational metadata, never host names, prompts/options/hints, event text,
+raw Mac-link JSON, user-supplied identifiers/versions/filenames/SSID, or typed keys/pairing codes.
+This applies in legacy and shared mode. Raw diagnostic text is omitted rather than broadcast;
+intentional command responses still return the requested data to their requester.
+
 ```
 → @state
 ← @{"ok":true,"proto":1,"board":"xiao-esp32-c3","fw":"1.5.0", ...state... }

@@ -446,6 +446,7 @@ pub async fn call(st: &Arc<AppState>, name: &str, args: &Value, who: &str) -> Ou
     if args.get("device_id").is_some_and(|id| !id.is_string()) {
         return ("device_id must be a string".into(), true, None);
     }
+    let explicit_target = args.get("device_id").is_some() || crate::events::device_targeted();
     let selected;
     let st = if let Some(id) = args.get("device_id").and_then(Value::as_str) {
         selected = match st.devices.resolve(id) {
@@ -469,7 +470,13 @@ pub async fn call(st: &Arc<AppState>, name: &str, args: &Value, who: &str) -> Ou
             Ok(_) if name != "stick_status" && !CALENDAR_TOOLS.contains(&name) && !st.link.connected() => {
                 Err(NOT_CONNECTED.to_string())
             }
-            Ok(a) => run_tool(st, name, &a, who).await,
+            Ok(a) => {
+                if explicit_target {
+                    crate::events::for_device(run_tool(st, name, &a, who)).await
+                } else {
+                    run_tool(st, name, &a, who).await
+                }
+            }
         },
     };
     let (text, err, structured) = match out {
@@ -784,9 +791,9 @@ async fn stick_status(st: &Arc<AppState>) -> (String, Option<Value>) {
     let ago_s = st.last_input().map(|t| (crate::hub::now() - t).max(0.0) as u64);
     info["last_button_press_s_ago"] = json!(ago_s);
     let state = st.agent_state();
-    let screen = if st.approvals.pending() {
+    let screen = if st.approvals.pending_for(&st.device_id) {
         "an approval prompt".to_string()
-    } else if st.approvals.asking() {
+    } else if st.approvals.asking_for(&st.device_id) {
         "a question".to_string()
     } else if matches!(state.as_str(), "listening" | "transcribing" | "thinking" | "working") {
         format!("the agent ({state})")
@@ -1031,7 +1038,14 @@ pub async fn post(st: Arc<AppState>, headers: HeaderMap, body: &[u8]) -> Respons
             );
             let st2 = st.clone();
             let who2 = who.clone();
-            let task = tokio::spawn(async move { call(&st2, &name, &args, &who2).await });
+            let explicit_target = crate::events::device_targeted();
+            let task = tokio::spawn(async move {
+                if explicit_target {
+                    crate::events::for_device(call(&st2, &name, &args, &who2)).await
+                } else {
+                    call(&st2, &name, &args, &who2).await
+                }
+            });
             st.mcp.inflight.lock().unwrap().insert(key.clone(), task.abort_handle());
             if params.get("name").and_then(Value::as_str) == Some("ask") && accept.contains("text/event-stream") {
                 return streamed(st.clone(), task, key, reply).into_response();

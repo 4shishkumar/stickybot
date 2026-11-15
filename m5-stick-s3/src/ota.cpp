@@ -40,13 +40,13 @@ struct FlashSink : otarx::Sink {
     // Sequential writes: each sector is erased as it's reached, so begin returns at once
     esp_err_t e = esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &handle);
     open_ = e == ESP_OK;
-    Log.printf("OTA: writing %lu bytes to %s at 0x%lx%s\n", (unsigned long)size, part->label,
-               (unsigned long)part->address, open_ ? "" : (String(" — esp_ota_begin failed: ") + esp_err_to_name(e)).c_str());
+    Log.event(open_ ? diagnostics::Event::OtaStarted : diagnostics::Event::OtaFailed);
+    Log.count(diagnostics::Counter::FirmwareBytes, size);
     return open_;
   }
   bool write(const uint8_t* p, size_t n) override {
     esp_err_t e = esp_ota_write(handle, p, n);
-    if (e != ESP_OK) Log.printf("OTA: esp_ota_write: %s\n", esp_err_to_name(e));
+    if (e != ESP_OK) Log.event(diagnostics::Event::OtaFailed);
     return e == ESP_OK;
   }
   // SHA-256 of what is actually in flash (read back), not of what we meant to write
@@ -70,7 +70,7 @@ struct FlashSink : otarx::Sink {
     open_ = false;
     esp_err_t e = esp_ota_end(handle);  // checks the image (header, segments, its own checksum + hash)
     if (e == ESP_OK) e = esp_ota_set_boot_partition(part);
-    if (e != ESP_OK) Log.printf("OTA: image refused: %s\n", esp_err_to_name(e));
+    if (e != ESP_OK) Log.event(diagnostics::Event::OtaFailed);
     return e == ESP_OK;
   }
   void abort() override {
@@ -101,8 +101,7 @@ void bootCheck() {
   if (running && esp_ota_get_state_partition(running, &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY) {
     pending_ = true;
     enableLoopWDT();  // a hang before the confirmation resets (and so rolls back) instead of sitting there
-    Log.printf("OTA: running new firmware %s from %s — confirming in %lu s\n", FW_VERSION, running->label,
-               (unsigned long)(CONFIRM_AFTER_MS / 1000));
+    Log.event(diagnostics::Event::Ota);
   }
 }
 
@@ -148,8 +147,7 @@ static void reply(const otarx::Reply& r, const char* by = nullptr, const char* w
 static void ended(const otarx::Reply& r) {
   using K = otarx::Reply::Kind;
   if (r.kind == K::ERROR && r.error != otarx::Error::INCOMPLETE) {
-    Log.printf("OTA: failed (%s) at %lu of %lu bytes\n", otarx::errorName(r.error), (unsigned long)r.offset,
-               (unsigned long)rx.size());
+    Log.event(diagnostics::Event::OtaFailed);
     doneLine = String("Update failed (") + otarx::errorName(r.error) + ")";
   }
 }
@@ -207,11 +205,11 @@ void control(JsonObjectConst msg) {
       doneLine = "";
       drawnPct = -1;
       ui::wake(60000);
-      Log.printf("OTA: %s %s (%lu bytes) from %lu, %s\n", r.resumed ? "resuming" : "receiving", rx.version(),
-                 (unsigned long)rx.size(), (unsigned long)r.offset, buddy::linkInfo().c_str());
+      Log.event(diagnostics::Event::OtaStarted);
+      Log.count(diagnostics::Counter::FirmwareBytes, rx.size());
+      Log.count(diagnostics::Counter::FirmwareOffset, r.offset);
     } else if (r.kind == otarx::Reply::Kind::REFUSED) {
-      Log.printf("OTA: refused %s (%s%s%s)\n", req.version, otarx::errorName(r.error), c.busy ? ": " : "",
-                 c.busy ? c.busy : "");
+      Log.event(diagnostics::Event::OtaFailed);
     }
     reply(r, nullptr, r.error == otarx::Error::BUSY ? c.busy : nullptr);
     return;
@@ -221,8 +219,8 @@ void control(JsonObjectConst msg) {
     uint32_t t0 = millis();
     otarx::Reply r = rx.end(millis());
     if (r.kind == otarx::Reply::Kind::DONE && !restartAt) {
-      Log.printf("OTA: %s verified (sha256 read back in %lu ms) and set to boot, %lu s in all — restarting\n",
-                 rx.version(), (unsigned long)(millis() - t0), (unsigned long)((millis() - startedAt) / 1000));
+      Log.event(diagnostics::Event::OtaDone);
+      Log.count(diagnostics::Counter::FirmwareVerifyMs, millis() - t0);
       restartAt = millis() + RESTART_DELAY_MS;
       ui::wake(10000);
       ui::drawMessage("Restarting", (String("Firmware ") + rx.version()).c_str(), 0x03E0);
@@ -234,7 +232,7 @@ void control(JsonObjectConst msg) {
   if (msg["cancel"].is<int>() || msg["cancel"].is<bool>()) {
     otarx::Reply r = rx.cancel();
     if (r.kind == otarx::Reply::Kind::CANCELLED) {
-      Log.println("OTA: cancelled by the agent");
+      Log.event(diagnostics::Event::OtaCancelled);
       doneLine = "Update cancelled on the Mac";
     } else {
       r.kind = otarx::Reply::Kind::CANCELLED;  // nothing running: say so anyway, the agent is waiting
@@ -258,7 +256,7 @@ bool takeNotice(String& title) {
 void cancelByUser() {
   otarx::Reply r = rx.cancel();
   if (r.kind != otarx::Reply::Kind::CANCELLED) return;
-  Log.println("OTA: cancelled on the stick");
+  Log.event(diagnostics::Event::OtaCancelled);
   reply(r, "stick");
   doneLine = "Update cancelled";
 }
@@ -278,7 +276,7 @@ void loop() {
     esp_err_t e = esp_ota_mark_app_valid_cancel_rollback();
     pending_ = false;
     disableLoopWDT();
-    Log.printf("OTA: firmware %s confirmed (%s)\n", FW_VERSION, esp_err_to_name(e));
+    Log.event(e == ESP_OK ? diagnostics::Event::OtaDone : diagnostics::Event::OtaFailed);
     if (buddy::agentLinked()) send(String("\"state\":\"confirmed\",\"fw\":\"") + FW_VERSION + "\"");
   }
   if (restartAt) {

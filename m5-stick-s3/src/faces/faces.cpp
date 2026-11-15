@@ -151,7 +151,7 @@ void begin() {
     live_.nSessions = 0;
     live_.asks = live_.reviews = 0;
     saved_ = live_;
-    Log.printf("Faces: cached world, %d PRs, %ld XP\n", live_.merged, live_.xp);
+    Log.event(diagnostics::Event::Face);
   }
 }
 

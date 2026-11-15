@@ -131,7 +131,7 @@ const char* sendButton(const char* dev, const char* btn, int repeat, bool held) 
   const int at = d.find(name);
   if (at < 0) return "notfound";
   const char* why = sendCode(d.buttons[at].code.c_str(), repeat, held);
-  if (!why) Log.printf("IR: sent %s / %s\n", id, name);
+  if (!why) Log.event(diagnostics::Event::Ir);
   return why;
 }
 
@@ -154,8 +154,7 @@ static void learnEvent(const char* state, const char* extra = nullptr, const cha
   if (extra) d[extra] = value;
   if (!strcmp(state, "learning")) d["step"] = view_.step;
   event(d);
-  Log.printf("IR learn: %s %s/%s%s%s\n", state, view_.dev.c_str(), view_.btn.c_str(), value ? " " : "",
-             value ? value : "");
+  Log.event(diagnostics::Event::Ir);
 }
 
 static void finish(const char* last, bool good) {
@@ -243,7 +242,7 @@ static void saveLearned() {
   e["code"] = strlen(code) <= 64 ? code : "";
   e["n"] = (int)learnerP->rawCount();
   event(e);
-  Log.printf("IR learn: saved %s/%s = %.60s\n", view_.dev.c_str(), view_.btn.c_str(), code);
+  Log.event(diagnostics::Event::Ir);
   finish("Saved", true);
 }
 
@@ -435,7 +434,7 @@ protocol::Result run(const protocol::Args& arg) {
     // a receiver module idles high, the LED driver's input low
     const char* guess = rx == 1 && tx == 0 ? "ok" : rx == 0 && tx == 1 ? "swapped" : "unknown";
     char ids[irnames::MAX_DEVICES][irnames::DEVICE_LEN + 1];
-    Log.printf("IR diag: TX G%d idle %d, RX G%d idle %d -> %s\n", (int)TX_PIN, tx, (int)RX_PIN, rx, guess);
+    Log.event(diagnostics::Event::Ir);
     return ok(String("\"tx\":") + (int)TX_PIN + ",\"rx\":" + (int)RX_PIN + ",\"txIdle\":" + tx + ",\"rxIdle\":" + rx +
               ",\"pins\":\"" + guess + "\",\"rmtTx\":\"" + rmt::txState() + "\",\"rmtRx\":\"" + rmt::rxState() +
               "\",\"devices\":" + store::list(ids, irnames::MAX_DEVICES) + ",\"free\":" + store::freeKB() +

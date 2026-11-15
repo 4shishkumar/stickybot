@@ -266,7 +266,7 @@ impl AppState {
             approvals: parent.map(|p| p.approvals.clone()).unwrap_or_else(|| Arc::new(approvals::Approvals::default())),
             ota_timings: Mutex::new(firmware::UpdateTimings::default()),
             wmic: wmic::WirelessMic::new(),
-            home: parent.map(|p| p.home.clone()).unwrap_or_else(|| Arc::new(home)),
+            home: parent.map(|p| Arc::new(p.home.for_device())).unwrap_or_else(|| Arc::new(home)),
             ir: ir::Ir::default(),
             updates: parent.map(|p| p.updates.clone()).unwrap_or_else(|| Arc::new(updates::Updates::new(&paths_home))),
             usb: parent.map(|p| p.usb.clone()).unwrap_or_else(|| {
@@ -591,7 +591,7 @@ impl AppState {
 
     /// Permission prompts waiting on the stick (the menu bar's "Waiting for approval (n)").
     pub fn prompts_waiting(&self) -> usize {
-        self.approvals.list().as_array().map_or(0, Vec::len)
+        self.approvals.list_for(&self.device_id).as_array().map_or(0, Vec::len)
     }
 
     /// "StickyBot" once this app has taken the Python app's place (port 8660), else
