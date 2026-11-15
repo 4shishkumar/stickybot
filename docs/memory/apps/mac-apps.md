@@ -1,6 +1,6 @@
 ---
 type: memory
-description: "The Mac apps: StickyBot.app in Rust (Tauri 2, axum, ~/.stickybot-rs, com.stickybot.rs) that ships, the legacy Python app (~/.stick-agent), the dashboard files both serve, ports 8660 and 8670, ad-hoc signing, in-app updates, macOS permissions and the signed-in Calendar entitlement."
+description: "Rust StickyBot.app and the legacy Python app: independent device sessions, scoped APIs/MCP/history/jobs, default routing, host labels, shared Mac services, source-bound approvals, shared dashboard compatibility, permissions and in-app updates."
 ---
 # Mac Apps
 
@@ -29,14 +29,73 @@ changes it.
 
 ### Requirement: Port and name depend on what else is installed
 On a Mac with no Python app the Rust app is StickyBot on port 8660 from its first start. Next to
-the Python app it runs on port 8670 and waits while that app has the stick, until the user
+the Python app it runs on port 8670 and waits for any target that Python owns, until the user
 switches over; after that it serves 8660 with the Python app's token so hooks, stick tools and
 bookmarks keep working.
 
 #### Scenario: Both apps installed, not switched over
-- **GIVEN** the Python app is connected to the stick
-- **WHEN** the Rust app wants to connect
-- **THEN** it asks the Python app's status on 8660, shows "Waiting: the Python agent has the stick" and tries again every 3 s
+- **GIVEN** the Python app is connected to one configured stick
+- **WHEN** the Rust app wants that target
+- **THEN** it checks Python status on 8660 and waits/retries for that target; other configured sticks can connect independently
+
+### Requirement: Each configured device has an independent runtime
+`devices::DeviceManager` retains a root `primary` session and independent child `AppState` sessions.
+Legacy `stick` config migrates into the device list without losing preferences. Discovery does not
+enroll a target; the user explicitly adds it. CoreBluetooth shares one central and serializes scans,
+with routes keyed by peripheral. Each runtime owns its link, capability/host state, recording,
+brain/conversation, reply, firmware jobs, face operations, reconnect and cancellation workers.
+Home rotation, pins/progress, reply cache and world-send cache are per-device; one device cannot
+show or clear another's display state. Pause/remove affects only the selected runtime. Removal
+leaves the hardware's settings and Bluetooth bonds intact.
+
+Credentials, installation identity, speech model/worker, Calendar, weather/feed/GitHub/pet
+providers, command store, USB discovery and app updates are shared Mac services. Provider polling
+and the speech worker start once; child devices observe their shared results through local display
+state. Authoritative configuration writes go through the root, with per-device overrides for voice,
+wireless mic, brain and related settings. Only one wireless dictation stream owns the Mac audio
+device at a time. See [wireless mic](/link/wireless-mic.md).
+
+### Requirement: Targets are explicit and stable for the whole operation
+`GET /api/devices` lists configured devices, default ID and local host metadata. `POST /api/devices`
+adds `{address,name}`; DELETE `/api/devices/{id}` removes, POST `.../default` selects the persisted
+default and POST `.../pause` with `{paused}` pauses/resumes. `/api/devices/{id}/api/...` runs the
+existing API against that device. Unknown IDs fail explicitly. Legacy unscoped routes, hooks and
+tray actions use the persisted default; selecting a dashboard view does not change it.
+
+MCP tools accept optional `device_id`; omitted IDs use the default, and explicit targets retain
+scope in spawned calls. Background notification policy does not override explicit API/MCP targets,
+including `primary`. Operations and asynchronous job polling retain their captured device and
+connection generation. SSE events carry `device_id`; late results from a different viewed device
+do not repaint the active view. Activity rows carry `device_id`; event rows also retain destination
+`device_ids`. Activity queries filter by source device and event-history queries by source or
+destination. Legacy rows without a source ID belong to `primary`.
+
+### Requirement: People recognize the Mac without using its name as identity
+A persisted `host.json` holds the installation ID and custom short label. ComputerName comes through
+the injectable `System` interface, filtered to at most 80 characters with a safe `Mac` fallback.
+`GET /api/host` returns host metadata; `PUT /api/host` with `{label}` saves at most 12 printable
+ASCII characters. Empty override derives an ASCII label from the full name (Unicode normalization,
+filtered/truncated, with `Mac` fallback). The next hello propagates edits without changing pairing.
+Firmware retains offline labels and supplies a disambiguated `display` label for duplicate names.
+Names never authenticate a peer; [Mac link](/link/mac-link.md) describes the bond/session binding.
+
+Devices shows model, battery, connection and host state, with add/remove/pause/default/view actions,
+shared-mode enablement, remote focus confirmation and This Mac short-name editing. Per-device pages
+keep settings, faces, sounds, IR and firmware scoped and capability-gated. The Python app remains
+single-device and explains unavailable multi-device controls when the endpoints are absent.
+
+### Requirement: Approvals resolve once within their captured destinations
+The shared approvals coordinator records an owning device and destination `(device_id,generation)`
+pairs. The first valid decision resolves a fanout prompt once and clears the other displays only
+on the captured sessions. Hardware answers outside those destinations/generations are rejected;
+dashboard reads, answers and busy checks are owner/destination-scoped. Questions retain their
+source generation for initial send, resend and cleanup; disconnect/generation changes cancel them.
+Voice replies retain the originating device/session even if the view/default changes.
+
+Config `notification_devices` and `approval_devices` accept `null` for default, an array of configured
+IDs for explicit destinations, or `[]` for no hardware destinations. Devices edits this policy
+through `/api/devices/primary/api/config`, independently of the viewed/default device. Notifications
+are scoped to their destination and approvals do not appear on unrelated home cards.
 
 ### Requirement: The dashboard API is local and token-guarded
 The server listens on 127.0.0.1 only, checks the `Host` header, and needs the token for changes.
@@ -85,7 +144,7 @@ start), `update_check` is on and that version was not tried in the last 24 h; qu
 block it.
 
 #### Scenario: A verified update while the stick is busy
-- **GIVEN** an install has downloaded and verified while a firmware update, a voice request, a permission prompt or stick question, a wireless-mic hold or a face install is running
+- **GIVEN** an install has downloaded and verified while any configured device has a firmware update, voice request, permission prompt/question, wireless-mic hold or face install running
 - **WHEN** the state is read
 - **THEN** it is `available` with `waiting: "busy — will install when idle: <reason>"`, nothing is replaced, and the app re-checks every 5 s for at most 30 min and continues by itself when idle (paused is not busy)
 
@@ -139,8 +198,21 @@ fake Claude and temporary homes. Tests against real Core Audio or a real stick a
 **Rejected**: Running the tool loop in the app against a model API, which needs an API key and rebuilds tools, permissions and sessions; and a process per request as the default, which adds start-up time to every request.
 *Introduced by*: predates fab; see `docs/ARCHITECTURE.md` "Why Claude Code as the brain"
 
+### Share providers while keeping device work local
+**Decision**: Each device owns its runtime, display caches and jobs while Mac providers and approval coordination are shared.
+**Why**: A disconnected device or changed view must not retarget work; Calendar, credentials and audio resources belong to the Mac.
+**Rejected**: One mutable current-device runtime, or duplicating Mac polling/model services per stick.
+*Introduced by*: 261115-wjoy-multi-mac-device-connections
+
+### Capture the destination and connection generation
+**Decision**: Asynchronous replies, approval destinations, question resend/cleanup and jobs retain their originating scope.
+**Why**: A reused device connection or a changed default cannot make a stale response affect another operation.
+**Rejected**: Resolving a global selected device again when a callback finishes.
+*Introduced by*: 261115-wjoy-multi-mac-device-connections
+
 ## Sources
 
 `desktop/README.md`, `desktop/SWITCHOVER.md`, `docs/ARCHITECTURE.md`, `README.md`,
-`mac-agent/README.md`, `desktop/crates/stickybot-server/src/selfupdate.rs`. Related: [Mac link](/link/mac-link.md), [wireless mic](/link/wireless-mic.md),
+`mac-agent/README.md`, `desktop/crates/stickybot-server/src/{lib,devices,hosts,api,approvals,selfupdate}.rs`,
+`docs/MULTI_DEVICE.md`. Related: [Mac link](/link/mac-link.md), [wireless mic](/link/wireless-mic.md),
 [releases](/delivery/releases.md).

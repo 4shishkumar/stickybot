@@ -1,6 +1,6 @@
 ---
 type: memory
-description: "The wireless mic: holding A away from USB streams the stick's mic to the Mac, which plays it into a per-hold Core Audio input device that a dictation app records from; prepare/ready handshake, tap or BlackHole carrier."
+description: "Wireless dictation to the selected Mac: per-hold Core Audio input, prepare/ready handshake, tap or BlackHole carrier, one stream per Mac, source-session ownership and shared-mode USB audio suppression."
 ---
 # Wireless Mic
 
@@ -8,13 +8,25 @@ description: "The wireless mic: holding A away from USB streams the stick's mic 
 
 ## Overview
 
-Held away from a computer's USB, button A makes the stick's microphone reach a dictation app
-(Wispr Flow) on the Mac: the stick streams audio over the Mac link and the app plays it into a
-Core Audio input device that exists only around the hold. Plugged into a computer, the stick is a
-USB microphone and nothing goes over Bluetooth. Details: `PROTOCOL.md` section 5 (wispr messages,
+Button A streams the stick's microphone over the Mac link to a dictation app (Wispr Flow) on
+the selected Mac, through a Core Audio input device that exists only around the hold. Legacy S3
+mode uses its USB mic when mounted by a computer. Shared mode uses Bluetooth even with a cable
+attached; Plus2 has no native USB mic. Details: `PROTOCOL.md` section 5 (wispr messages,
 "The mic device"), `docs/ARCHITECTURE.md` flow 4, `desktop/crates/macos-audio/`.
 
 ## Requirements
+
+### Requirement: Audio retains its selected host and device
+Firmware binds mic/audio notifications to the selected authenticated host session. Shared mode
+disables USB audio forwarding and reports USB mic mounting/streaming false. No USB-host
+association mechanism is implemented.
+Focus changes refuse while recording/playback is busy, and disconnect/session retirement cancels
+the owner. Replies and readiness messages retain the source device/session.
+
+The Rust app has per-device wireless-mic state and a shared audio-owner guard. Only one stick
+can dictate through the Mac audio device at a time; a competing prepare receives a busy response
+("Another stick is dictating"). Disconnect, cancellation and cleanup release only the owning
+device's lease. The speech model/worker is shared; dictation streams are not mixed.
 
 ### Requirement: The key waits for the device
 When the app's hello said `wmic` and `wready`, A down sends `prepare` with a press id and starts
@@ -25,11 +37,11 @@ time if it just created it, and answers `ready` with the same id. The stick pres
 ### Requirement: The device exists only around a hold
 The app creates the aggregate device `<stick>-bt-mic` per hold and removes it after the tail
 (and while another process still reads it, at most 4 s). It MUST be removed at once when the stick
-disconnects or reports `usb mounted`, when the feature is turned off, and on exit; at start the
-app removes any left over, matching only its own UID and tap name.
+disconnects or reports `usb mounted` in legacy mode, when the feature is turned off, and on exit.
+At start the app removes any left over, matching only its own UID and tap name.
 
 #### Scenario: The stick is plugged in during a hold
-- **GIVEN** a hold is streaming over Bluetooth
+- **GIVEN** a legacy-mode S3 hold is streaming over Bluetooth
 - **WHEN** the stick reports `usb mounted`
 - **THEN** the app removes the device at once and the dictation app goes back to its usual mic
 
@@ -58,6 +70,12 @@ this audio.
 **Why**: With Bluetooth headphones as the clock the aggregate's input never runs and audio reaches the tap about a second late.
 **Rejected**: Always using the default output.
 *Introduced by*: predates fab; see `desktop/README.md` "Wireless mic and Bluetooth output"
+
+### Use wireless audio for shared hosts
+**Decision**: Shared mode suppresses USB mic forwarding and uses the selected host's Bluetooth session.
+**Why**: USB mounted/power state cannot prove which Mac is on the cable.
+**Rejected**: Sending speech to the cable whenever USB is mounted, independently of input focus.
+*Introduced by*: 261115-wjoy-multi-mac-device-connections
 
 ## Sources
 

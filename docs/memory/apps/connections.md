@@ -1,6 +1,6 @@
 ---
 type: memory
-description: "The Connections page and the Calendar connection in the Rust app: read-only EventKit behind a trait with a fake, settings, refresh and reminder timing, the home meeting card, the meeting_soon event, join links, voice phrases, stick tools, and what stays out of logs and diagnostics."
+description: "The Rust Connections page and shared Calendar service: read-only EventKit, settings, cached refresh, destination-aware reminder delivery and retries, per-device meeting cards, join links, voice phrases, tools, and privacy."
 ---
 # Connections
 
@@ -15,7 +15,7 @@ A connection is a place StickyBot reads from to know about the person's day. Tod
 ### Requirement: The Calendar sits behind a read-only trait with a fake
 `macos_calendar::CalendarSource` offers `access`, `request_access`, `calendars`, `events(from, to)` and `on_change`; nothing in the crate creates, changes or deletes calendar data. `access` never asks; `request_access` asks once when access was never asked (macOS 14+: `requestFullAccessToEventsWithCompletion`, macOS 13: `requestAccessToEntityType`) and waits up to 120 s for the answer. `Access` is `NotAsked`, `Denied`, `Restricted`, `WriteOnly` or `Full`; only `Full` can read. The EventKit implementation compiles on macOS only, makes its event store on first use, swaps in a fresh store once access becomes `Full`, and returns each occurrence of a recurring event as its own `Event` (told apart by `(id, start)`). `FakeCalendar` stands in everywhere else; `FakeCalendar::sample` is the demo day.
 
-The source is chosen in `AppState::new`: the fake with `--fake-stick`, otherwise `macos_calendar::system()`, so the app and `stickybot-headless` share one path and no test or demo can reach the real Calendar. `cargo run -p macos-calendar --example calendar_dump -- --status | --list | --today` checks EventKit by hand on a real Mac; `--help` creates no store.
+The root `AppState` chooses the source: the fake with `--fake-stick`, otherwise `macos_calendar::system()`. Child device sessions share that Calendar instance and the single connection polling loop. Each device has its own home rotation/send caches. The app and `stickybot-headless` share this construction path; tests and demos use the fake. `cargo run -p macos-calendar --example calendar_dump -- --status | --list | --today` checks EventKit by hand on a real Mac; `--help` creates no store.
 
 ### Requirement: Connections share one shape and one list
 `GET /api/connections` answers `{"connections": [{id, title, status, detail, settings, ...}]}` with `status` one of `off`, `needs_permission`, `connected`, `error`; a connection's own fields (Calendar's `permission`: `""`, `not_asked`, `denied`, `restricted`, `write_only`) sit beside them. Settings live in the config under `connections.<id>`; `PUT /api/config` accepts `connections` (an unknown connection or a non-object is refused in words) and merges it one connection deep, so naming one setting does not reset the others. A config change re-reads the Calendar unless it came through the connection's own route, which reads itself.
@@ -43,7 +43,9 @@ While `on`, the events of the window from local midnight today to the end of tom
 The card kind is `meeting` (every released firmware from 1.8.0 draws it with a calendar icon), `a` is the title cut to 40 characters, `b` is `in 12 min · 10:30`, `in 2 h · 14:00` or `now · until 11:00`. It joins the home rotation when a meeting is on now, or the next starts today or within 8 h. From 15 min before a start until 5 min after it, the card is pinned ahead of the rotation, below approvals, questions and a Claude session's line; it is not urgent (no `u`). No message or field is added to the protocol.
 
 ### Requirement: A meeting_soon event reminds once
-The event kind `meeting_soon` (default level `headsup`, icon `bell`) fires once per occurrence when `now` enters `[start - alert_min, start)`, as `Standup in 5 min` with `10:30 · Google Meet` (or the first line of the location) beneath. It never fires for all-day or declined events, with `alert_min` 0, or with the connection off, and quiet hours follow the existing rule. While the stick is not connected the reminder is held back and not marked as sent, so it still goes out if the stick returns inside the window; sent reminders are remembered in memory until the meeting ends. The dashboard's "Send a test alert" uses `POST /api/events/test` with this kind.
+The event kind `meeting_soon` (default level `headsup`, icon `bell`) fires once per occurrence when `now` enters `[start - alert_min, start)`, as `Standup in 5 min` with `10:30 · Google Meet` (or the first line of the location) beneath. It never fires for all-day or declined events, with `alert_min` 0, or with the connection off, and quiet hours follow the existing rule. The dashboard's "Send a test alert" uses `POST /api/events/test` with this kind.
+
+Reminder delivery resolves the configured notification destinations, or the default device, independently of the primary link's connection state. An occurrence is consumed after at least one successful link send. Offline destinations and failed writes leave it pending for a retry inside the alert window; ticks with no reachable recipient add no event-history attempts. A partially successful fanout consumes the occurrence without replaying it to destinations already served. An empty destination list intentionally consumes it without sending. An `off` event rule consumes it when at least one destination is reachable; with all destinations offline it remains pending. Consumed occurrences are remembered in memory until the meeting ends. A shared tick mutex serializes loop and API checks, and device-scoped Calendar refreshes retain the root service context and background notification policy.
 
 ### Requirement: Join links open only known meeting services
 `join_link` returns the first Google Meet, Zoom, Microsoft Teams or Webex link found in the event's URL, then its location, then its notes, and only over `https` without a port or credentials. Joining opens the link of the meeting on now, else of a later one today (or starting within 15 min, across midnight) in order, the first that has a link; with none, the answer is `No meeting link found.` The link opens through the same runner as quick commands.
@@ -56,6 +58,13 @@ The in-app MCP server offers `calendar_next`, `calendar_today` (today or tomorro
 
 ### Requirement: Meeting details stay private
 No meeting title, attendee, location, note or link appears in a log line at `info` or above: the `meeting_soon` kind is private, so the log keeps the kind and level and the text only at `debug`. The text still reaches the stick, the Events page and `events.jsonl`. `history.jsonl` records voice answers and calendar tool results as `(from your calendar)`, and the MCP log and activity feed do the same. `feedback::Known` holds the cached meetings' titles, attendees, locations and links so `redact` replaces them in diagnostics, which also report `calendar=on|off`.
+
+### Requirement: Device sessions share the Calendar service
+Calendar permission, settings, cached events and reminder bookkeeping belong to the Mac. Each
+device renders the shared meeting data through its own home state. Reminder notifications follow
+the Mac's explicit notification destination policy (default device, configured IDs, or none);
+voice answers and tool responses retain their requesting device/session. See
+[Mac apps](/apps/mac-apps.md) for routing and ownership.
 
 ### Requirement: The Connections page
 `assets/connections.js` is served by the Rust app and adds "Connections" to the nav (before Feedback) through `window.stickyAddPage`. The Calendar card shows the status, Connect and Disconnect, the calendars with colour dots, skip all-day, skip declined, the reminder minutes, a Today preview and "Send a test alert"; with denied access it says how to allow it in System Settings → Privacy & Security → Calendars. Saving does not re-render or scroll the page. A muted line says more connections are coming. `rust.js` relabels the `meeting_soon` kind as "Meeting reminder" on the shared Events page, which is not edited; the three calendar phrases show on the shared Quick commands page as a generic row. Pure helpers are tested with `node --test` from `mac-agent/tests/js/`.
@@ -80,6 +89,12 @@ No meeting title, attendee, location, note or link appears in a log line at `inf
 **Rejected**: Reading EventKit at the alert cadence (needless work) and checking once a minute (a tick can miss a short window).
 *Introduced by*: 261112-s3br-connections-page-calendar-connection
 
+### Consume a reminder after delivery or intentional suppression
+**Decision**: One shared tick mutex protects occurrence bookkeeping; delivery uses the configured destinations and consumes an occurrence after any successful send or intentional suppression.
+**Why**: An offline primary must not block another destination, failed writes must remain retryable inside the alert window, and concurrent checks or partial fanout must not duplicate successful reminders.
+**Rejected**: Gating on the primary link, recording delivery before a successful send, or independently retrying each fanout destination after partial success.
+*Introduced by*: 261115-wjoy-multi-mac-device-connections
+
 ### Only known meeting hosts are opened
 **Decision**: Join opens https links on Meet, Zoom, Teams and Webex hosts only.
 **Why**: Event notes are text other people wrote; opening any link in them from a voice command would let a calendar invite make the Mac open an arbitrary page.
@@ -94,4 +109,4 @@ No meeting title, attendee, location, note or link appears in a log line at `inf
 
 ## Sources
 
-`desktop/crates/macos-calendar/`, `desktop/crates/stickybot-server/src/connections/`, `desktop/crates/stickybot-server/assets/connections.js`, `desktop/README.md`. Related: [Mac apps](/apps/mac-apps.md), [Mac link](/link/mac-link.md).
+`desktop/crates/macos-calendar/`, `desktop/crates/stickybot-server/src/connections/`, `desktop/crates/stickybot-server/src/events.rs`, `desktop/crates/stickybot-server/assets/connections.js`, `desktop/README.md`. Related: [Mac apps](/apps/mac-apps.md), [Mac link](/link/mac-link.md).
