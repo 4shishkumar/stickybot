@@ -12,6 +12,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-11-15
+
 ### Added
 - **Connections, and your Mac's Calendar as the first one** (the Mac app, dashboard → Connections; no
   new stick firmware needed). Connect it once and the stick shows your next meeting on its home
@@ -543,7 +545,8 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/4shishkumar/stickybot/compare/v2.5.0...HEAD
+[Unreleased]: https://github.com/4shishkumar/stickybot/compare/v2.6.0...HEAD
+[2.6.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.6.0
 [2.5.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.5.0
 [2.4.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.4.0
 [2.3.2]: https://github.com/4shishkumar/stickybot/releases/tag/v2.3.2
