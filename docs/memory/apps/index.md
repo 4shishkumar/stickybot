@@ -11,5 +11,5 @@ description: "The two Mac apps (the Rust StickyBot.app that ships, the legacy Py
 
 | File | Description |
 |------|-------------|
-| [connections](connections.md) | The Connections page and the Calendar connection in the Rust app: read-only EventKit behind a trait with a fake, settings, refresh and reminder timing, the home meeting card, the meeting_soon event, join links, voice phrases, stick tools, and what stays out of logs and diagnostics. |
-| [mac-apps](mac-apps.md) | The Mac apps: StickyBot.app in Rust (Tauri 2, axum, ~/.stickybot-rs, com.stickybot.rs) that ships, the legacy Python app (~/.stick-agent), the dashboard files both serve, ports 8660 and 8670, ad-hoc signing, in-app updates, macOS permissions and the signed-in Calendar entitlement. |
+| [connections](connections.md) | The Rust Connections page and shared Calendar service: read-only EventKit, settings, cached refresh, destination-aware reminder delivery and retries, per-device meeting cards, join links, voice phrases, tools, and privacy. |
+| [mac-apps](mac-apps.md) | Rust StickyBot.app and the legacy Python app: independent device sessions, scoped APIs/MCP/history/jobs, default routing, host labels, shared Mac services, source-bound approvals, shared dashboard compatibility, permissions and in-app updates. |

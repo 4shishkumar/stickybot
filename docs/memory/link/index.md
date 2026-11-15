@@ -11,7 +11,7 @@ description: "The Bluetooth connection between the stick and the Mac: the Mac li
 
 | File | Description |
 |------|-------------|
-| [firmware-update](firmware-update.md) | Firmware update over Bluetooth: only the app image goes to the other OTA slot, in windowed packets with acks, gaps, resume and cancel; sha256 checked on both sides; a new image confirms itself or rolls back. |
-| [mac-link](mac-link.md) | The Mac link: a Nordic UART service on the stick's HID connection carrying JSON lines, audio and bulk transfers; presence by hello and bye; one central at a time. |
-| [protocol-compatibility](protocol-compatibility.md) | How a newer app works with older firmware and the reverse: unknown messages and fields are ignored, features are detected from @state keys and hello flags, PROTOCOL.md changes with every message. |
-| [wireless-mic](wireless-mic.md) | The wireless mic: holding A away from USB streams the stick's mic to the Mac, which plays it into a per-hold Core Audio input device that a dictation app records from; prepare/ready handshake, tap or BlackHole carrier. |
+| [firmware-update](firmware-update.md) | Firmware updates: device/session-owned BLE transfers with resume, cancel and rollback; board/chip/layout validation for S3 and Plus2; separate USB parts preserve settings and bonds; unknown or incompatible bundles are unavailable. |
+| [mac-link](mac-link.md) | The Mac link: Nordic UART over the HID connection, opt-in three-host sessions, authenticated routing, selected input focus, per-host presence, bounded resources and requester-only replies. |
+| [protocol-compatibility](protocol-compatibility.md) | Capability-gated compatibility between apps and firmware: legacy slots and Python support, shared-host handshake and identities, board-specific updates, unchanged machine framing and requester-only command replies. |
+| [wireless-mic](wireless-mic.md) | Wireless dictation to the selected Mac: per-hold Core Audio input, prepare/ready handshake, tap or BlackHole carrier, one stream per Mac, source-session ownership and shared-mode USB audio suppression. |
