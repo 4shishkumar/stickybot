@@ -178,6 +178,46 @@ fn cut(s: &str, n: usize) -> String {
     stick_text(s).chars().take(n).collect()
 }
 
+/// Resolve delivery policy in one place for both availability checks and sends.
+fn destinations(st: &AppState, cfg: &Map<String, Value>) -> Vec<(String, stick_link::Link<stick_link::Backend>)> {
+    if device_targeted() {
+        return vec![(st.device_id.clone(), st.link.clone())];
+    }
+    if let Some(ids) = cfg.get("notification_devices").and_then(Value::as_array) {
+        let mut seen = HashSet::new();
+        return ids
+            .iter()
+            .filter_map(|id| st.devices.resolve(id.as_str()?))
+            .filter(|device| seen.insert(device.device_id.clone()))
+            .map(|device| (device.device_id.clone(), device.link.clone()))
+            .collect();
+    }
+    if st.device_id == "primary"
+        && let Some(device) = st.devices.default_session()
+    {
+        return vec![(device.device_id.clone(), device.link.clone())];
+    }
+    vec![(st.device_id.clone(), st.link.clone())]
+}
+
+/// A scheduled reminder is consumed only after a successful send or intentional suppression.
+/// Offline destinations leave it pending without filling event history on every tick. A scoped
+/// Calendar refresh still follows background notification policy, not the API request's target.
+pub async fn notify_reminder(st: &AppState, kind: &str, title: &str, sub: &str) -> bool {
+    DEVICE_TARGETED
+        .scope(false, async {
+            let cfg = st.cfg.lock().unwrap().clone();
+            if cfg.get("notification_devices").and_then(Value::as_array).is_some_and(Vec::is_empty) {
+                return true;
+            }
+            if !destinations(st, &cfg).iter().any(|(_, link)| link.connected()) {
+                return false;
+            }
+            notify_with_delivery(st, kind, title, sub, None, None, None).await.is_none_or(|(_, sent)| sent)
+        })
+        .await
+}
+
 /// Fires an event of `kind` (its level and sound from the settings unless given; sound `""` = the
 /// level's default, `"off"` = silent). `None` if this kind is off.
 pub async fn notify(
@@ -189,6 +229,18 @@ pub async fn notify(
     level: Option<&str>,
     sound: Option<&str>,
 ) -> Option<Value> {
+    notify_with_delivery(st, kind_, title, sub, icon, level, sound).await.map(|(event, _)| event)
+}
+
+async fn notify_with_delivery(
+    st: &AppState,
+    kind_: &str,
+    title: &str,
+    sub: &str,
+    icon: Option<&str>,
+    level: Option<&str>,
+    sound: Option<&str>,
+) -> Option<(Value, bool)> {
     let cfg = st.cfg.lock().unwrap().clone();
     let rule = rules(&cfg).get(kind_).and_then(Value::as_str).unwrap_or("nice").to_string();
     let level = level.map(str::to_string).unwrap_or(rule);
@@ -212,28 +264,11 @@ pub async fn notify(
     let icon = icon.map(str::to_string).unwrap_or_else(|| kind(kind_).map(|k| k.2).unwrap_or("bell").to_string());
     let ev = json!({"id": id, "level": level, "title": cut(title, 40), "sub": cut(sub, 90), "icon": icon,
                     "sound": if quiet { "off" } else { &sound }, "kind": kind_});
-    let destinations = cfg.get("notification_devices").and_then(Value::as_array).cloned();
     let mut sent = false;
     let mut destination_ids = Vec::new();
-    if device_targeted() {
-        destination_ids.push(st.device_id.clone());
-        sent = st.link.send(&json!({"src":"agent","event":ev})).await;
-    } else if let Some(ids) = destinations {
-        for id in ids {
-            if let Some(device) = id.as_str().and_then(|id| st.devices.resolve(id)) {
-                destination_ids.push(device.device_id.clone());
-                sent |= device.link.send(&json!({"src":"agent","event":ev})).await;
-            }
-        }
-    } else if st.device_id == "primary" {
-        if let Some(device) = st.devices.default_session() {
-            destination_ids.push(device.device_id.clone());
-            sent = device.link.send(&json!({"src":"agent","event":ev})).await;
-        } else {
-            sent = st.link.send(&json!({"src":"agent","event":ev})).await;
-        }
-    } else {
-        sent = st.link.send(&json!({"src":"agent","event":ev})).await;
+    for (id, link) in destinations(st, &cfg) {
+        destination_ids.push(id);
+        sent |= link.send(&json!({"src":"agent","event":ev})).await;
     }
     let mut entry = Map::new();
     entry.insert("device_id".into(), json!(st.device_id));
@@ -261,7 +296,7 @@ pub async fn notify(
     } else {
         log::info!("event {kind_} -> {level}: {shown_title} / {shown_sub}{not_connected}");
     }
-    Some(ev)
+    Some((ev, sent))
 }
 
 /// The dashboard's ▶: the kind's sample, with the level / sound picked on the page if given (saved

@@ -22,6 +22,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   asking for an approval. Name changes keep the existing pairing.
 
 ### Changed
+- Calendar reminders follow your chosen notification sticks, even when the primary stick is
+  offline. A reminder waits for a destination to reconnect within its alert window if none can receive it.
 - Stick diagnostics no longer echo Mac names, questions, notification text or private settings to
   USB and network log viewers. Explicit USB/TCP commands reply only to the requesting connection.
 - Firmware updates in StickyBot.app select an image for the connected board and check its chip

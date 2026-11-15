@@ -550,6 +550,174 @@ async fn refreshing_reads_only_what_the_window_holds_and_keeps_nothing_on_disk()
 
 // --- the reminder --------------------------------------------------------------------------------------
 
+async fn wait_connected(st: &AppState, connected: bool) {
+    let mut state = st.link.watch_state();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        state.wait_for(|s| (*s == stick_link::LinkState::Connected) == connected),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+}
+
+async fn second_stick(w: &W) -> (Arc<AppState>, FakeStick) {
+    w.st().devices.init(w.st()).unwrap();
+    let b = w.st().devices.add(w.st(), "CALENDAR-B", "Second stick").unwrap();
+    wait_connected(&b, true).await;
+    let Backend::Fake(fake) = &b.backend else { panic!("fake only") };
+    let fake = fake.clone();
+    (b, fake)
+}
+
+fn fake_reminders(fake: &FakeStick) -> Vec<Value> {
+    String::from_utf8(fake.writes().concat())
+        .unwrap()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|message| message.get("event").cloned())
+        .filter(|event| event["kind"] == "meeting_soon")
+        .collect()
+}
+
+#[tokio::test]
+async fn reminders_reach_the_selected_or_default_second_stick_while_primary_is_offline() {
+    for explicit in [true, false] {
+        let w = W::new(if explicit { "cal-selected-b" } else { "cal-default-b" }).await;
+        let (b, fake) = second_stick(&w).await;
+        if explicit {
+            w.st().update_config(json!({"notification_devices":[b.device_id]}).as_object().unwrap().clone()).unwrap();
+        } else {
+            w.st().devices.default_to(w.st(), &b.device_id).unwrap();
+        }
+        w.st().link.pause(true);
+        wait_connected(w.st(), false).await;
+        w.st().calendar.set_clock(at("2026-11-12 10:27"), OFFSET);
+        w.connect().await;
+        tokio::join!(tick(w.st()), tick(&b));
+        assert_eq!(fake_reminders(&fake).len(), 1);
+        assert!(w.reminders().is_empty());
+        assert_eq!(w.st().calendar.cache.lock().unwrap().fired.len(), 1);
+        assert_eq!(w.cal.reads(), 1, "device count and ticks do not duplicate calendar polling");
+        let history = crate::events::history(w.st(), 10);
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0]["device_ids"], json!([b.device_id]));
+        assert_eq!(history[0]["sent"], true);
+        w.st().devices.remove(w.st(), &b.device_id).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn an_offline_notification_destination_is_not_consumed_and_reconnect_delivers_once() {
+    let w = W::new("cal-b-reconnect").await;
+    let (b, fake) = second_stick(&w).await;
+    w.st().update_config(json!({"notification_devices":[b.device_id]}).as_object().unwrap().clone()).unwrap();
+    w.connect().await; // cache the event before it is due
+    b.link.pause(true);
+    wait_connected(&b, false).await;
+    assert!(w.st().link.connected(), "primary is online but is not a notification destination");
+    w.st().calendar.set_clock(at("2026-11-12 10:27"), OFFSET);
+    tick(w.st()).await;
+    tick(w.st()).await;
+    assert!(w.st().calendar.cache.lock().unwrap().fired.is_empty());
+    assert!(crate::events::history(w.st(), 10).is_empty(), "offline ticks must not flood event history");
+    assert!(w.reminders().is_empty());
+    assert!(fake_reminders(&fake).is_empty());
+
+    b.link.pause(false);
+    wait_connected(&b, true).await;
+    w.st().calendar.set_clock(at("2026-11-12 10:28"), OFFSET);
+    tokio::join!(tick(w.st()), tick(&b));
+    tick(w.st()).await;
+    assert_eq!(fake_reminders(&fake).len(), 1);
+    assert!(w.reminders().is_empty());
+    assert_eq!(w.st().calendar.cache.lock().unwrap().fired.len(), 1);
+    assert_eq!(crate::events::history(w.st(), 10).len(), 1);
+    assert_eq!(w.cal.reads(), 1);
+    w.st().devices.remove(w.st(), &b.device_id).unwrap();
+}
+
+#[tokio::test]
+async fn reminder_fanout_uses_background_policy_even_from_a_scoped_calendar_request() {
+    let w = W::new("cal-fanout").await;
+    let (b, fake) = second_stick(&w).await;
+    w.st().update_config(json!({"notification_devices":["primary",b.device_id]}).as_object().unwrap().clone()).unwrap();
+    w.connect().await;
+    w.st().calendar.set_clock(at("2026-11-12 10:27"), OFFSET);
+    let path = format!("/api/devices/{}/api/connections/calendar", b.device_id);
+    assert_eq!(w.call("PUT", &path, Some(json!({"alert_min": 5}))).await.0, StatusCode::OK);
+    tokio::join!(tick(w.st()), tick(&b));
+    assert_eq!(w.reminders().len(), 1);
+    assert_eq!(fake_reminders(&fake).len(), 1);
+    assert_eq!(w.reminders()[0]["id"], fake_reminders(&fake)[0]["id"]);
+    assert_eq!(crate::events::history(w.st(), 10).len(), 1);
+    assert_eq!(w.cal.reads(), 2, "only the explicit connect and settings save read the source");
+    w.st().devices.remove(w.st(), &b.device_id).unwrap();
+}
+
+#[tokio::test]
+async fn reminders_disabled_by_destinations_or_event_rule_are_intentionally_consumed() {
+    for empty_destinations in [true, false] {
+        let w = W::new(if empty_destinations { "cal-no-destinations" } else { "cal-rule-off" }).await;
+        let changes = if empty_destinations {
+            json!({"notification_devices":[]})
+        } else {
+            json!({"event_rules":{"meeting_soon":"off"}})
+        };
+        w.st().update_config(changes.as_object().unwrap().clone()).unwrap();
+        w.st().calendar.set_clock(at("2026-11-12 10:27"), OFFSET);
+        w.connect().await;
+        tick(w.st()).await;
+        assert!(w.reminders().is_empty());
+        assert!(crate::events::history(w.st(), 10).is_empty());
+        assert_eq!(w.st().calendar.cache.lock().unwrap().fired.len(), 1);
+        w.st()
+            .update_config(json!({"notification_devices":null,"event_rules":{}}).as_object().unwrap().clone())
+            .unwrap();
+        tick(w.st()).await;
+        assert!(w.reminders().is_empty(), "enabling reminders does not replay an intentionally skipped occurrence");
+    }
+}
+
+#[tokio::test]
+async fn a_failed_reminder_write_stays_pending_until_a_send_succeeds() {
+    let w = W::new("cal-write-retry").await;
+    w.connect().await;
+    w.st().calendar.set_clock(at("2026-11-12 10:27"), OFFSET);
+    w.t.fake.set_busy(1, "test write rejected");
+    tick(w.st()).await;
+    assert!(w.st().link.connected());
+    assert!(w.reminders().is_empty());
+    assert!(w.st().calendar.cache.lock().unwrap().fired.is_empty());
+    assert_eq!(crate::events::history(w.st(), 10)[0]["sent"], false);
+    tokio::join!(tick(w.st()), tick(w.st()));
+    tick(w.st()).await;
+    assert_eq!(w.reminders().len(), 1);
+    assert_eq!(w.st().calendar.cache.lock().unwrap().fired.len(), 1);
+    let history = crate::events::history(w.st(), 10);
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0]["sent"], true);
+}
+
+#[tokio::test]
+async fn a_successful_fanout_destination_consumes_the_reminder_without_replaying_it() {
+    let w = W::new("cal-partial-fanout").await;
+    let (b, fake) = second_stick(&w).await;
+    w.st().update_config(json!({"notification_devices":["primary",b.device_id]}).as_object().unwrap().clone()).unwrap();
+    w.connect().await;
+    w.st().calendar.set_clock(at("2026-11-12 10:27"), OFFSET);
+    w.t.fake.set_busy(1, "test write rejected");
+    tick(w.st()).await;
+    assert!(w.reminders().is_empty());
+    assert_eq!(fake_reminders(&fake).len(), 1);
+    assert_eq!(w.st().calendar.cache.lock().unwrap().fired.len(), 1);
+    tick(w.st()).await;
+    assert!(w.reminders().is_empty());
+    assert_eq!(fake_reminders(&fake).len(), 1);
+    assert_eq!(crate::events::history(w.st(), 10).len(), 1);
+    w.st().devices.remove(w.st(), &b.device_id).unwrap();
+}
+
 #[tokio::test]
 async fn the_reminder_goes_to_the_stick_once_and_is_a_listed_kind() {
     let w = W::new("cal-alert").await;

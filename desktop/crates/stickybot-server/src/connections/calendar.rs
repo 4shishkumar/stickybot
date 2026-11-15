@@ -97,6 +97,7 @@ pub struct Calendar {
     subscribed: AtomicBool,
     changed: Arc<tokio::sync::Notify>,
     refreshing: tokio::sync::Mutex<()>,
+    ticking: tokio::sync::Mutex<()>,
     clock: Mutex<Clock>,
     /// set by [`save_settings`]: its caller reads the calendar itself, so the config hook need not
     api_saved: AtomicBool,
@@ -110,6 +111,7 @@ impl Calendar {
             subscribed: AtomicBool::new(false),
             changed: Arc::new(tokio::sync::Notify::new()),
             refreshing: tokio::sync::Mutex::new(()),
+            ticking: tokio::sync::Mutex::new(()),
             clock: Mutex::new(Clock::System),
             api_saved: AtomicBool::new(false),
         }
@@ -313,23 +315,24 @@ pub async fn refresh(st: &Arc<AppState>) {
 
 /// Sends the due reminders and keeps the stick's card right. Needs no read: it works on what is cached.
 pub async fn tick(st: &Arc<AppState>) {
-    let Some(s) = connected(st) else { return };
+    // Calendar is shared even when refreshed through a device-scoped API request.
+    let root = st.devices.root();
+    let st = root.as_ref().unwrap_or(st);
     let cal = &st.calendar;
+    // Delivery awaits the link: serialize ticks so refresh and the loop cannot send the same due event.
+    let _one_at_a_time = cal.ticking.lock().await;
+    let Some(s) = connected(st) else { return };
     let now = cal.now();
-    // a reminder the stick cannot show is not "sent": it still goes out if the stick is back in time
-    let due: Vec<(String, String)> = if st.link.connected() {
+    let due: Vec<Event> = {
         let mut c = cal.cache.lock().unwrap();
         agenda::prune_fired(&mut c.fired, now);
-        let due: Vec<Event> = agenda::due_alerts(&c.events, &s, now, &c.fired).into_iter().cloned().collect();
-        for e in &due {
-            c.fired.insert((e.id.clone(), e.start), e.end);
-        }
-        zoned!(cal, tz => due.iter().map(|e| agenda::alert_text(e, &tz, now)).collect())
-    } else {
-        Vec::new()
+        agenda::due_alerts(&c.events, &s, now, &c.fired).into_iter().cloned().collect()
     };
-    for (title, sub) in due {
-        crate::events::notify(st, "meeting_soon", &title, &sub, None, None, None).await;
+    for e in due {
+        let (title, sub) = zoned!(cal, tz => agenda::alert_text(&e, &tz, now));
+        if crate::events::notify_reminder(st, "meeting_soon", &title, &sub).await {
+            cal.cache.lock().unwrap().fired.insert((e.id, e.start), e.end);
+        }
     }
     let pinned = meeting_card(st).filter(|m| m.pinned).map(|m| m.card["a"].as_str().unwrap_or("").to_string());
     let changed = {

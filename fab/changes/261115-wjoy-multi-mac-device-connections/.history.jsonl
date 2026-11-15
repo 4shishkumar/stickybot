@@ -12,3 +12,7 @@
 {"action":"re-entry","driver":"fab-ff","event":"stage-transition","stage":"review","ts":"2026-11-15T09:57:19Z"}
 {"action":"enter","driver":"fab-ff","event":"stage-transition","stage":"hydrate","ts":"2026-11-15T10:01:11Z"}
 {"event":"review","result":"passed","ts":"2026-11-15T10:01:11Z"}
+{"action":"re-entry","driver":"fab-ff","event":"stage-transition","stage":"apply","ts":"2026-11-15T10:09:03Z"}
+{"action":"re-entry","driver":"fab-ff","event":"stage-transition","stage":"review","ts":"2026-11-15T10:15:33Z"}
+{"action":"re-entry","driver":"fab-ff","event":"stage-transition","stage":"hydrate","ts":"2026-11-15T10:18:35Z"}
+{"event":"review","result":"passed","ts":"2026-11-15T10:18:35Z"}
