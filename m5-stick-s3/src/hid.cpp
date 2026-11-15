@@ -24,10 +24,16 @@ constexpr uint32_t TAP_FN_MS = 30;  // a Fn-only tap: how long it's held
 // (Service Changed), see begin().
 constexpr uint8_t HID_MAP_VERSION = 2;
 static bool          mapChanged_ = false;
-static volatile bool mouseSubscribed = false;
+struct MouseSubscription { uint16_t handle = BLE_HS_CONN_HANDLE_NONE; bool subscribed = false; };
+static MouseSubscription mouseSubscriptions[3];
 
 class MouseSubscribe : public NimBLECharacteristicCallbacks {
-  void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo&, uint16_t sub) override { mouseSubscribed = sub != 0; }
+  void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo& info, uint16_t sub) override {
+    for (auto& s : mouseSubscriptions) if (s.handle == info.getConnHandle()) { s.subscribed = sub != 0; return; }
+    for (auto& s : mouseSubscriptions) if (s.handle == BLE_HS_CONN_HANDLE_NONE) {
+      s.handle = info.getConnHandle(); s.subscribed = sub != 0; return;
+    }
+  }
 };
 
 static NimBLEConnInfo*   pendingConn = nullptr;
@@ -40,14 +46,16 @@ class ConfirmCallbacks : public HijelHID_Internal::KBServerCallbacks {
  public:
   using KBServerCallbacks::KBServerCallbacks;
   void onConfirmPassKey(NimBLEConnInfo& info, uint32_t code) override {
+    if (pendingCode) { NimBLEDevice::injectConfirmPasskey(info, false); return; }
     delete pendingConn;
     pendingConn = new NimBLEConnInfo(info);
     pendingSince = millis();
     pendingCode = code;
   }
   void onDisconnect(NimBLEServer* s, NimBLEConnInfo& info, int reason) override {
-    pendingCode = 0;
-    mouseSubscribed = false;
+    if (pendingConn && pendingConn->getConnHandle() == info.getConnHandle()) pendingCode = 0;
+    for (auto& sub : mouseSubscriptions) if (sub.handle == info.getConnHandle()) sub = {};
+    buddy::peerDisconnected(info.getConnHandle());
     KBServerCallbacks::onDisconnect(s, info, reason);
   }
 };
@@ -107,6 +115,7 @@ void begin(uint8_t slot) {
   // Start on a throwaway random address (never the chip's public one), then
   // switch to the slot's own address straight away.
   kb->setRandomAddress(true);
+  kb->setSharedHosts(settings::sharedHosts());
   kb->setSecurityMode(HIDSecurity::Passkey);
   kb->onPairingComplete([](bool ok) { if (ok) authEvent = true; });
   kb->begin();
@@ -153,6 +162,7 @@ void loop() {
   if (pendingCode && millis() - pendingSince > CONFIRM_TIMEOUT_MS) confirmPairing(false);
   if (!authEvent) return;
   authEvent = false;
+  if (settings::sharedHosts()) return;  // multiple bonds must never replace one slot peer
   NimBLEServer* server = NimBLEDevice::getServer();
   if (!server || server->getConnectedCount() == 0) return;
   NimBLEAddress id = server->getPeerInfo(0).getIdAddress();
@@ -176,6 +186,8 @@ Bt state() {
   return kb->isPaired() ? Bt::CONNECTED : Bt::ADVERTISING;
 }
 
+void selectHost(uint16_t handle) { if (kb) kb->selectConnection(handle); }
+uint16_t selectedHost() { return kb ? kb->selectedConnection() : BLE_HS_CONN_HANDLE_NONE; }
 bool connected() { return kb && kb->isPaired(); }
 
 void down(const Combo& c) {
@@ -218,7 +230,10 @@ void media(uint16_t usage) {
   if (kb && kb->isPaired()) kb->tap(usage);
 }
 
-bool mouseKnown() { return mouseSubscribed; }
+bool mouseKnown() {
+  for (const auto& sub : mouseSubscriptions) if (sub.handle == selectedHost()) return sub.subscribed;
+  return false;
+}
 bool mapChanged() { return mapChanged_; }
 
 void disconnect() {

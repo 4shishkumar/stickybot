@@ -163,6 +163,7 @@ private:
 class KBLEDCallbacks : public NimBLECharacteristicCallbacks {
 public:
     KBLEDCallbacks(HijelHID_BLEKeyboard* parent) : _parent(parent) {}
+    void onRead(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) override;
     void onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) override;
 private:
     HijelHID_BLEKeyboard* _parent;
@@ -264,6 +265,10 @@ public:
      * full authentication to finish.
      */
     bool isPaired() const;
+    // Shared-host mode has one explicitly selected input peer. NONE suspends input.
+    void selectConnection(uint16_t handle);
+    void setSharedHosts(bool on) { _sharedHosts = on; }
+    uint16_t selectedConnection() const { return _connHandle; }
 
     /**
      * Returns the number of milliseconds since the last HID report was sent.
@@ -583,8 +588,8 @@ public:
 
     // ─── Internal Callbacks (do not call directly) ────────────────────────
     void        _onConnect(uint16_t connHandle);
-    void        _onDisconnect();
-    void        _onAuthComplete(bool success);
+    void        _onDisconnect(uint16_t handle);
+    void        _onAuthComplete(bool success, uint16_t handle);
     void        _onConfirmPassKey(uint32_t passkey);
     void        _onLEDWrite(uint8_t ledByte);
     static void _idleTimerCallback(TimerHandle_t xTimer);
@@ -680,7 +685,9 @@ private:
     //                 This flag-based approach avoids calling NimBLE APIs from
     //                 the timer daemon task, keeping single-core boards safe.
     volatile _ConnState _connState;
+    bool _sharedHosts = false;
     volatile uint16_t   _connHandle;
+    volatile uint32_t   _connectionEpoch = 0;
     TimerHandle_t     _idleTimer;
     volatile bool     _pendingIdleTransition;
 

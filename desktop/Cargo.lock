@@ -4219,6 +4219,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "dispatch2",
+ "getrandom 0.3.4",
  "log",
  "objc2",
  "objc2-core-bluetooth",

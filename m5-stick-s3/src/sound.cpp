@@ -189,6 +189,15 @@ void begin() {
 }
 
 bool busy() { return pending || cur || clipReady || clipPlaying; }
+void cancelClip() {
+  portENTER_CRITICAL(&clipMux);
+  clipInbox.clear();
+  portEXIT_CRITICAL(&clipMux);
+  if (clipPlaying) M5.Speaker.stop();
+  clipPlaying = clipReady = false;
+  free(clipBuf); clipBuf = nullptr; clipSamples = 0;
+  clipAsm.reset(nullptr, 0);
+}
 
 static void start(const Tune* t) {
   if (!t) return;

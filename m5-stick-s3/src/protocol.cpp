@@ -3,6 +3,8 @@
 #include "config.h"
 #include "settings.h"
 #include "hid.h"
+#include "buddy.h"
+#include "sound.h"
 #include "web.h"
 #include "battery.h"
 #include "ota.h"
@@ -51,6 +53,7 @@ static const char* btName(hid::Bt b) {
 static String stateJson() {
   Combo c = settings::combo();
   String j = "\"proto\":1,\"board\":\"" STICK_BOARD "\",\"fw\":\"" FW_VERSION "\"";
+  j += ",\"deviceId\":" + q(buddy::deviceId()) + ",\"multiHost\":1,\"maxHosts\":3";
   j += ",\"name\":" + q(hid::name());
   j += ",\"combo\":" + q(comboToString(c)) + ",\"mods\":" + c.mods + ",\"key\":" + c.key;
   j += String(",\"connected\":") + (hid::connected() ? "true" : "false");
@@ -75,7 +78,7 @@ static String stateJson() {
   j += String(",\"wirelessMic\":") + (settings::wirelessMic() ? "true" : "false");
   j += String(",\"ota\":1,\"otaPending\":") + (ota::pendingVerify() ? "true" : "false");  // Bluetooth update (1.8.0+)
   j += String(",\"usbMounted\":") + (mic::usbMounted() ? "true" : "false");
-  j += String(",\"macPassSet\":") + (settings::macPassword().length() ? "true" : "false");
+  j += String(",\"macPassSet\":") + (buddy::macPassword().length() ? "true" : "false");
   j += ",\"enterDelay\":" + String(settings::enterDelayMs());
   j += ",\"slot\":" + String(hid::slot()) + ",\"slots\":[";
   for (uint8_t n = 1; n <= settings::SLOTS; n++)
@@ -102,6 +105,20 @@ static int slotArg(const String& s) {
 Result run(const String& action, const Args& arg) {
   if (action == "state") return ok(stateJson());
   if (action == "keys")  return ok(keysJson());
+  if (action == "hosts") {
+    String mode = arg("shared");
+    if (mode.length()) {
+      if (mode != "0" && mode != "1") return fail("shared must be 0 or 1");
+      if (buddy::hostBusy()) return fail("Device is busy", 409);
+      bool next = mode == "1";
+      if (next != settings::sharedHosts()) {
+        settings::saveSharedHosts(next);
+        Result r = ok("\"restarting\":true"); r.restart = true; return r;
+      }
+    }
+    String j = buddy::hostState();
+    return ok(j.substring(1,j.length()-1));
+  }
 
   if (action == "combo") {
     Combo c;
@@ -138,6 +155,7 @@ Result run(const String& action, const Args& arg) {
   }
 
   if (action == "slot") {
+    if (settings::sharedHosts()) return fail("Use the host picker in shared mode", 409);
     int n = slotArg(arg("n"));
     if (!n) return fail("Slot must be 1-3");
     if (n == hid::slot()) return ok("\"slot\":" + String(n));
@@ -152,6 +170,7 @@ Result run(const String& action, const Args& arg) {
   if (action == "reconnect")  { hid::reconnect();  Log.println("Bluetooth on");  return ok(); }
 
   if (action == "forget") {
+    if (settings::sharedHosts()) return fail("Disable shared mode before changing legacy slot pairings", 409);
     String which = arg("n");
     Result r = ok();
     if (which == "all") {
@@ -210,7 +229,7 @@ Result run(const String& action, const Args& arg) {
 
   if (action == "macpass") {  // write-only: the password is never sent back
     String pw = arg("pass");
-    settings::saveMacPassword(pw);
+    if (!buddy::setMacPassword(pw)) return fail("Select an authenticated Mac first", 409);
     Log.println(pw.length() ? "Mac password saved" : "Mac password cleared");
     return ok(String("\"macPassSet\":") + (pw.length() ? "true" : "false"));
   }

@@ -10,12 +10,17 @@ const KEEP: usize = 300;
 
 pub struct Hub {
     recent: Mutex<VecDeque<Value>>,
+    device: Mutex<Option<String>>,
     tx: broadcast::Sender<Value>,
 }
 
 impl Default for Hub {
     fn default() -> Self {
-        Self { recent: Mutex::new(VecDeque::with_capacity(KEEP)), tx: broadcast::channel(256).0 }
+        Self {
+            device: Mutex::new(None),
+            recent: Mutex::new(VecDeque::with_capacity(KEEP)),
+            tx: broadcast::channel(256).0,
+        }
     }
 }
 
@@ -24,6 +29,9 @@ pub fn now() -> f64 {
 }
 
 impl Hub {
+    pub fn set_device(&self, id: &str) {
+        *self.device.lock().unwrap() = Some(id.into());
+    }
     /// `{"t", "kind", ...data}`
     pub fn emit(&self, kind: &str, data: Value) -> Value {
         let mut ev = Map::new();
@@ -31,6 +39,9 @@ impl Hub {
         ev.insert("kind".into(), json!(kind));
         if let Value::Object(d) = data {
             ev.extend(d);
+        }
+        if let Some(id) = self.device.lock().unwrap().clone() {
+            ev.insert("device_id".into(), json!(id));
         }
         let ev = Value::Object(ev);
         {

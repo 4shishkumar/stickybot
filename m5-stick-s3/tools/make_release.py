@@ -37,6 +37,10 @@ PARTS = [  # offset, source (in the build folder, or boot_app0), name in the bun
     ("0xe000", None, "boot_app0.bin"),
     ("0x10000", "firmware.bin", "app.bin"),
 ]
+BOARDS = {
+    "m5-sticks3": {"env": "sticks3", "chip": "esp32s3", "chip_id": 9, "boot_offset": "0x0"},
+    "m5-stickc-plus2": {"env": "stickc_plus2", "chip": "esp32", "chip_id": 0, "boot_offset": "0x1000"},
+}
 FLASH = {"chip": "esp32s3", "mode": "dio", "freq": "80m", "size": "8MB"}
 
 
@@ -55,18 +59,25 @@ def git_commit():
         return None
 
 
-def make(out, build=BUILD, boot=None, release=None, agent_version=None, config_h=HERE / "src" / "config.h"):
+def make(out, build=None, boot=None, release=None, agent_version=None, config_h=HERE / "src" / "config.h",
+         board="m5-sticks3"):
     """Writes the parts + manifest.json into `out`; returns the manifest."""
+    target = BOARDS.get(board)
+    if target is None:
+        raise SystemExit(f"unsupported board: {board}")
+    build = Path(build) if build else HERE / ".pio" / "build" / target["env"]
     boot = boot or boot_app0()
-    sources = [(offset, (build / src) if src else boot, name) for offset, src, name in PARTS]
+    parts = [(target["boot_offset"], *PARTS[0][1:]), *PARTS[1:]]
+    sources = [(offset, (build / src) if src else boot, name) for offset, src, name in parts]
     for _, src, _ in sources:
         if not src.exists():
-            raise SystemExit(f"{src} missing — run `pio run -e sticks3` first")
-    if (build / "firmware.bin").read_bytes()[:1] != b"\xe9":
-        raise SystemExit("firmware.bin doesn't look like an ESP32 app image")
+            raise SystemExit(f"{src} missing — run `pio run -e {target['env']}` first")
+    for image_name in ("firmware.bin", "bootloader.bin"):
+        image = (build / image_name).read_bytes()
+        if len(image) < 24 or image[0] != 0xe9 or int.from_bytes(image[12:14], "little") != target["chip_id"]:
+            raise SystemExit(f"{image_name} is not an image for {board} ({target['chip']}); refusing to label it")
     text = config_h.read_text()
     version = re.search(r'#define\s+FW_VERSION\s+"([^"]+)"', text)
-    board = re.search(r'#define\s+STICK_BOARD\s+"([^"]+)"', text)
 
     out = Path(out)
     if out.exists():  # drop files from older bundles (e.g. a merged image)
@@ -82,7 +93,7 @@ def make(out, build=BUILD, boot=None, release=None, agent_version=None, config_h
         size += len(data)
     manifest = {
         "version": version.group(1) if version else "unknown",  # the firmware's (what the stick reports)
-        "board": board.group(1) if board else "m5-sticks3",
+        "board": board,
         "release": release,              # e.g. "v1.8.0"; None for a local build
         "agent_version": agent_version,  # the agent this firmware was released with
         "commit": git_commit(),
@@ -90,7 +101,7 @@ def make(out, build=BUILD, boot=None, release=None, agent_version=None, config_h
         "sha256": digest.hexdigest(),  # of all parts, in order
         "size": size,
         "parts": parts,
-        "flash": dict(FLASH),
+        "flash": {**FLASH, "chip": target["chip"]},
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
@@ -99,10 +110,11 @@ def make(out, build=BUILD, boot=None, release=None, agent_version=None, config_h
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--out", type=Path, default=LOCAL, help=f"where to write the bundle (default {LOCAL})")
+    ap.add_argument("--board", choices=BOARDS, default="m5-sticks3", help="board whose build to package")
     ap.add_argument("--release", help="the release tag, e.g. v1.8.0")
     ap.add_argument("--agent-version", help="the agent version released with it")
     args = ap.parse_args(argv)
-    m = make(args.out, release=args.release, agent_version=args.agent_version)
+    m = make(args.out, release=args.release, agent_version=args.agent_version, board=args.board)
     print(f"firmware {m['version']}{' for ' + m['release'] if m['release'] else ''}: "
           f"{m['size'] / 1024:.0f} KB in {len(m['parts'])} parts -> {args.out}")
 

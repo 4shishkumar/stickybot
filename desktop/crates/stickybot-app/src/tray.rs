@@ -63,6 +63,8 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub fn of(st: &AppState) -> Self {
+        let selected = st.devices.default_session();
+        let st = selected.as_deref().unwrap_or(st);
         let cfg = st.cfg.lock().unwrap().clone();
         Self {
             state: st.agent_state(),
@@ -447,7 +449,7 @@ impl Tray {
     }
 
     fn clicked(self: &Arc<Self>, id: &str) {
-        let st = self.st.clone();
+        let st = self.st.devices.default_session().unwrap_or_else(|| self.st.clone());
         match id {
             "open" => crate::show_dashboard_at(&self.app, ""),
             "update" => {

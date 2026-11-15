@@ -10,6 +10,17 @@
 #include "logic/reader.h"
 
 namespace ui {
+// A persistent, separate input-owner badge; prompt headers identify their own source.
+void drawHostLabel(const String& label) {
+  if (!label.length()) return;
+  M5.Display.setTextFont(1);
+  M5.Display.setTextSize(1);
+  M5.Display.setTextDatum(top_left);
+  M5.Display.fillRect(0, 0, M5.Display.width(), 10, 0x0000);
+  M5.Display.setTextColor(0xffff, 0x0000);
+  M5.Display.drawString("Input: " + label, 3, 1);
+}
+
 
 // Portrait, 135 x 240. "Flip screen" in the menu switches between the two
 // portrait rotations (0 and 2); with auto-rotate the motion sensor picks them.

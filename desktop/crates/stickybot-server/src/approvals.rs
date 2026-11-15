@@ -15,6 +15,8 @@ pub const RESEND: Duration = Duration::from_secs(3);
 pub const WAIT: Duration = Duration::from_secs(120);
 
 struct Prompt {
+    destinations: Vec<(String, u64)>,
+    owner: String,
     tool: String,
     hint: String,
     from: String,
@@ -23,6 +25,8 @@ struct Prompt {
 
 /// A question from a Claude session (the stick tools' `ask`): A = the first option, B = the second.
 struct Ask {
+    destinations: Vec<(String, u64)>,
+    owner: String,
     question: String,
     options: Vec<String>,
     from: String,
@@ -38,6 +42,51 @@ pub struct Approvals {
 }
 
 impl Approvals {
+    pub fn list_for(&self, device: &str) -> Value {
+        json!(
+            self.prompts
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, p)| p.owner == device || p.destinations.iter().any(|(id, _)| id == device))
+                .map(|(id, p)| json!({"id":id,"tool":p.tool,"hint":p.hint,"from":p.from}))
+                .collect::<Vec<_>>()
+        )
+    }
+    pub fn asks_for(&self, device: &str) -> Value {
+        json!(
+            self.asks
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, p)| p.owner == device || p.destinations.iter().any(|(id, _)| id == device))
+                .map(|(id, p)| json!({"id":id,"question":p.question,"options":p.options,"from":p.from}))
+                .collect::<Vec<_>>()
+        )
+    }
+    pub fn decide_dashboard(&self, id: &str, decision: &str, device: &str) -> bool {
+        let allowed = self
+            .prompts
+            .lock()
+            .unwrap()
+            .get(id)
+            .is_some_and(|p| p.owner == device || p.destinations.iter().any(|(id, _)| id == device))
+            || self
+                .asks
+                .lock()
+                .unwrap()
+                .get(id)
+                .is_some_and(|p| p.owner == device || p.destinations.iter().any(|(id, _)| id == device));
+        allowed && self.decide(id, decision, "dashboard")
+    }
+
+    /// Hardware answers are valid only on a destination connection captured when the prompt began.
+    pub fn decide_from_device(&self, id: &str, decision: &str, device: &AppState) -> bool {
+        let expected = (device.device_id.clone(), device.link.generation());
+        let allowed = self.prompts.lock().unwrap().get(id).is_some_and(|p| p.destinations.contains(&expected))
+            || self.asks.lock().unwrap().get(id).is_some_and(|p| p.destinations.contains(&expected));
+        allowed && self.decide(id, decision, "stick")
+    }
     /// Questions waiting, for `GET /api/status` (`asks`).
     pub fn asks(&self) -> Value {
         let a = self.asks.lock().unwrap();
@@ -112,21 +161,38 @@ pub async fn ask_permission(
     if !st.cfg.lock().unwrap().get("stick_approvals").and_then(Value::as_bool).unwrap_or(true) {
         return None;
     }
+    let destinations = destinations(st, "approval_devices");
+    let owners = destinations.iter().map(|(s, g)| (s.device_id.clone(), *g)).collect();
     let id = new_id();
     let (tx, mut rx) = oneshot::channel();
-    st.approvals
-        .prompts
-        .lock()
-        .unwrap()
-        .insert(id.clone(), Prompt { tool: tool.into(), hint: hint.into(), from: origin.into(), answer: Some(tx) });
+    st.approvals.prompts.lock().unwrap().insert(
+        id.clone(),
+        Prompt {
+            destinations: owners,
+            owner: st.device_id.clone(),
+            tool: tool.into(),
+            hint: hint.into(),
+            from: origin.into(),
+            answer: Some(tx),
+        },
+    );
     st.hub.emit("prompt", json!({"id": id, "tool": tool, "hint": hint, "origin": origin}));
+    for (device, _) in &destinations {
+        if device.device_id != st.device_id {
+            device.hub.emit("prompt", json!({"id":id,"tool":tool,"hint":hint,"origin":origin}));
+        }
+    }
     let short: String = hint.chars().take(160).collect();
     let prompt = json!({"src": "cli", "prompt": {"id": id, "tool": tool, "hint": short, "from": origin}});
     let resend = st.approvals.resend.lock().unwrap().unwrap_or(RESEND);
     let deadline = tokio::time::Instant::now() + wait.min(WAIT);
     let mut decision = None;
     while tokio::time::Instant::now() < deadline {
-        st.link.send(&prompt).await;
+        for (device, generation) in &destinations {
+            if device.link.generation() == *generation {
+                device.link.send(&prompt).await;
+            }
+        }
         let until = (tokio::time::Instant::now() + resend).min(deadline);
         match tokio::time::timeout_at(until, &mut rx).await {
             Ok(Ok(d)) => {
@@ -138,7 +204,12 @@ pub async fn ask_permission(
         }
     }
     st.approvals.prompts.lock().unwrap().remove(&id);
-    st.link.send(&json!({"src": "cli"})).await; // clear it on the stick
+    for (device, generation) in &destinations {
+        if device.link.generation() == *generation {
+            device.link.send(&clear_message(device, &id)).await;
+        }
+        device.hub.emit("prompt_done", json!({"id":id,"decision":decision}));
+    }
     st.hub.emit("prompt_done", json!({"id": id, "decision": decision}));
     decision
 }
@@ -176,7 +247,7 @@ impl Drop for AskGuard {
         let (shown, id, answer) = (self.shown, self.id.clone(), std::mem::take(&mut self.answer));
         let clear = async move {
             if shown && !st.approvals.pending() {
-                st.link.send(&json!({"src": "cli"})).await; // clear it on the stick (never an approval)
+                st.link.send(&clear_message(&st, &id)).await; // only this question
             }
             st.hub.emit("ask_done", json!({"id": id, "answer": answer}));
         };
@@ -208,7 +279,14 @@ pub async fn ask_user(st: &Arc<AppState>, question: &str, options: &[String], wa
     let (tx, mut rx) = oneshot::channel();
     st.approvals.asks.lock().unwrap().insert(
         id.clone(),
-        Ask { question: q.clone(), options: labels.clone(), from: origin.into(), answer: Some(tx) },
+        Ask {
+            destinations: vec![(st.device_id.clone(), st.link.generation())],
+            owner: st.device_id.clone(),
+            question: q.clone(),
+            options: labels.clone(),
+            from: origin.into(),
+            answer: Some(tx),
+        },
     );
     let mut guard = AskGuard { st: st.clone(), id: id.clone(), shown: false, answer: "cancelled".into() };
     st.hub.emit(
@@ -308,5 +386,66 @@ mod tests {
         t.st.cfg.lock().unwrap().insert("stick_approvals".into(), json!(false));
         assert_eq!(ask_permission(&t.st, "Bash", "ls", "web", WAIT).await, None);
         assert!(sent_prompts(&t).is_empty());
+    }
+}
+
+/// Explicit destination IDs, or the calling/default device. Captured once, not retargeted mid-flight.
+pub fn destinations(st: &Arc<AppState>, setting: &str) -> Vec<(Arc<AppState>, u64)> {
+    let ids = st.cfg.lock().unwrap().get(setting).and_then(Value::as_array).cloned();
+    let devices = match ids {
+        Some(ids) => ids.iter().filter_map(|v| v.as_str().and_then(|id| st.devices.resolve(id))).collect::<Vec<_>>(),
+        None => vec![st.clone()],
+    };
+    devices
+        .into_iter()
+        .map(|s| {
+            let generation = s.link.generation();
+            (s, generation)
+        })
+        .collect()
+}
+
+fn clear_message(st: &AppState, id: &str) -> Value {
+    if st.link.multi_host() { json!({"src":"cli","clear":id}) } else { json!({"src":"cli"}) }
+}
+
+#[cfg(test)]
+mod multi_device_tests {
+    use super::*;
+    use crate::talk::tests::agent;
+    use stick_link::Backend;
+
+    #[tokio::test]
+    async fn fanout_accepts_one_destination_answer_and_clears_every_copy() {
+        let t = agent("fanout-devices", false).await;
+        t.st.devices.init(&t.st).unwrap();
+        let child = t.st.devices.add(&t.st, "SECOND", "Second").unwrap();
+        let outsider = t.st.devices.add(&t.st, "OTHER", "Other").unwrap();
+        let mut state = child.link.watch_state();
+        state.wait_for(|s| *s == stick_link::LinkState::Connected).await.unwrap();
+        t.st.update_config(json!({"approval_devices":["primary",child.device_id]}).as_object().unwrap().clone())
+            .unwrap();
+        let root = t.st.clone();
+        let pending =
+            tokio::spawn(
+                async move { ask_permission(&root, "Bash", "run tests", "project", Duration::from_secs(3)).await },
+            );
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let id = t.st.approvals.list()[0]["id"].as_str().unwrap().to_owned();
+        assert!(!t.st.approvals.decide_from_device(&id, "once", &outsider));
+        assert!(t.st.approvals.decide_from_device(&id, "once", &child));
+        assert!(!t.st.approvals.decide_from_device(&id, "deny", &t.st));
+        assert_eq!(pending.await.unwrap(), Some("allow".into()));
+        let Backend::Fake(fake) = &child.backend else { panic!("fake only") };
+        let messages: Vec<Value> = String::from_utf8(fake.writes().concat())
+            .unwrap()
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        assert!(messages.iter().any(|m| m["prompt"]["id"] == id));
+        assert_eq!(messages.last().unwrap(), &json!({"src":"cli"}));
+        assert!(!t.st.approvals.pending());
+        t.st.devices.remove(&t.st, &child.device_id).unwrap();
+        t.st.devices.remove(&t.st, &outsider.device_id).unwrap();
     }
 }

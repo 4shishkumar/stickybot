@@ -271,6 +271,7 @@ impl Utterance {
         let for_stick = output(&st) == "stick";
         let (v1, v2, voice_name, st2) = (voice.clone(), voice, name(), st.clone());
         let vn2 = voice_name.clone();
+        let generation = st.link.bound_generation();
         let make = tokio::spawn(async move {
             while let Some(Some(sentence)) = rx.recv().await {
                 match v1.synth(sentence.clone(), voice_name.clone(), for_stick).await {
@@ -312,7 +313,10 @@ impl Utterance {
                         }
                     }
                 }
-                v2.play(st2.clone(), batch, vn2.clone()).await;
+                if st2.link.generation() != generation {
+                    return;
+                }
+                st2.link.with_generation(generation, v2.play(st2.clone(), batch, vn2.clone())).await;
             }
         });
         Arc::new(Self {

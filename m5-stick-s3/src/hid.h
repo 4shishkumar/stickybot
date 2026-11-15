@@ -12,6 +12,8 @@ void   loop();                // records pairings, times out unanswered codes
 uint8_t slot();
 const String& name();
 Bt     state();
+void selectHost(uint16_t handle);
+uint16_t selectedHost();
 bool   connected();           // paired + encrypted, ready to send
 
 void down(const Combo& c);    // hold combo

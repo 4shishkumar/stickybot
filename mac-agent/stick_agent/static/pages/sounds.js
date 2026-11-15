@@ -1,6 +1,6 @@
 // Sounds: which sound the stick plays for each moment, its volume, and the
 // sound library (Kenney's CC0 packs) to audition on the stick.
-import {h, clear, card, field, toggle, get, put, post, report} from "../lib.js";
+import {h, clear, card, field, toggle, get, put, post, report, deviceApi} from "../lib.js";
 
 export const title = "Sounds";
 export const subtitle = "What the stick plays and when. Saved on the stick, so they work without this agent.";
@@ -20,6 +20,7 @@ export function actions() {
 }
 
 export async function render(el) {
+  const {get, put, post} = deviceApi();
   root = el;
   const top = h("div", null, h("div", {class: "empty"}, "Asking the stick…"));
   const lib = card("Sound library", h("p", {class: "lead"}, "Kenney's Interface Sounds and UI Audio (public domain). Press a number to hear it on the stick."), h("div", {class: "lib", id: "clipLib"}, h("div", {class: "empty"}, "Loading…")));

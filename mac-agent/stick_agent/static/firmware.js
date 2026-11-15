@@ -2,7 +2,7 @@
 // vs the stick's, "Update over Bluetooth" (stick 1.8.0+, connected; preferred), sticks on
 // USB and "Update via USB" (always works, also for recovery), any other registered updater,
 // with live progress. Used by the Stick page and the setup wizard.
-import {h, clear, get, post, toast} from "./lib.js";
+import {h, clear, toast, deviceApi} from "./lib.js";
 import {streamJob} from "./updates.js";
 
 function sourceLabel(b) {
@@ -25,6 +25,7 @@ function builtDate(iso) {
 
 // firmwarePanel({onDone(ok), backupDefault}) -> element (refreshes itself)
 export function firmwarePanel(opts = {}) {
+  const {get, post, url} = deviceApi();
   const box = h("div", {style: "display:flex;flex-direction:column;gap:14px"});
   let fw = null, job = null, es = null, updaters = [], asking = false;
 
@@ -51,8 +52,8 @@ export function firmwarePanel(opts = {}) {
         refresh();
       }}, "Check for updates");
       box.appendChild(h("div", {class: "notice"}, h("div", {class: "grow"},
-        h("b", null, "No firmware on this Mac yet"),
-        h("span", {class: "dim"}, "The agent downloads the latest release's firmware when it checks for updates. Before the first release, build it from the repo: make -C m5-stick-s3 release.")),
+        h("b", null, fw.unavailable ? "Firmware update unavailable" : "No firmware on this Mac yet"),
+        h("span", {class: "dim"}, fw.unavailable || "The agent downloads the latest release's firmware when it checks for updates. Before the first release, build it from the repo: make -C m5-stick-s3 release.")),
         check));
     }
     const bleOk = !!(fw.connected && fw.connected.ota);
@@ -118,7 +119,7 @@ export function firmwarePanel(opts = {}) {
     const el = h("div", {style: "display:flex;flex-direction:column;gap:8px"});
     job = {id: r.job, el, done: false};
     paint();
-    streamJob("/api/update/jobs", r.job, el, ok => {
+    streamJob(url("/api/update/jobs"), r.job, el, ok => {
       job.done = true;
       toast(ok ? "Firmware updated" : "Firmware update failed", ok ? null : "err");
       if (opts.onDone) opts.onDone(ok);
@@ -155,7 +156,7 @@ export function firmwarePanel(opts = {}) {
       h("div", {class: "notice warn"}, h("div", {class: "grow"}, h("b", null, title), h("span", {class: "dim"}, sub))),
       stage, bar, log, stop ? h("div", {class: "row"}, stop) : null), done: false};
     paint();
-    es = new EventSource(`/api/firmware/jobs/${encodeURIComponent(id)}`);
+    es = new EventSource(url(`/api/firmware/jobs/${encodeURIComponent(id)}`));
     es.onmessage = e => {
       let m;
       try { m = JSON.parse(e.data); } catch (err) { return; }

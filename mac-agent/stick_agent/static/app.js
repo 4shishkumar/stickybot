@@ -1,6 +1,7 @@
 // Dashboard shell: sidebar navigation (hash routing), the live event stream,
 // status polling, and the onboarding wizard.
-import {h, $, clear, store, refreshStatus, recall, remember, STATE_LABEL, get} from "./lib.js";
+import {h, $, clear, store, refreshStatus, recall, remember, STATE_LABEL, get, deviceUrl, deviceId, selectDevice} from "./lib.js";
+import * as devices from "./pages/devices.js";
 import * as overview from "./pages/overview.js";
 import * as activity from "./pages/activity.js";
 import * as commands from "./pages/commands.js";
@@ -15,6 +16,7 @@ import * as install from "./install.js";
 import {mountBanner} from "./updates.js";
 
 const ICON = {
+  devices: '<rect x="3" y="3" width="7" height="18" rx="2"/><rect x="14" y="3" width="7" height="18" rx="2"/><path d="M5 16h3M16 16h3"/>',
   overview: '<rect x="3" y="3" width="7" height="8" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="15" width="7" height="6" rx="1.5"/>',
   activity: '<path d="M4 5h16v10H9l-5 4z"/>',
   commands: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>',
@@ -29,6 +31,7 @@ const PAGES = [
   ["overview", "Overview", overview],
   ["activity", "Activity", activity],
   ["commands", "Quick commands", commands],
+  ["devices", "Devices", devices],
   ["stick", "Stick", stick],
   ["remote", "Remote", remote],
   ["sounds", "Sounds", sounds],
@@ -120,10 +123,15 @@ function paintStatus(s) {
 }
 
 // ---------- live events ----------
+let eventStream = null;
 function connectEvents() {
-  const es = new EventSource("/api/events");
+  if (eventStream) eventStream.close();
+  const selected = deviceId();
+  const es = new EventSource(deviceUrl("/api/events"));
+  eventStream = es;
   es.onopen = () => { store.events = []; store.emit("reset"); refreshStatus(); };
   es.onmessage = e => {
+    if (selected !== deviceId()) return;
     let ev;
     try { ev = JSON.parse(e.data); } catch (err) { return; }
     if (ev.kind === "state") {
@@ -154,13 +162,31 @@ async function maybeOnboard() {
   if (needed) location.hash = "#setup";
 }
 
-store.on((type, data) => { if (type === "status") paintStatus(data); });
+store.on((type, data) => {
+  if (type === "status") paintStatus(data);
+  if (type === "device") {
+    if (current && current.leave) current.leave();
+    const name = currentName;
+    current = null; currentName = null;
+    show(name || "devices");
+    connectEvents();
+    refreshStatus();
+  }
+});
 buildNav();
 mountBanner($("#updateBanner"));
-$("#addStick").addEventListener("click", () => { location.hash = "#setup"; });
+$("#addStick").addEventListener("click", () => { location.hash = store.multiDevice ? "#devices" : "#setup"; });
 window.addEventListener("hashchange", route);
 route();
 connectEvents();
 refreshStatus();
 setInterval(refreshStatus, 5000);
 maybeOnboard();
+get("/api/devices").then(r => {
+  if (r.error) return;
+  store.multiDevice = true;
+  const list = r.devices || [];
+  const saved = recall("device", null);
+  const id = list.some(d => d.id === saved) ? saved : r.default_id;
+  if (id) selectDevice(id);
+});

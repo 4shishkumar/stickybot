@@ -1,7 +1,7 @@
 // Remote: the stick's infrared remote (stick firmware 2.5.0+). The remotes learned on the stick with
 // their buttons (send, star, rename, delete), learning a new button with live status, built-in TV
 // code sets that work without learning, and import / export of everything as JSON.
-import {h, clear, card, field, toggle, get, post, report, toast, store, ask} from "../lib.js";
+import {h, clear, card, field, toggle, get, post, report, toast, store, ask, deviceApi, deviceId, deviceUrl} from "../lib.js";
 
 export const title = "Remote";
 export const subtitle = "The stick as an infrared remote: learn your TV / AC / soundbar buttons, send them from here, the stick or by voice.";
@@ -11,7 +11,7 @@ let root = null, data = null, off = null, learnBox = null;
 export function actions() {
   return [
     h("button", {class: "btn", type: "button", onclick: importFile}, "Import…"),
-    h("a", {class: "btn", href: "/api/ir/export", download: "stickybot-remotes.json"}, "Export"),
+    h("a", {class: "btn", href: deviceUrl("/api/ir/export"), download: "stickybot-remotes.json"}, "Export"),
   ];
 }
 
@@ -25,8 +25,9 @@ export function leave() { if (off) off(); off = null; root = null; }
 
 async function load() {
   if (!root) return;
+  const selected = deviceId();
   const r = await get("/api/ir");
-  if (!root) return;
+  if (!root || selected !== deviceId()) return;
   data = r;
   clear(root);
   if (r.error) { root.appendChild(h("div", {class: "notice err"}, r.error)); return; }
@@ -82,6 +83,7 @@ function onLearn(ev) {
 
 // ---------- the remotes on the stick ----------
 function remotesCard(r) {
+  const {post} = deviceApi();
   const box = h("div", {style: "display:flex;flex-direction:column;gap:14px"});
   if (!r.devices.length) box.appendChild(h("div", {class: "empty"}, "Nothing learned yet. Learn a button above, or install a code set below."));
   for (const d of r.devices) {
@@ -157,6 +159,7 @@ function diagCard() {
 
 // ---------- import ----------
 function importFile() {
+  const {post} = deviceApi();
   const inp = h("input", {type: "file", accept: ".json,application/json"});
   inp.addEventListener("change", async () => {
     const f = inp.files[0];

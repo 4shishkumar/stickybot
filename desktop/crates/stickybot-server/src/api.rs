@@ -146,10 +146,115 @@ pub const PORTED: &[&str] = &[
 pub const NOT_PORTED: &[(&str, &str)] = &[];
 
 pub fn router(state: Arc<AppState>) -> Router {
+    if state.devices.root().is_none()
+        && let Err(e) = state.devices.init(&state)
+    {
+        log::warn!("device registry: {e}");
+    }
+    Router::new()
+        .route("/api/devices", get(device_list).post(device_add))
+        .route("/api/devices/{id}", axum::routing::delete(device_remove))
+        .route("/api/devices/{id}/default", post(device_default))
+        .route("/api/devices/{id}/pause", post(device_pause))
+        .route("/api/devices/{id}/{*path}", axum::routing::any(device_dispatch))
+        .route("/api/host", get(host_get).put(host_put))
+        .fallback(default_dispatch)
+        .layer(middleware::from_fn_with_state(state.clone(), guard))
+        .with_state(state)
+}
+
+async fn device_list(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    axum::Json(st.devices.describe(&st))
+}
+async fn device_add(State(st): State<Arc<AppState>>, axum::Json(body): axum::Json<Value>) -> Response {
+    let Some(address) = body["address"].as_str() else {
+        return err(StatusCode::BAD_REQUEST, "address required");
+    };
+    match st.devices.add(&st, address, body["name"].as_str().unwrap_or("Stick")) {
+        Ok(device) => axum::Json(json!({"ok":true,"id":device.device_id})).into_response(),
+        Err(e) => err(StatusCode::BAD_REQUEST, &e),
+    }
+}
+async fn device_remove(State(st): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    device_result(st.devices.remove(&st, &id))
+}
+async fn device_default(State(st): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    device_result(st.devices.default_to(&st, &id))
+}
+async fn device_pause(
+    State(st): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    let Some(paused) = body["paused"].as_bool() else {
+        return err(StatusCode::BAD_REQUEST, "paused must be boolean");
+    };
+    device_result(st.devices.pause(&st, &id, paused))
+}
+fn device_result(result: Result<(), String>) -> Response {
+    match result {
+        Ok(()) => axum::Json(json!({"ok":true})).into_response(),
+        Err(e) => err(StatusCode::BAD_REQUEST, &e),
+    }
+}
+async fn host_get(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    axum::Json(st.host.json())
+}
+async fn host_put(State(st): State<Arc<AppState>>, axum::Json(body): axum::Json<Value>) -> Response {
+    let Some(label) = body["label"].as_str() else {
+        return err(StatusCode::BAD_REQUEST, "label required");
+    };
+    if let Err(e) = st.host.set_label(label) {
+        return err(StatusCode::BAD_REQUEST, &e);
+    }
+    for device in st.devices.all() {
+        device.link.refresh_hello().await;
+    }
+    axum::Json(st.host.json()).into_response()
+}
+async fn hosts_select(State(st): State<Arc<AppState>>, axum::Json(body): axum::Json<Value>) -> Response {
+    if !st.link.multi_host() {
+        return err(StatusCode::CONFLICT, "This firmware does not support shared Macs");
+    }
+    let Some(id) = body["id"].as_str() else {
+        return err(StatusCode::BAD_REQUEST, "host id required");
+    };
+    if st.link.send(&json!({"src":"agent","hosts":{"select":id}})).await {
+        axum::Json(json!({"ok":true,"confirmation_required":true})).into_response()
+    } else {
+        err(StatusCode::CONFLICT, "Device disconnected")
+    }
+}
+async fn device_dispatch(
+    State(st): State<Arc<AppState>>,
+    Path((id, path)): Path<(String, String)>,
+    mut req: Request,
+) -> Response {
+    use tower::ServiceExt;
+    let Some(device) = st.devices.resolve(&id) else {
+        return err(StatusCode::NOT_FOUND, "Unknown device");
+    };
+    let query = req.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
+    let Ok(uri) = format!("/{path}{query}").parse() else {
+        return err(StatusCode::BAD_REQUEST, "Invalid path");
+    };
+    *req.uri_mut() = uri;
+    session_router(device).oneshot(req).await.unwrap()
+}
+async fn default_dispatch(State(st): State<Arc<AppState>>, req: Request) -> Response {
+    use tower::ServiceExt;
+    let Some(device) = st.devices.default_session() else {
+        return err(StatusCode::NOT_FOUND, "Default device unavailable");
+    };
+    session_router(device).oneshot(req).await.unwrap()
+}
+
+fn session_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(page))
         .route("/static/{*path}", get(static_file))
         .route("/api/status", get(status))
+        .route("/api/hosts/select", post(hosts_select))
         .route("/api/events", get(events))
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/stick/proto", post(stick_proto))
@@ -226,7 +331,8 @@ async fn guard(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Res
     if host != format!("localhost:{}", st.port) && host != format!("127.0.0.1:{}", st.port) {
         return err(StatusCode::FORBIDDEN, "bad host");
     }
-    let mcp = req.uri().path() == "/mcp"; // every method; MCP clients send the token as a bearer token
+    let mcp = req.uri().path() == "/mcp"
+        || (req.uri().path().starts_with("/api/devices/") && req.uri().path().ends_with("/mcp")); // every method; MCP clients send the token as a bearer token
     if mcp || (req.method() != Method::GET && req.method() != Method::HEAD) {
         let h = |k: &str| req.headers().get(k).map(|v| v.as_bytes()).unwrap_or(b"");
         let bearer = h("authorization").strip_prefix(b"Bearer ").unwrap_or(b"");
@@ -333,7 +439,7 @@ async fn mcp_answer(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
         Some(1) => "deny",
         _ => "dismiss",
     };
-    let ok = st.approvals.answer(id, decision, "dashboard");
+    let ok = st.approvals.decide_dashboard(id, decision, &st.device_id);
     (if ok { StatusCode::OK } else { StatusCode::NOT_FOUND }, axum::Json(json!({"ok": ok}))).into_response()
 }
 
@@ -429,9 +535,11 @@ async fn switch_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
     let python = !switched && crate::switch::listening(python_port()).await;
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
     let login_item = if st.fake { None } else { crate::switch::python_login_item(&home, st.import_from.as_deref()) };
-    axum::Json(json!({"switched": switched, "fresh": crate::switch::fresh(&st.paths.home), "port": st.port, "python_running": python,
+    axum::Json(
+        json!({"switched": switched, "fresh": crate::switch::fresh(&st.paths.home), "port": st.port, "python_running": python,
                       "restart_needed": switched != (st.port == crate::switch::PORT),
-                      "python_login_item": login_item}))
+                      "python_login_item": login_item}),
+    )
 }
 
 /// `{"confirm": true}`: take the Python app's place from the next start; `{"undo": true}`: back.
@@ -548,6 +656,16 @@ async fn get_config(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
 async fn put_config(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
     let known = crate::config::defaults();
     let allowed: Map<String, Value> = body_obj(&body).into_iter().filter(|(k, _)| known.contains_key(k)).collect();
+    for setting in ["approval_devices", "notification_devices"] {
+        if let Some(value) = allowed.get(setting).filter(|v| !v.is_null()) {
+            let Some(ids) = value.as_array() else {
+                return err(StatusCode::BAD_REQUEST, "Device destinations must be an array or null");
+            };
+            if ids.iter().any(|id| id.as_str().and_then(|id| st.devices.resolve(id)).is_none()) {
+                return err(StatusCode::BAD_REQUEST, "Unknown device destination");
+            }
+        }
+    }
     let mut bad = crate::config::invalid(&allowed);
     if bad.is_empty() {
         let tunes = crate::events::tune_list(st.sounds().as_ref());
@@ -578,7 +696,14 @@ async fn stick_proto(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json
         return axum::Json(json!({"ok": ok, "via": "ble", "reply": reply, "error": error}));
     }
     // over USB (firmware_api.py `Stick.run`): when Bluetooth isn't there or didn't answer
-    let r = st.usb.run(line).await;
+    let hardware_id = st.host_state.lock().unwrap()["deviceId"].as_str().map(str::to_owned);
+    let r = if let Some(id) = hardware_id {
+        st.usb.run_device(line, &id).await
+    } else if st.device_id == "primary" && st.devices.all().len() <= 1 {
+        st.usb.run(line).await
+    } else {
+        json!({"ok":false,"via":null,"error":"USB identity is unknown for this device; connect it over Bluetooth first"})
+    };
     if ble && r["via"].is_null() && !st.usb.is_flashing() {
         return axum::Json(json!({"ok": false, "via": "ble", "reply": null, "error": "the stick didn't answer"}));
     }
@@ -684,10 +809,13 @@ async fn logs_tail(State(st): State<Arc<AppState>>, Query(q): Query<HistoryQuery
 /// The last `n` (50) requests, newest first (server.py `history`).
 async fn history(State(st): State<Arc<AppState>>, Query(q): Query<HistoryQuery>) -> axum::Json<Value> {
     let text = std::fs::read_to_string(st.paths.history()).unwrap_or_default();
-    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-    let n = q.n.unwrap_or(50);
-    let out: Vec<Value> =
-        lines[lines.len().saturating_sub(n)..].iter().rev().filter_map(|l| serde_json::from_str(l).ok()).collect();
+    let out: Vec<Value> = text
+        .lines()
+        .rev()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| row["device_id"].as_str().unwrap_or("primary") == st.device_id)
+        .take(q.n.unwrap_or(50))
+        .collect();
     axum::Json(Value::Array(out))
 }
 
@@ -799,8 +927,8 @@ async fn permission_decide(State(st): State<Arc<AppState>>, body: Bytes) -> axum
     let b = body_obj(&body);
     let id = b.get("id").and_then(Value::as_str).unwrap_or("");
     let allow = b.get("allow").and_then(Value::as_bool).unwrap_or(false);
-    st.approvals.decide(id, if allow { "allow" } else { "deny" }, "dashboard");
-    axum::Json(json!({"ok": true}))
+    let ok = st.approvals.decide_dashboard(id, if allow { "allow" } else { "deny" }, &st.device_id);
+    axum::Json(json!({"ok": ok}))
 }
 
 async fn clip_list(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
@@ -837,9 +965,24 @@ async fn clip_play(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<V
 
 /// The bundled firmware, sticks on USB (with their versions), the connected stick.
 async fn firmware_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
-    let bundled = st.firmware().first().map(crate::firmware::describe).unwrap_or(Value::Null);
-    let usb = st.usb.sticks().await;
-    axum::Json(json!({"bundled": bundled, "usb": usb, "connected": crate::firmware::connected(&st.link).await}))
+    let connected = crate::firmware::connected(&st.link).await;
+    let mut usb = st.usb.sticks().await;
+    let hardware_id = st.host_state.lock().unwrap()["deviceId"].as_str().map(str::to_owned);
+    if let Some(id) = hardware_id {
+        usb.retain(|entry| entry["deviceId"] == id);
+    } else if st.device_id != "primary" || st.devices.all().len() > 1 {
+        usb.clear();
+    }
+    let bundles = st.firmware();
+    let board = connected["board"]
+        .as_str()
+        .or_else(|| if usb.len() == 1 { usb[0]["board"].as_str() } else { None })
+        .unwrap_or("");
+    let (bundled, unavailable) = match crate::firmware::compatible_bundle(&bundles, board) {
+        Ok(bundle) => (crate::firmware::describe(bundle), Value::Null),
+        Err(reason) => (Value::Null, json!(reason)),
+    };
+    axum::Json(json!({"bundled":bundled,"unavailable":unavailable,"usb":usb,"connected":connected}))
 }
 
 /// Starts a firmware update over Bluetooth: `{"force"}` -> `{"job"}`.
@@ -854,6 +997,23 @@ async fn usb_flash(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
         .map(|ports| ports.iter().any(|p| p.port == port));
     if !matches!(r, Ok(true)) {
         return err(StatusCode::BAD_REQUEST, &format!("{port} isn't an Espressif USB device (not a stick) — refusing"));
+    }
+    let identity = st.host_state.lock().unwrap()["deviceId"].as_str().map(str::to_owned);
+    if identity.is_some() || st.device_id != "primary" || st.devices.all().len() > 1 {
+        let Some(identity) = identity else {
+            return err(StatusCode::CONFLICT, "Selected device's USB identity is unknown");
+        };
+        let usb = st.usb.backend();
+        let selected_port = port.clone();
+        let matches = tokio::task::spawn_blocking(move || {
+            usb.proto(&selected_port, "@state", Duration::from_millis(1500))
+                .is_some_and(|state| state["deviceId"] == identity)
+        })
+        .await
+        .unwrap_or(false);
+        if !matches {
+            return err(StatusCode::CONFLICT, "USB port does not belong to the selected device");
+        }
     }
     match crate::flasher::start(&st, &port, backup) {
         Ok(job) => axum::Json(json!({"job": job})).into_response(),
@@ -1119,8 +1279,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut app: Vec<u8> = (0..n).map(|i| (i * 13 % 251) as u8).collect();
         app[0] = 0xE9;
+        app[12] = 9;
+        app[13] = 0;
         std::fs::write(dir.join("app.bin"), &app).unwrap();
-        let m = json!({"version": version, "parts": [{"file": "app.bin", "offset": "0x10000", "size": n}]});
+        let m = json!({"version": version, "board":"m5-sticks3", "parts": [{"file": "app.bin", "offset": "0x10000", "size": n}]});
         std::fs::write(dir.join("manifest.json"), m.to_string()).unwrap();
     }
 
@@ -1163,10 +1325,13 @@ mod tests {
         let (app2, st, _) = super::tests::app("ota-nobundle", true).await;
         let (s, v, _) = call(&app2, req("POST", "/api/firmware/ota", Some(json!({})), Some(st.token.as_str()))).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
-        assert!(v["error"].as_str().unwrap().contains("no firmware"));
+        assert!(v["error"].as_str().unwrap().contains("compatible firmware"));
         let (_, v, _) = call(&app2, req("GET", "/api/firmware", None, None)).await;
         assert_eq!(v["bundled"], Value::Null);
-        assert_eq!(v["connected"], json!({"name": "StickyBot (fake)", "version": "2.3.0", "ota": true}));
+        assert_eq!(
+            v["connected"],
+            json!({"name": "StickyBot (fake)", "version": "2.3.0", "ota": true,"board":"m5stick-s3","deviceId":null})
+        );
         let (s, _, _) = call(&app2, req("GET", "/api/firmware/jobs/nope", None, None)).await;
         assert_eq!(s, StatusCode::NOT_FOUND);
     }
@@ -1432,9 +1597,15 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(v["latest"]["firmware"], "9.9.0");
         // the fake stick runs older firmware
-        assert_eq!((v["firmware_update"].as_bool(), v["title"].as_str()), (Some(true), Some("Stick firmware 9.9.0 available")));
+        assert_eq!(
+            (v["firmware_update"].as_bool(), v["title"].as_str()),
+            (Some(true), Some("Stick firmware 9.9.0 available"))
+        );
         let (_, v, _) = call(&app, req("GET", "/api/firmware", None, None)).await;
-        assert_eq!((v["bundled"]["version"].as_str(), v["bundled"]["source"].as_str()), (Some("9.9.0"), Some("release")));
+        assert_eq!(
+            (v["bundled"]["version"].as_str(), v["bundled"]["source"].as_str()),
+            (Some("9.9.0"), Some("release"))
+        );
         let (_, v, _) = call(&app, req("GET", "/api/status", None, None)).await;
         assert_eq!(v["update"]["available"], true);
         let (s, v, _) = call(&app, req("POST", "/api/update/agent", Some(json!({})), tok)).await;
@@ -1464,7 +1635,10 @@ mod tests {
         let (_, v, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@state"})), tok)).await;
         assert_eq!((v["via"].as_str(), v["reply"]["fw"].as_str()), (Some("usb"), Some("2.1.0")));
         let (_, v, _) = call(&app, req("GET", "/api/firmware", None, None)).await;
-        assert_eq!(v["usb"], json!([{"port": "/dev/cu.usbmodem9", "serial": "SN1", "version": "2.1.0", "board": "m5stick-s3"}]));
+        assert_eq!(
+            v["usb"],
+            json!([{"port": "/dev/cu.usbmodem9", "serial": "SN1", "version": "2.1.0", "board": "m5stick-s3"}])
+        );
         // no stick on USB either: Bluetooth's answer
         usb.ports.lock().unwrap().clear();
         let (_, v, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@state"})), tok)).await;
@@ -1484,17 +1658,30 @@ mod tests {
             bootloader: Duration::from_millis(100),
         };
         let tok = Some(st.token.as_str());
-        let (s, v, _) = call(&app, req("POST", "/api/firmware/flash", Some(json!({"port": "/dev/cu.other"})), tok)).await;
+        let (s, v, _) =
+            call(&app, req("POST", "/api/firmware/flash", Some(json!({"port": "/dev/cu.other"})), tok)).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
-        let (s, v, _) = call(&app, req("POST", "/api/firmware/flash", Some(json!({"port": "/dev/cu.usbmodem3"})), tok)).await;
+        let (s, v, _) =
+            call(&app, req("POST", "/api/firmware/flash", Some(json!({"port": "/dev/cu.usbmodem3"})), tok)).await;
         assert_eq!(s, StatusCode::CONFLICT);
         assert!(v["error"].as_str().unwrap().contains("no firmware"));
         // a bundle on this Mac
         let d = st.paths.home.join("firmware/local");
         std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("app.bin"), vec![0xE9u8; 64]).unwrap();
-        std::fs::write(d.join("manifest.json"), json!({"version": "2.3.0", "parts": [{"file": "app.bin", "offset": "0x10000", "size": 64}]}).to_string()).unwrap();
-        let (s, v, _) = call(&app, req("POST", "/api/firmware/flash", Some(json!({"port": "/dev/cu.usbmodem3"})), tok)).await;
+        let mut image = vec![0xE9u8; 64];
+        image[12] = 9;
+        image[13] = 0;
+        std::fs::write(d.join("app.bin"), image).unwrap();
+        std::fs::write(d.join("manifest.json"), json!({"version": "2.3.0", "board":"m5-sticks3", "parts": [{"file": "app.bin", "offset": "0x10000", "size": 64}]}).to_string()).unwrap();
+        st.usb.flashing.store(true, std::sync::atomic::Ordering::Release);
+        let (busy, _, _) =
+            call(&app, req("POST", "/api/firmware/flash", Some(json!({"port":"/dev/cu.usbmodem3"})), tok)).await;
+        assert_eq!(busy, StatusCode::CONFLICT);
+        assert!(tool.runs.lock().unwrap().is_empty());
+        assert!(usb.touches.lock().unwrap().is_empty());
+        st.usb.flashing.store(false, std::sync::atomic::Ordering::Release);
+        let (s, v, _) =
+            call(&app, req("POST", "/api/firmware/flash", Some(json!({"port": "/dev/cu.usbmodem3"})), tok)).await;
         assert_eq!(s, StatusCode::OK, "{v}");
         let job = st.jobs.get(v["job"].as_str().unwrap()).unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -1605,7 +1792,11 @@ mod tests {
 
     /// The JSON lines the fake stick got.
     fn stick_lines(fake: &FakeStick) -> Vec<Value> {
-        String::from_utf8(fake.writes().concat()).unwrap().lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+        String::from_utf8(fake.writes().concat())
+            .unwrap()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect()
     }
 
     #[tokio::test]
@@ -1616,7 +1807,10 @@ mod tests {
         assert_eq!(h["home"], json!({"k": "hello", "a": h["home"]["a"], "b": "Hold B to ask me anything."}));
         assert!(h["home"]["a"].as_str().unwrap().starts_with("Good "));
         let w = &h["world"];
-        assert_eq!((w["merged"].as_i64(), w["ci"].as_str(), w["asks"].as_i64(), w["reviews"].as_i64()), (Some(0), Some("none"), Some(0), Some(0)));
+        assert_eq!(
+            (w["merged"].as_i64(), w["ci"].as_str(), w["asks"].as_i64(), w["reviews"].as_i64()),
+            (Some(0), Some("none"), Some(0), Some(0))
+        );
         assert_eq!(w["claude"], json!([]));
         for k in ["xp", "streak", "acc", "seed", "greens", "towers"] {
             assert!(w["pet"].get(k).is_some(), "{k}");
@@ -1625,13 +1819,16 @@ mod tests {
         assert_eq!(h["speak"], true); // the stick's reply view may ask us to read aloud (2.6.0)
         assert!(h.get("wx").is_none());
         // with weather (stick-safe place name)
-        st.home.weather.lock().unwrap().now = Some(json!({"t": 18, "i": "cloudy", "c": "cloudy", "day": 1, "hi": 25, "lo": 11, "at": "Zürich"}));
+        st.home.weather.lock().unwrap().now =
+            Some(json!({"t": 18, "i": "cloudy", "c": "cloudy", "day": 1, "hi": 25, "lo": 11, "at": "Zürich"}));
         let x = crate::home::hello_extra(&st);
         assert_eq!(x["wx"]["at"], "Zurich");
         assert_eq!(st.status()["weather"]["t"], 18);
         // an approval waiting pins the card
         let st2 = st.clone();
-        let wait = tokio::spawn(async move { crate::approvals::ask_permission(&st2, "Bash", "ls", "terminal", Duration::from_secs(5)).await });
+        let wait = tokio::spawn(async move {
+            crate::approvals::ask_permission(&st2, "Bash", "ls", "terminal", Duration::from_secs(5)).await
+        });
         tokio::time::sleep(Duration::from_millis(100)).await;
         let card = crate::home::home_card(&st);
         assert_eq!((card["k"].as_str(), card["u"].as_bool()), (Some("approval"), Some(true)));
@@ -1645,13 +1842,19 @@ mod tests {
         let (app, st, fake) = app("events", true).await;
         let tok = Some(st.token.as_str());
         let (_, v, _) = call(&app, req("GET", "/api/events/kinds", None, None)).await;
-        assert_eq!(v["kinds"]["pr_merged"], json!({"default": "celebrate", "icon": "merge", "title": "PR #5507 merged!"}));
+        assert_eq!(
+            v["kinds"]["pr_merged"],
+            json!({"default": "celebrate", "icon": "merge", "title": "PR #5507 merged!"})
+        );
         assert_eq!(v["levels"], json!(["celebrate", "nice", "headsup", "off"]));
         assert_eq!(v["rules"]["ci_failed"], "headsup");
 
         let (_, v, _) = call(&app, req("POST", "/api/events/test", Some(json!({"kind": "pr_merged"})), tok)).await;
         let ev = &v["event"];
-        assert_eq!((ev["id"].as_str(), ev["level"].as_str(), ev["icon"].as_str()), (Some("e1"), Some("celebrate"), Some("merge")));
+        assert_eq!(
+            (ev["id"].as_str(), ev["level"].as_str(), ev["icon"].as_str()),
+            (Some("e1"), Some("celebrate"), Some("merge"))
+        );
         let sent: Vec<Value> = stick_lines(&fake).into_iter().filter(|l| l.get("event").is_some()).collect();
         assert_eq!(
             sent,
@@ -1659,7 +1862,10 @@ mod tests {
                         "sub": "web - Add stick agent", "icon": "merge", "sound": "applause", "kind": "pr_merged"}})]
         );
         let (_, h, _) = call(&app, req("GET", "/api/events/history?n=5", None, None)).await;
-        assert_eq!((h[0]["kind"].as_str(), h[0]["sent"].as_bool(), h[0]["quiet"].as_bool()), (Some("pr_merged"), Some(true), Some(false)));
+        assert_eq!(
+            (h[0]["kind"].as_str(), h[0]["sent"].as_bool(), h[0]["quiet"].as_bool()),
+            (Some("pr_merged"), Some(true), Some(false))
+        );
         // the stick says it showed it (the loops: offline in fake mode)
         crate::home::spawn(st.clone());
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -1679,13 +1885,20 @@ mod tests {
         // the Stop hook: short tasks feed the pet only; long ones show "Claude finished"
         let (_, p0, _) = call(&app, req("GET", "/api/pet", None, None)).await;
         assert_eq!(p0["pet"]["level"], 1);
-        let (_, v, _) = call(&app, req("POST", "/api/claude-event", Some(json!({"elapsed_s": 30, "cwd": "/x/web"})), None)).await;
+        let (_, v, _) =
+            call(&app, req("POST", "/api/claude-event", Some(json!({"elapsed_s": 30, "cwd": "/x/web"})), None)).await;
         assert_eq!(v["error"], "bad token");
-        let (_, v, _) = call(&app, req("POST", "/api/claude-event", Some(json!({"elapsed_s": 30, "cwd": "/x/web"})), tok)).await;
+        let (_, v, _) =
+            call(&app, req("POST", "/api/claude-event", Some(json!({"elapsed_s": 30, "cwd": "/x/web"})), tok)).await;
         assert_eq!(v, json!({"ok": true, "shown": false}));
         let (_, v, _) = call(
             &app,
-            req("POST", "/api/claude-event", Some(json!({"elapsed_s": 245, "cwd": "/Users/a/code/web/", "prompt": "fix the tests"})), tok),
+            req(
+                "POST",
+                "/api/claude-event",
+                Some(json!({"elapsed_s": 245, "cwd": "/Users/a/code/web/", "prompt": "fix the tests"})),
+                tok,
+            ),
         )
         .await;
         assert_eq!(v, json!({"ok": true, "shown": true}));
@@ -1709,9 +1922,16 @@ mod tests {
         // the stick hasn't told us its sounds yet: the kind's own goes out (2.7.0 falls back by itself)
         let (_, v, _) = call(&app, req("GET", "/api/events/kinds", None, None)).await;
         assert_eq!((v["sounds"]["pr_merged"].as_str(), v["tunes_known"].as_bool()), (Some("applause"), Some(false)));
-        let (_, v, _) =
-            call(&app, req("POST", "/api/events/test", Some(json!({"kind": "ci_failed", "level": "celebrate", "sound": "cheer"})), tok))
-                .await;
+        let (_, v, _) = call(
+            &app,
+            req(
+                "POST",
+                "/api/events/test",
+                Some(json!({"kind": "ci_failed", "level": "celebrate", "sound": "cheer"})),
+                tok,
+            ),
+        )
+        .await;
         assert_eq!((v["event"]["level"].as_str(), v["event"]["sound"].as_str()), (Some("celebrate"), Some("cheer")));
         assert_eq!(last_event()["sound"], "cheer");
         assert_eq!(st.cfg.lock().unwrap()["event_rules"], json!({})); // ▶ saves nothing
@@ -1724,22 +1944,32 @@ mod tests {
         assert_eq!(v["tunes_known"], true);
         assert!(v["tunes"].as_array().unwrap().contains(&json!("beep")));
         // junk level / sound: the saved ones
-        let (_, v, _) =
-            call(&app, req("POST", "/api/events/test", Some(json!({"kind": "ci_failed", "level": "loud", "sound": "../x"})), tok)).await;
+        let (_, v, _) = call(
+            &app,
+            req("POST", "/api/events/test", Some(json!({"kind": "ci_failed", "level": "loud", "sound": "../x"})), tok),
+        )
+        .await;
         assert_eq!((v["event"]["level"].as_str(), v["event"]["sound"].as_str()), (Some("headsup"), Some("")));
         // saving: only names the stick has
-        let (code, v, _) = call(&app, req("PUT", "/api/config", Some(json!({"event_sounds": {"pr_merged": "coins"}})), tok)).await;
+        let (code, v, _) =
+            call(&app, req("PUT", "/api/config", Some(json!({"event_sounds": {"pr_merged": "coins"}})), tok)).await;
         assert_eq!(code, StatusCode::BAD_REQUEST);
         assert!(v["error"].as_str().unwrap().contains("no sound 'coins'"), "{v}");
-        let (code, _, _) =
-            call(&app, req("PUT", "/api/config", Some(json!({"event_sounds": {"pr_merged": "beep", "ci_failed": "off"}})), tok)).await;
+        let (code, _, _) = call(
+            &app,
+            req("PUT", "/api/config", Some(json!({"event_sounds": {"pr_merged": "beep", "ci_failed": "off"}})), tok),
+        )
+        .await;
         assert_eq!(code, StatusCode::OK);
         let (_, v, _) = call(&app, req("POST", "/api/events/test", Some(json!({"kind": "pr_merged"})), tok)).await;
         assert_eq!(v["event"]["sound"], "beep");
         let (_, v, _) = call(&app, req("POST", "/api/events/test", Some(json!({"kind": "ci_failed"})), tok)).await;
         assert_eq!(v["event"]["sound"], "off");
         let (_, v, _) = call(&app, req("GET", "/api/events/kinds", None, None)).await;
-        assert_eq!((v["sounds"]["pr_merged"].as_str(), v["sounds"]["release"].as_str()), (Some("beep"), Some("party_horn")));
+        assert_eq!(
+            (v["sounds"]["pr_merged"].as_str(), v["sounds"]["release"].as_str()),
+            (Some("beep"), Some("party_horn"))
+        );
     }
 
     #[tokio::test]
@@ -1757,8 +1987,10 @@ mod tests {
                     "reviews": {"nodes": []}}]},
                    "asks": {"nodes": []}, "primary": {"releases": {"nodes": []}}})
         };
-        st.update_config(json!({"github": {"on": true, "interval_s": 120, "primary_repo": "acme/web"}}).as_object().unwrap().clone())
-            .unwrap();
+        st.update_config(
+            json!({"github": {"on": true, "interval_s": 120, "primary_repo": "acme/web"}}).as_object().unwrap().clone(),
+        )
+        .unwrap();
         gh.set(Ok(pr(false, "PENDING")));
         crate::home::github_poll(&st).await.unwrap();
         assert!(stick_lines(&fake).iter().all(|l| l.get("event").is_none())); // first look: no events
@@ -1769,7 +2001,10 @@ mod tests {
         crate::home::github_poll(&st).await.unwrap();
         let evs: Vec<Value> = stick_lines(&fake).into_iter().filter_map(|l| l.get("event").cloned()).collect();
         assert_eq!(evs.len(), 1);
-        assert_eq!((evs[0]["title"].as_str(), evs[0]["sub"].as_str()), (Some("PR #7 merged!"), Some("web #7 - Dark mode")));
+        assert_eq!(
+            (evs[0]["title"].as_str(), evs[0]["sub"].as_str()),
+            (Some("PR #7 merged!"), Some("web #7 - Dark mode"))
+        );
         let pet = st.home.pet.lock().unwrap().summary();
         assert_eq!((pet["merged"].as_i64(), pet["greens"].as_i64(), pet["xp"].as_i64()), (Some(1), Some(1), Some(13)));
         // the world went out with the change
@@ -1871,7 +2106,10 @@ mod tests {
         );
         st.link.pause(true);
         let mut w = st.link.watch_state();
-        tokio::time::timeout(Duration::from_secs(5), w.wait_for(|s| *s != LinkState::Connected)).await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(5), w.wait_for(|s| *s != LinkState::Connected))
+            .await
+            .unwrap()
+            .unwrap();
         let e = crate::ir::devices(&st, false).await.unwrap_err();
         assert!(e.contains("isn't connected"), "{e}");
     }
@@ -1882,9 +2120,10 @@ mod tests {
         crate::ir::spawn(st.clone());
         let (_, mut rx) = st.hub.subscribe(0);
         let st2 = st.clone();
-        let task = tokio::spawn(async move {
-            crate::ir::learn_and_wait(&st2, "TV", "Power", false, Duration::from_secs(5)).await
-        });
+        let task =
+            tokio::spawn(
+                async move { crate::ir::learn_and_wait(&st2, "TV", "Power", false, Duration::from_secs(5)).await },
+            );
         for _ in 0..100 {
             if fake.ir(|ir| ir.learning.is_some()) {
                 break;
@@ -1903,7 +2142,10 @@ mod tests {
                 seen.push((e["state"].as_str().unwrap_or("").to_string(), e["step"].as_i64()));
             }
         }
-        assert!(seen.contains(&("learning".into(), Some(1))) && seen.contains(&("learning".into(), Some(2))), "{seen:?}");
+        assert!(
+            seen.contains(&("learning".into(), Some(1))) && seen.contains(&("learning".into(), Some(2))),
+            "{seen:?}"
+        );
         assert_eq!(seen.last().unwrap().0, "saved");
         assert_eq!(st.ir.learn.lock().unwrap().as_ref().unwrap()["state"], "saved");
         assert_eq!(fake.ir(|ir| ir.devices["tv"].clone()), vec![json!({"n": "power", "c": "nec:4:8"})]);
@@ -1970,9 +2212,11 @@ mod tests {
         let (text, err, res) = crate::mcp::call(&st, "ir_list", &json!({}), "test").await;
         assert!(!err && text.contains("ac: cool 24, off"), "{text}");
         assert_eq!(res.unwrap()["devices"]["ac"], json!(["cool 24", "off"]));
-        let (text, err, _) = crate::mcp::call(&st, "ir_send", &json!({"device": "ac", "button": "cool 24"}), "test").await;
+        let (text, err, _) =
+            crate::mcp::call(&st, "ir_send", &json!({"device": "ac", "button": "cool 24"}), "test").await;
         assert!(!err && text == "ac: cool 24 sent", "{text}");
-        let (text, err, _) = crate::mcp::call(&st, "ir_send", &json!({"device": "ac", "button": "heat 30"}), "test").await;
+        let (text, err, _) =
+            crate::mcp::call(&st, "ir_send", &json!({"device": "ac", "button": "heat 30"}), "test").await;
         assert!(err && text.contains("no 'heat 30' button"), "{text}");
         assert!(crate::mcp::allowed_tool_names().contains(&"mcp__stick__ir_send".to_string()));
         assert!(crate::mcp::openai_tools().iter().any(|t| t["function"]["name"] == "ir_list"));
@@ -1988,7 +2232,8 @@ mod tests {
         assert!(r["brands"].get("samsung").is_some());
         let (_, r, _) = call(&app, req("POST", "/api/ir/send", Some(json!({"dev": "tv", "btn": "power"})), tok)).await;
         assert_eq!(r, json!({"ok": true, "result": "tv: power sent"}));
-        let (s, _, _) = call(&app, req("POST", "/api/ir/send", Some(json!({"brand": "sony", "btn": "Mute"})), tok)).await;
+        let (s, _, _) =
+            call(&app, req("POST", "/api/ir/send", Some(json!({"brand": "sony", "btn": "Mute"})), tok)).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(sent(&fake).last().unwrap(), &t3("code", "sony12:1:14", 0));
         let (s, r, _) = call(&app, req("POST", "/api/ir/send", Some(json!({"dev": "tv", "btn": "nope"})), tok)).await;
@@ -1997,7 +2242,8 @@ mod tests {
         let (_, r, _) = call(&app, req("POST", "/api/ir/brand", Some(json!({"dev": "TV", "brand": "lg"})), tok)).await;
         assert_eq!(r["mapped"], json!({"tv": "lg"}));
         assert_eq!(st.cfg.lock().unwrap()["ir_brands"], json!({"tv": "lg"}));
-        let (s, _, _) = call(&app, req("POST", "/api/ir/brand", Some(json!({"dev": "tv", "brand": "acme"})), tok)).await;
+        let (s, _, _) =
+            call(&app, req("POST", "/api/ir/brand", Some(json!({"dev": "tv", "brand": "acme"})), tok)).await;
         assert_eq!(s, StatusCode::NOT_FOUND);
         let (s, _, _) = call(&app, req("POST", "/api/ir/learn", Some(json!({"dev": "tv", "btn": "input"})), tok)).await;
         assert_eq!(s, StatusCode::OK);
@@ -2008,7 +2254,8 @@ mod tests {
         let (s, _, _) = call(&app, req("POST", "/api/ir/rename", Some(b), tok)).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(fake.ir(|ir| ir.devices["tv"][0]["n"].clone()), "on off");
-        let (s, _, _) = call(&app, req("POST", "/api/ir/fav", Some(json!({"dev": "tv", "btn": "on off", "on": true})), tok)).await;
+        let (s, _, _) =
+            call(&app, req("POST", "/api/ir/fav", Some(json!({"dev": "tv", "btn": "on off", "on": true})), tok)).await;
         assert_eq!(s, StatusCode::OK);
         let resp = app.clone().oneshot(req("GET", "/api/ir/export", None, None)).await.unwrap();
         assert!(resp.headers()["content-disposition"].to_str().unwrap().contains("attachment"));
@@ -2029,9 +2276,15 @@ mod tests {
         // not connected: says why
         st.link.pause(true);
         let mut w = st.link.watch_state();
-        tokio::time::timeout(Duration::from_secs(5), w.wait_for(|s| *s != LinkState::Connected)).await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(5), w.wait_for(|s| *s != LinkState::Connected))
+            .await
+            .unwrap()
+            .unwrap();
         let (_, r, _) = call(&app, req("GET", "/api/ir", None, None)).await;
-        assert_eq!((r["connected"].as_bool(), r["why"].as_str()), (Some(false), Some("the stick isn't connected by Bluetooth")));
+        assert_eq!(
+            (r["connected"].as_bool(), r["why"].as_str()),
+            (Some(false), Some("the stick isn't connected by Bluetooth"))
+        );
     }
 
     #[tokio::test]
@@ -2042,9 +2295,12 @@ mod tests {
         let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@state"})), tok)).await;
         assert_eq!(r["reply"]["air"]["mode"], "home");
         assert!(r["reply"]["ir"].is_object());
-        let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@mode name=presenter"})), tok)).await;
+        let (_, r, _) =
+            call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@mode name=presenter"})), tok)).await;
         assert_eq!(r["ok"], true);
-        let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@air sens=7&invx=1&keys=pages"})), tok)).await;
+        let (_, r, _) =
+            call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@air sens=7&invx=1&keys=pages"})), tok))
+                .await;
         assert_eq!((r["reply"]["air"]["sens"].as_i64(), r["reply"]["air"]["invX"].as_bool()), (Some(7), Some(true)));
         assert_eq!(r["reply"]["air"]["mode"], "presenter");
         let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@games"})), tok)).await;
@@ -2065,9 +2321,11 @@ mod tests {
         assert_eq!(r["reply"]["tiles"], "faces,games,air,quick,settings");
         let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@state"})), tok)).await;
         assert_eq!(r["reply"]["launcher"], "fgaqs");
-        let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@launcher tiles=tv"})), tok)).await;
+        let (_, r, _) =
+            call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@launcher tiles=tv"})), tok)).await;
         assert_eq!((r["ok"].as_bool(), r["error"].as_str()), (Some(false), Some("unknown tile: tv")));
-        let (_, r, _) = call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@launcher reset=1"})), tok)).await;
+        let (_, r, _) =
+            call(&app, req("POST", "/api/stick/proto", Some(json!({"line": "@launcher reset=1"})), tok)).await;
         assert_eq!(r["reply"]["launcher"], "grapmfqs");
         // the card itself comes with the Python app's static files
         let (s, body, _) = call(&app, req("GET", "/static/pages/stick.js", None, None)).await;

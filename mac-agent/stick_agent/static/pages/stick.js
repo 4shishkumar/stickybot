@@ -5,7 +5,7 @@
 // folding remembered per browser). Saving a setting never redraws the whole page: the stick's
 // state is asked again and only the cards whose data changed are redrawn in place, keeping
 // the scroll position and the focused control (keepView).
-import {h, $, clear, card, field, toggle, proto, get, put, post, report, toast, store, fmtAgo, recall, remember} from "../lib.js";
+import {h, $, clear, card, field, toggle, proto, get, put, post, report, toast, store, fmtAgo, recall, remember, deviceApi, deviceId} from "../lib.js";
 import {firmwarePanel} from "../firmware.js";
 import {airCard} from "./air.js";
 import {layout, structureKey, slicesOf, changedCards, openSections, summary} from "./stick_layout.js";
@@ -27,6 +27,8 @@ export function actions() {
 
 export function render(el) {
   root = el;
+  st = keys = snd = petInfo = gamesInfo = lastRes = null;
+  market = marketJob = marketMsg = null;
   structure = null; slices = {}; nodes = {}; secs = {};
   wrap = h("div", {class: "stick-page"}, h("div", {class: "empty"}, "Asking the stick…"));
   // which card a click or change came from: a save that fails puts that card's controls back
@@ -47,6 +49,7 @@ export function render(el) {
 
 export function leave() {
   root = wrap = null;
+  seq++;
   clearInterval(timer);
   if (headObs) headObs.disconnect();
   if (unsub) unsub();
@@ -418,7 +421,9 @@ function marketCard() {
 }
 
 async function loadMarket(refresh) {
+  const selected = deviceId();
   const r = await get("/api/faces/catalog" + (refresh ? "?refresh=1" : ""));
+  if (selected !== deviceId()) return;
   market = r;
   paintMarket();
 }
@@ -539,10 +544,12 @@ function fileButton(s) {
     input.value = "";
     if (!file) return;
     if (file.size > 64 * 1024) { showMarketMsg("err", "That file is too big", "A face is 64 KB at most."); return; }
+    const target = deviceApi();
     const bytes = new Uint8Array(await file.arrayBuffer());
+    if (target.id !== deviceId()) return;
     let bin = "";
     for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-    install({file: btoa(bin), name: file.name}, file.name.replace(/\.sfb$/, ""));
+    install({file: btoa(bin), name: file.name}, file.name.replace(/\.sfb$/, ""), target);
   }});
   return h("span", null, input, h("button", {class: "btn ghost", type: "button", disabled: !s.supported || !!(marketJob && !marketJob.done),
     title: "A compiled face (.sfb) from tools/faces/validate.py --compile, for trying your own face before you share it",
@@ -558,22 +565,24 @@ function showMarketMsg(kind, title, text, ...extra) {
 
 const FACE_STAGES = {download: "Downloading and checking", send: "Sending over Bluetooth", verify: "The stick is checking it"};
 
-async function install(body, name) {
+async function install(body, name, target = deviceApi()) {
   marketMsg = null;
-  const r = await post("/api/faces/install", body);
+  const r = await target.post("/api/faces/install", body);
+  if (target.id !== deviceId()) return;
   if (r.error) { showMarketMsg("err", `Couldn't install ${name}`, r.error); return; }
   const bar = h("div", {class: "progress"}, h("i"));
   const stage = h("div", {class: "small dim"}, "Starting…");
   const stop = h("button", {class: "btn sm ghost", type: "button", onclick: async () => {
     stop.disabled = true;
-    const c = await post(`/api/faces/jobs/${encodeURIComponent(r.job)}/cancel`, {});
+    const c = await target.post(`/api/faces/jobs/${encodeURIComponent(r.job)}/cancel`, {});
     if (c.error) { toast(c.error, "err"); stop.disabled = false; }
   }}, "Cancel");
   marketJob = {id: r.job, done: false, el: h("div", {class: "notice market-job"}, h("div", {class: "grow"},
     h("b", null, `Installing ${name}`), h("span", {class: "dim"}, "Keep the stick near this Mac; it takes a few seconds."), stage, bar), stop)};
   paintMarket();
-  const es = new EventSource(`/api/faces/jobs/${encodeURIComponent(r.job)}`);
+  const es = new EventSource(target.url(`/api/faces/jobs/${encodeURIComponent(r.job)}`));
   es.onmessage = e => {
+    if (target.id !== deviceId()) { es.close(); return; }
     let m;
     try { m = JSON.parse(e.data); } catch (err) { return; }
     if (m.progress !== undefined) bar.firstChild.style.width = Math.max(0, Math.min(100, m.progress)) + "%";
@@ -711,16 +720,17 @@ function motionCard() {
 }
 
 function soundCard() {
+  const target = deviceApi(), {put, post} = target;
   if (!snd) return card("Sounds", h("div", {class: "empty"}, "Sound settings come from the stick; it didn't answer."));
   const vol = h("input", {type: "range", id: "stickVol", min: 0, max: 255, value: snd.volume});
   const out = h("span", {class: "num small", style: "width:44px"}, Math.round(snd.volume / 2.55) + "%");
   vol.addEventListener("input", () => { out.textContent = Math.round(vol.value / 2.55) + "%"; });
   vol.addEventListener("change", async () => {
-    if (report(await put("/api/sounds", {volume: +vol.value}))) { snd = {...snd, volume: +vol.value}; update(); } else update(["sounds"]);
+    if (report(await put("/api/sounds", {volume: +vol.value})) && target.id === deviceId()) { snd = {...snd, volume: +vol.value}; update(); } else update(["sounds"]);
     post("/api/sounds/play", {name: "test"});
   });
   const setOn = async e => {
-    if (report(await put("/api/sounds", {on: e.target.checked}), "Saved")) { snd = {...snd, on: e.target.checked}; update(); } else update(["sounds"]);
+    if (report(await put("/api/sounds", {on: e.target.checked}), "Saved") && target.id === deviceId()) { snd = {...snd, on: e.target.checked}; update(); } else update(["sounds"]);
   };
   return card(h("div", {class: "row grow"}, h("h2", null, "Sounds"), h("a", {class: "btn sm", href: "#sounds", style: "margin-left:auto"}, "Choose sounds")),
     field("Sounds", toggle("stickSnd", "Play cues on the stick's speaker", snd.on, setOn)),

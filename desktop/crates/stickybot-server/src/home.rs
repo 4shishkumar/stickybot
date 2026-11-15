@@ -9,10 +9,10 @@
 //! `{"k","a","b","u"}` (+ `"i","n"` for the source dots).
 
 use crate::AppState;
+use crate::connections::agenda::MeetingCard;
 use crate::feed::Feed;
 use crate::net::Http;
 use crate::pet::Pet;
-use crate::connections::agenda::MeetingCard;
 use crate::talk::stick_text;
 use crate::weather::Weather;
 use crate::{events, github};
@@ -134,7 +134,8 @@ impl Home {
 
     pub fn github_status(&self) -> Value {
         let (ok, err) = self.gh_status.lock().unwrap().clone();
-        let tracked = self.gh_state.lock().unwrap().as_ref().and_then(|g| g["prs"].as_object().map(Map::len)).unwrap_or(0);
+        let tracked =
+            self.gh_state.lock().unwrap().as_ref().and_then(|g| g["prs"].as_object().map(Map::len)).unwrap_or(0);
         json!({"ok": ok, "error": err, "tracked": tracked})
     }
 }
@@ -385,7 +386,10 @@ pub fn config_changed(st: &Arc<AppState>, changes: &Map<String, Value>) {
     if changes.contains_key("idle_content") {
         st.home.feed.lock().unwrap().due_now();
     }
-    if changes.contains_key("weather") || changes.contains_key("weather_location") || changes.contains_key("idle_content") {
+    if changes.contains_key("weather")
+        || changes.contains_key("weather_location")
+        || changes.contains_key("idle_content")
+    {
         let st = st.clone();
         let force = changes.contains_key("weather") || changes.contains_key("weather_location");
         tokio::spawn(async move { refresh_weather(&st, force).await });
@@ -440,6 +444,10 @@ pub fn spawn(st: Arc<AppState>) {
             tokio::time::sleep(Duration::from_secs(wait)).await;
         }
     });
+    spawn_observer(st);
+}
+
+pub fn spawn_observer(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     let mut msgs = st.link.messages();
     tokio::spawn(async move {
         loop {
@@ -452,7 +460,7 @@ pub fn spawn(st: Arc<AppState>) {
                 Err(_) => return,
             }
         }
-    });
+    })
 }
 
 #[cfg(test)]
@@ -500,7 +508,10 @@ mod tests {
         let mut i = inp(1000.0);
         assert_eq!(card(&h, &i), greeting(9));
         i.prompts = vec!["Bash".into(), "Edit".into()];
-        assert_eq!(card(&h, &i), json!({"k": "approval", "a": "Claude wants Bash +1", "b": "A yes  ·  B no", "u": true}));
+        assert_eq!(
+            card(&h, &i),
+            json!({"k": "approval", "a": "Claude wants Bash +1", "b": "A yes  ·  B no", "u": true})
+        );
         i.prompts.clear();
         i.asks = vec![("web".into(), "Ship it?".into())];
         assert_eq!(card(&h, &i), json!({"k": "approval", "a": "web asks", "b": "Ship it?", "u": true}));

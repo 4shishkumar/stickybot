@@ -13,6 +13,7 @@
 #include "logic/wispr.h"
 #include "logic/mic_name.h"
 #include "config.h"
+#include "settings.h"
 
 namespace mic {
 
@@ -224,7 +225,7 @@ void loop() {
   }
 }
 
-void usbTalk(bool on) { usbOn = on; }
+void usbTalk(bool on) { usbOn = on && !settings::sharedHosts(); }
 void suspend(bool on) { suspended = on; }
 
 void preRoll() {
@@ -271,12 +272,12 @@ void wisprEnd() {
 
 bool wisprStreaming() { return forWispr && armed; }
 
-bool usbStreaming() { return isStreaming; }
+bool usbStreaming() { return !settings::sharedHosts() && isStreaming; }
 
 static bool vbus = false;
 void setUsbPower(bool on) { vbus = on; }
 #if BOARD_HAS_USB_MIC
-bool usbMounted() { return wispr::usbMounted((bool)USB, vbus); }
+bool usbMounted() { return !settings::sharedHosts() && wispr::usbMounted((bool)USB, vbus); }
 #else
 bool usbMounted() { return false; }
 #endif

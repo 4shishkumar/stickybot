@@ -12,6 +12,24 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- **Several sticks, several Macs.** StickyBot.app's Devices page adds, selects, pauses and removes
+  sticks independently, with a separate default for hooks and tools. On supported firmware,
+  opt into shared mode to pair up to three Macs with one stick; choose the input Mac on the
+  stick, or request a switch from the dashboard and confirm it on the stick.
+- **Recognizable Mac names.** Devices shows the Mac's computer name and lets you set a short
+  name such as Desk or Travel. The stick shows that name for its selected Mac and the Mac
+  asking for an approval. Name changes keep the existing pairing.
+
+### Changed
+- Firmware updates in StickyBot.app select an image for the connected board and check its chip
+  and flash layout before writing. A Plus2 never receives an S3 image. Missing compatible
+  firmware is shown as unavailable; USB devices whose model cannot be verified are refused.
+- Existing Mac slots stay the default. Shared mode preserves them, but Macs paired to a
+  different slot identity may need to pair again. The Mac password is set separately for
+  each shared host; an existing slot password is never copied automatically. Shared mode
+  uses Bluetooth audio so a cable plugged into another Mac cannot receive dictation.
+
 ## [2.6.0] - 2026-11-15
 
 ### Added

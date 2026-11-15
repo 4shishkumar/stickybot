@@ -1,9 +1,10 @@
 // Overview: what needs you, then one card per part of the system.
-import {h, clear, card, store, get, post, proto, approvalCard, fmtTime, fmtAgo, STATE_LABEL, report, refreshStatus} from "../lib.js";
+import {h, clear, card, store, get, post, proto, approvalCard, fmtTime, fmtAgo, STATE_LABEL, report, refreshStatus, deviceId} from "../lib.js";
 
 export const title = "Overview";
 export const subtitle = "Everything at a glance. Hold B on the stick and speak, or type in Activity.";
 
+let deactivate = () => {};
 let off = null, timer = null, stickState = null, firmware = null, last = null, onboarding = null, pauseBtn = null;
 
 export function actions() {
@@ -15,6 +16,10 @@ export function actions() {
 }
 
 export function render(root) {
+  const selected = deviceId();
+  let active = true;
+  deactivate = () => { active = false; };
+  stickState = firmware = last = onboarding = null;
   const approvals = h("div", {class: "list", style: "gap:10px"});
   const setup = h("div");
   const grid = h("div", {class: "cards"});
@@ -48,6 +53,7 @@ export function render(root) {
     const [st, fw, hist, ob] = await Promise.all([
       store.status.link === "connected" ? proto("state") : Promise.resolve(null),
       get("/api/firmware"), get("/api/history?n=1"), get("/api/onboarding")]);
+    if (!active || selected !== deviceId()) return;
     stickState = st && st.ok && st.reply ? st.reply : null;
     firmware = fw && !fw.error ? fw : null;
     last = Array.isArray(hist) && hist.length ? hist[0] : null;
@@ -58,7 +64,7 @@ export function render(root) {
   timer = setInterval(slow, 30000);
 }
 
-export function leave() { if (off) off(); clearInterval(timer); }
+export function leave() { deactivate(); if (off) off(); clearInterval(timer); }
 
 function statCard(label, big, meta, foot, tagEl) {
   return h("section", {class: "card stat"},

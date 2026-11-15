@@ -138,6 +138,23 @@ void saveDevMode(bool on)  { prefs.putBool("devmode", on); }
 bool wirelessMic()            { return prefs.getBool("wmic", true); }
 void saveWirelessMic(bool on)  { prefs.putBool("wmic", on); }
 
+bool sharedHosts() { return prefs.getBool("shared", false); }
+void saveSharedHosts(bool on) { prefs.putBool("shared", on); }
+static String hostKey(uint8_t n, const char* suffix) { return String("host") + n + suffix; }
+String hostRecord(uint8_t n) { return n < SLOTS ? getStr(hostKey(n, "r").c_str()) : String(); }
+void saveHostRecord(uint8_t n, const String& json) {
+  if (n < SLOTS && hostRecord(n) != json) prefs.putString(hostKey(n, "r").c_str(), json);
+}
+String activeHost() { return getStr("host_active"); }
+void saveActiveHost(const String& id) { if (activeHost() != id) prefs.putString("host_active", id); }
+String hostPassword(uint8_t n) { return n < SLOTS ? getStr(hostKey(n, "p").c_str()) : String(); }
+void saveHostPassword(uint8_t n, const String& password) {
+  if (n >= SLOTS) return;
+  String key = hostKey(n, "p");
+  if (password.isEmpty()) prefs.remove(key.c_str());
+  else prefs.putString(key.c_str(), password);
+}
+
 bool needsBondReset() { return !prefs.getBool("slots_v1", false); }
 void bondResetDone()  { prefs.putBool("slots_v1", true); }
 

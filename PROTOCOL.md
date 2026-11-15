@@ -583,3 +583,104 @@ same protocol code, or every duration within 25 %). **Sending**: RMT at 1 µs wi
 **On the stick:** menu → *Remote*: the remotes (and *Favourites*), A opens, B next, B-B previous, hold B
 leaves; in a remote A sends (held: repeats), B-B-B stars, *+ Learn a button* learns. A learn started
 from the Mac shows on the stick too (B cancels).
+
+## 6. Multiple Macs and devices (capability `multiHost`)
+
+This extension is opt-in. Existing firmware and applications retain section 1's slots and
+section 5's single-app messages. A new application first reads `@state`; only firmware with
+`multiHost:1` receives the host extension. New firmware defaults to legacy mode, retains all
+slot bonds, and reports a stable `deviceId`, canonical `board`, and `maxHosts:3`. Device IDs,
+Mac installation IDs and CoreBluetooth peripheral UUIDs are separate identities. Labels never
+identify or authenticate a peer.
+
+### Host handshake and labels
+
+After pairing/encryption, each new app hello includes:
+
+```json
+{"src":"agent","hello":1,"host":{"id":"host-id","name":"Test Laptop","label":"Desk","session":"connection-nonce"}}
+```
+
+`id` is persisted on that Mac installation. `name` is its detected ComputerName (max 80
+characters, bounded UTF-8); `label` is a printable ASCII display label (max 12 characters).
+Automatic labels are transliterated for the stick's fonts; custom labels must fit that character set. An empty user override derives the label from `name`.
+A label change updates the next hello without changing bonds or identity. Firmware retains
+labels for offline hosts. A host record may also include `display`, its disambiguated screen label,
+which dashboards should prefer. Duplicate labels are distinguished with a stable short ID suffix
+in pickers; the short label itself is never a security identity.
+
+The firmware binds the host to the authenticated BLE identity and that connection's session.
+In shared mode every subsequent app JSON write carries `hs` equal to this session. Handshake
+is allowed before `hs` is established; a different host ID cannot overwrite an existing bonded
+peer's identity. A new session invalidates old requests; invalid session, unencrypted writes,
+unknown hosts and malformed/oversized names are refused. Binary streams are owned by the
+connection/session that started them. RX line assembly is per connection. TX/audio/HID
+notifications select one connection explicitly; private TX/audio data is not available through
+shared characteristic reads. Notifications never broadcast private replies to subscribed peers.
+
+### State, selection and mode
+
+`@hosts` queries the bounded host list. Its response, and the unsolicited host-state event, use:
+
+```json
+{"src":"agent","evt":"hosts","shared":true,"active":"host-id","deviceId":"device-id","board":"m5-sticks3","multiHost":1,"maxHosts":3,"hosts":[{"id":"host-id","name":"Test Laptop","label":"Desk","online":true,"app":true,"active":true}]}
+```
+
+`@hosts shared=1` explicitly enables shared mode using the current slot's persistent Bluetooth
+identity; the command explains that other slot identities may need guided re-pairing. `shared=0`
+returns to legacy mode without deleting saved slots or bonds. An old app is supported in legacy
+mode; it must upgrade before participating in shared mode. The XIAO C3 has no Mac-link extension
+and retains its existing keyboard behavior.
+
+`{"src":"agent","hs":"connection-nonce","hosts":{"select":"host-id"}}` requests a focus
+change; a request from an app requires physical confirmation. The stick's host picker can select
+an authenticated connected host directly. Selection releases all keyboard/mouse state on the
+old peer first and waits/refuses while recording or a transfer is busy. Reconnection never
+changes focus; loss of the focused host stops input rather than choosing another host.
+
+Keyboard/mouse/media/unlock and new voice requests go only to the selected host. The screen
+shows its short label. Approval/event UI also shows the origin host, which can differ from the
+selected input host. Replies and cancellation go only to the originating host and session.
+Host heartbeats expire independently; an OS HID connection can remain after its app quits.
+Settings queries can be answered to their requester; mutations must respect focus and resource
+ownership. One operation owns each microphone, speaker and bulk transfer channel. Another host
+gets a bounded busy response instead of changing someone else's operation. Disconnect/restart
+revokes the connection lease; stale binary frames or responses never attach to a later operation.
+Firmware/face transfer state retains its existing three-minute resume window: only the same
+saved bonded host can reclaim it with a fresh-session `begin`/`put` before sending more bytes.
+
+Passwords in shared mode belong to authenticated host records and remain write-only. A legacy
+global unlock password is not automatically assigned to all hosts. USB mounted alone does not
+identify its Mac: shared mode uses wireless audio unless association with the selected Mac is
+verified, so a cable cannot redirect speech to another computer.
+
+### Mac app device routing
+
+The Rust app maintains multiple independent device sessions, with one persisted default for
+legacy hooks and unscoped API calls. CoreBluetooth IDs are local transport addresses; physical
+`deviceId` deduplicates a board across transports when available. Old single `stick` configuration
+migrates without discarding preferences. Discovery never automatically enrolls unrelated devices.
+
+- `GET /api/devices`: configured device list, default ID and local host metadata.
+- `POST /api/devices` with `{address,name}`: explicitly add a scanned target.
+- `DELETE /api/devices/{id}`: remove/pause only that device.
+- `POST /api/devices/{id}/default`: choose default for unscoped calls.
+- `POST /api/devices/{id}/pause` with `{paused:true|false}`: pause/resume only that device.
+- `/api/devices/{id}/api/...`: existing API route against that immutable device session.
+- `GET /api/host` and `PUT /api/host` with `{label:"Desk"}`: local Mac name/effective short
+  label; empty label restores the automatic abbreviation.
+
+Device events include `device_id`; changing a browser view never retargets an existing job.
+A missing device returns an explicit error rather than falling back to the default. MCP tools
+can select `device_id`; omitted IDs use the default. Shared dashboard clients capability-gate
+the device manager and retain the legacy single-device UI when these endpoints are absent.
+
+Voice replies retain originating device/session. A shared speech model and Mac audio device
+are arbitrated: only one dictation stream runs per Mac, with explicit busy responses to others.
+Approval requests sent to multiple configured destinations resolve once, then clear all other
+displays. Notifications default to the default device; additional destinations are explicit.
+Mac config `notification_devices` and `approval_devices` are `null` for the default, an array of
+configured IDs for those destinations, or `[]` for no hardware destinations. The Devices page
+edits these through `/api/devices/primary/api/config`, independent of the selected/default view.
+Firmware operations bind to a device and require compatible board/chip/layout metadata before
+any BLE/USB write. Missing compatible firmware means unavailable, never a different board's image.

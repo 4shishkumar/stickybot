@@ -244,7 +244,7 @@ impl Default for Ir {
 
 /// The stick's `{"evt":"ir","state":…}` messages become `ir` events for the Remote page (and the
 /// learn's state). Called once at start (tests call it themselves).
-pub fn spawn(st: Arc<AppState>) {
+pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     let mut msgs = st.link.messages();
     tokio::spawn(async move {
         loop {
@@ -254,7 +254,7 @@ pub fn spawn(st: Arc<AppState>) {
                 Err(_) => return,
             }
         }
-    });
+    })
 }
 
 fn on_message(st: &AppState, m: &Value) {

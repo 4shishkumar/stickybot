@@ -72,6 +72,7 @@ struct MenuView {
 };
 
 void begin();
+void drawHostLabel(const String& label);
 void setFlipped(bool flipped);
 // Auto-rotate: flipped = the portrait way up; side 0 = portrait, +1 / -1 = landscape
 // (rotation 1, button A on the right / rotation 3, A on the left) for the screens that

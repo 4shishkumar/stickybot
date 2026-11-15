@@ -27,7 +27,11 @@ pub fn load_bundle(folder: &Path, source: &str) -> Option<Value> {
     let mut m: Value = serde_json::from_str(&std::fs::read_to_string(folder.join("manifest.json")).ok()?).ok()?;
     let mut files = Vec::new();
     for p in m.get("parts")?.as_array()? {
-        let path = folder.join(p.get("file")?.as_str()?);
+        let name = p.get("file")?.as_str()?;
+        if Path::new(name).components().count() != 1 || name == "." || name == ".." {
+            return None;
+        }
+        let path = folder.join(name);
         let len = std::fs::metadata(&path).ok().filter(|m| m.is_file())?.len();
         if p.get("size").and_then(Value::as_u64).is_some_and(|s| s != len) {
             return None;
@@ -43,6 +47,86 @@ pub fn load_bundle(folder: &Path, source: &str) -> Option<Value> {
     Some(m)
 }
 
+/// Board names used by older S3 releases are aliases, never a wildcard.
+pub fn canonical_board(board: &str) -> Option<&'static str> {
+    match board {
+        "m5stick-s3" | "m5-sticks3" => Some("m5-sticks3"),
+        "m5-stickc-plus2" => Some("m5-stickc-plus2"),
+        _ => None,
+    }
+}
+
+fn board_chip(board: &str) -> Result<(&'static str, u16), String> {
+    match canonical_board(board) {
+        Some("m5-sticks3") => Ok(("esp32s3", 9)),
+        Some("m5-stickc-plus2") => Ok(("esp32", 0)),
+        _ => Err("Device model is unknown; a compatible firmware update is unavailable".into()),
+    }
+}
+
+/// Reject mismatched board/chip/layout before any transport can write an image.
+pub fn check_board(fw: &Value, board: &str) -> Result<(), String> {
+    let (chip, _) = board_chip(board)?;
+    if canonical_board(fw["board"].as_str().unwrap_or("")) != canonical_board(board) {
+        return Err(format!("No compatible firmware bundle for {board}; this update is unavailable"));
+    }
+    if fw["flash"]["chip"].as_str().is_some_and(|value| value != chip) {
+        return Err("Firmware board and chip do not match; refusing update".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut app = false;
+    for part in fw["parts"].as_array().into_iter().flatten() {
+        let name = part["file"].as_str().unwrap_or("");
+        let expected = match name {
+            "bootloader.bin" => {
+                if chip == "esp32" {
+                    0x1000
+                } else {
+                    0
+                }
+            }
+            "partitions.bin" => 0x8000,
+            "boot_app0.bin" => 0xe000,
+            "app.bin" => {
+                app = true;
+                0x10000
+            }
+            _ => return Err("Unknown firmware part; refusing an unverified flash layout".into()),
+        };
+        let offset = u64::from_str_radix(part["offset"].as_str().unwrap_or("").trim_start_matches("0x"), 16).ok();
+        let limit = match name {
+            "bootloader.bin" => 0x8000 - expected,
+            "partitions.bin" => 0x1000,
+            "boot_app0.bin" => 0x2000,
+            _ => 0x330000,
+        };
+        if offset != Some(expected) || !seen.insert(name) || part["size"].as_u64().is_none_or(|n| n == 0 || n > limit) {
+            return Err("Firmware layout does not match this board; refusing update".into());
+        }
+    }
+    if !app {
+        return Err("Firmware bundle has no app image".into());
+    }
+    Ok(())
+}
+
+pub fn compatible_bundle<'a>(bundles: &'a [Value], board: &str) -> Result<&'a Value, String> {
+    board_chip(board)?;
+    bundles
+        .iter()
+        .find(|fw| check_board(fw, board).is_ok())
+        .ok_or_else(|| format!("No compatible firmware bundle for {board}; this update is unavailable"))
+}
+
+/// ESP image header includes the silicon id at byte 12, independent of filenames.
+pub fn check_image_board(data: &[u8], board: &str) -> Result<(), String> {
+    let (_, chip) = board_chip(board)?;
+    if data.len() < 24 || data[0] != 0xe9 || u16::from_le_bytes([data[12], data[13]]) != chip {
+        return Err("Firmware image targets a different chip or has an invalid header; refusing update".into());
+    }
+    Ok(())
+}
+
 fn version_key(v: &str) -> Vec<u64> {
     ota::version_tuple(v)
 }
@@ -52,10 +136,17 @@ pub fn bundles(root: &Path, extra: Option<&Path>) -> Vec<Value> {
     let mut found: Vec<(Value, u8)> = Vec::new();
     for d in std::fs::read_dir(root).into_iter().flatten().flatten() {
         let name = d.file_name().to_string_lossy().to_string();
-        if name == "local" {
-            found.extend(load_bundle(&d.path(), "local").map(|b| (b, 2)));
+        let (source, rank) = if name == "local" {
+            ("local", 2)
         } else if !version_key(&name).is_empty() {
-            found.extend(load_bundle(&d.path(), "release").map(|b| (b, 1)));
+            ("release", 1)
+        } else {
+            continue;
+        };
+        found.extend(load_bundle(&d.path(), source).map(|b| (b, rank)));
+        // A version can contain separate bundles for multiple supported boards.
+        for board in ["m5-sticks3", "m5-stickc-plus2"] {
+            found.extend(load_bundle(&d.path().join(board), source).map(|b| (b, rank)));
         }
     }
     if let Some(e) = extra {
@@ -72,6 +163,8 @@ pub fn bundles(root: &Path, extra: Option<&Path>) -> Vec<Value> {
 /// The app image of the best bundle (ota.py `bundled_app`), checked against its manifest.
 pub fn bundled_app(fw: Option<&Value>) -> Result<Image, String> {
     let fw = fw.ok_or("no firmware yet — put a bundle in ~/.stickybot-rs/firmware/local (make -C m5-stick-s3 release, then copy it) or set STICKYBOT_RS_FIRMWARE")?;
+    let board = fw["board"].as_str().unwrap_or("");
+    check_board(fw, board)?;
     let part = fw["parts"]
         .as_array()
         .into_iter()
@@ -96,6 +189,7 @@ pub fn bundled_app(fw: Option<&Value>) -> Result<Image, String> {
     if data.first() != Some(&0xE9) {
         return Err("the bundled app.bin isn't an ESP32 app image — refusing".into());
     }
+    check_image_board(&data, board)?;
     // signing: not implemented yet (ota.py verify_signature); the sha256 + the bonded link is all
     Ok(Image::new(data, fw["version"].as_str().unwrap_or("?")))
 }
@@ -219,6 +313,7 @@ pub async fn preflight(link: &Link<Backend>, img: &Image, force: bool) -> Result
             "the stick's firmware {fw} can't update over Bluetooth — update it once over USB (1.8.0 or newer)"
         ));
     }
+    check_image_board(&img.data, st["board"].as_str().unwrap_or(""))?;
     if st.get("otaPending").and_then(Value::as_bool) == Some(true) {
         return Err(ota::PENDING.into());
     }
@@ -306,12 +401,21 @@ pub fn start_ota(st: &Arc<AppState>, force: bool, t: UpdateTimings) -> Result<St
         // one transfer at a time over the OTA characteristic
         return Err((409, "a face is being installed; try again when it's done".into()));
     }
-    let img = bundled_app(st.firmware().first()).map_err(|e| (400, e))?;
+    let bundles = st.firmware();
+    if bundles.is_empty() {
+        return Err((400, "No compatible firmware bundle is available".into()));
+    }
     let job = Job::new();
     st.jobs.add(job.clone());
     let (link, j) = (st.link.clone(), job.clone());
     tokio::spawn(async move {
-        let r = update(link, img, force, j.clone(), t).await;
+        let r = async {
+            let state = link.request("@state").await.ok_or("The stick did not identify its model")?;
+            let fw = compatible_bundle(&bundles, state["board"].as_str().unwrap_or(""))?;
+            let img = bundled_app(Some(fw))?;
+            update(link, img, force, j.clone(), t).await
+        }
+        .await;
         match &r {
             Ok(_) => log::info!("bluetooth update: ok"),
             Err(e) => log::info!("bluetooth update: {e}"),
@@ -331,7 +435,9 @@ pub async fn connected(link: &Link<Backend>) -> Value {
         return Value::Null;
     }
     match link.request("@state").await {
-        Some(st) => json!({"name": st.get("name"), "version": st.get("fw"), "ota": ota::supported(&st)}),
+        Some(st) => {
+            json!({"name": st.get("name"), "version": st.get("fw"), "ota": ota::supported(&st), "board": st.get("board"), "deviceId": st.get("deviceId")})
+        }
         None => Value::Null,
     }
 }
@@ -362,8 +468,10 @@ mod tests {
     }
 
     fn app(n: usize) -> Vec<u8> {
-        let mut d = vec![7u8; n];
+        let mut d = vec![7u8; n.max(24)];
         d[0] = 0xE9;
+        d[12] = 9;
+        d[13] = 0;
         d
     }
 
@@ -408,5 +516,41 @@ mod tests {
         std::fs::remove_file(root.join("1.8.1/bootloader.bin")).unwrap();
         assert!(bundles(&root, None).is_empty());
         assert!(bundled_app(None).unwrap_err().contains("no firmware"));
+    }
+    #[test]
+    fn bundles_are_selected_by_board_not_only_version() {
+        let root = tmp("boards");
+        make_bundle(&root.join("9.0.0"), "9.0.0", &app(40));
+        make_bundle(&root.join("1.0.0"), "1.0.0", &app(40));
+        let mut m: Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("1.0.0/manifest.json")).unwrap()).unwrap();
+        m["board"] = json!("m5-stickc-plus2");
+        m["parts"][0]["offset"] = json!("0x1000");
+        std::fs::write(root.join("1.0.0/manifest.json"), m.to_string()).unwrap();
+        let all = bundles(&root, None);
+        assert_eq!(compatible_bundle(&all, "m5-stickc-plus2").unwrap()["version"], "1.0.0");
+        assert_eq!(compatible_bundle(&all, "m5-sticks3").unwrap()["version"], "9.0.0");
+        assert!(compatible_bundle(&all, "unknown").unwrap_err().contains("unknown"));
+        assert!(compatible_bundle(&all[..1], "m5-stickc-plus2").unwrap_err().contains("unavailable"));
+        // An image mislabeled as Plus2 is rejected even with a valid checksum.
+        assert!(bundled_app(Some(&all[1])).unwrap_err().contains("different chip"));
+    }
+
+    #[test]
+    fn board_chip_and_layout_are_checked_independently() {
+        let root = tmp("layout");
+        make_bundle(&root, "1.0.0", &app(40));
+        let mut fw = load_bundle(&root, "local").unwrap();
+        assert!(check_board(&fw, "m5-sticks3").is_ok());
+        fw["flash"] = json!({"chip": "esp32"});
+        assert!(check_board(&fw, "m5-sticks3").unwrap_err().contains("chip"));
+        fw["flash"]["chip"] = json!("esp32s3");
+        fw["parts"][1]["offset"] = json!("0x9000");
+        assert!(check_board(&fw, "m5-sticks3").unwrap_err().contains("layout"));
+        assert!(check_image_board(&[0xe9], "m5-sticks3").is_err());
+        assert!(check_image_board(&app(40), "m5-stickc-plus2").is_err());
+        let mut plus = app(40);
+        plus[12] = 0;
+        assert!(check_image_board(&plus, "m5-stickc-plus2").is_ok());
     }
 }

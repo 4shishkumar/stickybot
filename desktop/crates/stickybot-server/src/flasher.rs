@@ -54,7 +54,11 @@ fn find_esptool() -> Option<(PathBuf, Vec<String>)> {
     for d in &dirs {
         let py = d.join("python3");
         if py.is_file()
-            && Command::new(&py).args(["-c", "import esptool"]).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
+            && Command::new(&py)
+                .args(["-c", "import esptool"])
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
         {
             return Some((py, vec!["-m".into(), "esptool".into()]));
         }
@@ -105,7 +109,8 @@ pub fn progress(line: &str) -> Option<u32> {
 /// Refuses any part whose erase range (whole 4 KB sectors) overlaps NVS.
 pub fn check_parts(parts: &[(String, PathBuf)]) -> Result<(), String> {
     for (offset, path) in parts {
-        let start = u64::from_str_radix(offset.trim_start_matches("0x"), 16).map_err(|_| format!("bad offset {offset}"))?;
+        let start =
+            u64::from_str_radix(offset.trim_start_matches("0x"), 16).map_err(|_| format!("bad offset {offset}"))?;
         let len = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
         let (first, last) = (start / SECTOR * SECTOR, (start + len).div_ceil(SECTOR) * SECTOR);
         if first < NVS.1 && last > NVS.0 {
@@ -136,18 +141,22 @@ pub struct FlashTimings {
 
 impl Default for FlashTimings {
     fn default() -> Self {
-        Self { settle: Duration::from_millis(600), poll: Duration::from_millis(300), bootloader: Duration::from_secs(12) }
+        Self {
+            settle: Duration::from_millis(600),
+            poll: Duration::from_millis(300),
+            bootloader: Duration::from_secs(12),
+        }
     }
 }
 
 /// After the touch the port disappears and the bootloader's comes back (maybe under a new name).
-fn wait_for_bootloader(usb: &dyn Usb, old: &str, t: &FlashTimings) -> Result<String, String> {
+fn wait_for_bootloader(usb: &dyn Usb, old: &str, serial: &str, t: &FlashTimings) -> Result<String, String> {
     let deadline = Instant::now() + t.bootloader;
     std::thread::sleep(t.settle);
     while Instant::now() < deadline {
         let boot: Vec<_> = usb.sticks().into_iter().filter(|p| p.in_bootloader()).collect();
-        if !boot.is_empty() {
-            return Ok(boot.iter().find(|p| p.port == old).unwrap_or(&boot[0]).port.clone());
+        if let Some(port) = boot.iter().find(|p| if serial.is_empty() { p.port == old } else { p.serial == serial }) {
+            return Ok(port.port.clone());
         }
         std::thread::sleep(t.poll);
     }
@@ -195,24 +204,53 @@ pub fn flash(f: &Flash, emit: &dyn Fn(Value)) -> Result<(), String> {
     }
     check_parts(&parts)?;
     let info = f.usb.ports().into_iter().find(|p| p.port == f.port).ok_or_else(|| not_a_stick(&f.port))?;
+    let state = f
+        .usb
+        .proto(&f.port, "@state", Duration::from_millis(1500))
+        .ok_or("Device model cannot be verified over USB; update unavailable. Start its firmware and try again.")?;
+    crate::firmware::check_board(&f.fw, state["board"].as_str().unwrap_or(""))?;
+    crate::firmware::bundled_app(Some(&f.fw))?;
+    // Check every part's hash, not only the app, before resetting the selected device.
+    for part in f.fw["parts"].as_array().into_iter().flatten() {
+        let path = parts
+            .iter()
+            .find(|(offset, _)| offset == part["offset"].as_str().unwrap_or(""))
+            .map(|(_, path)| path)
+            .ok_or("Missing firmware part")?;
+        if part["file"] == "bootloader.bin" {
+            let data = std::fs::read(path).map_err(|e| e.to_string())?;
+            crate::firmware::check_image_board(&data, state["board"].as_str().unwrap_or(""))?;
+        }
+        if let Some(expected) = part["sha256"].as_str()
+            && crate::releases::sha256_file(path).as_deref() != Some(expected)
+        {
+            return Err("Firmware part does not match its manifest; refusing update".into());
+        }
+    }
     let flash_cfg = &f.fw["flash"];
+    let classic = crate::firmware::canonical_board(state["board"].as_str().unwrap_or("")) == Some("m5-stickc-plus2");
+    let chip = if classic { "esp32" } else { "esp32s3" };
+    let reset = if classic { "default-reset" } else { "usb-reset" };
     let cfg = |k: &str, d: &str| flash_cfg.get(k).and_then(Value::as_str).unwrap_or(d).to_string();
 
     // 1. into the bootloader
     emit(json!({"progress": 0, "stage": "reset"}));
-    let boot = if info.in_bootloader() {
+    let boot = if classic {
+        // Plus2's CH9102 bridge keeps the same port; esptool drives its reset pins.
+        f.port.clone()
+    } else if info.in_bootloader() {
         emit(json!({"line": format!("{} is already in download mode", f.port)}));
         f.port.clone()
     } else {
         emit(json!({"line": format!("resetting {} into download mode (1200-baud touch)", f.port)}));
         f.usb.touch_1200(&f.port)?;
-        let b = wait_for_bootloader(f.usb, &f.port, &f.timings)?;
+        let b = wait_for_bootloader(f.usb, &f.port, &info.serial, &f.timings)?;
         emit(json!({"line": format!("bootloader on {b}")}));
         b
     };
     emit(json!({"progress": 100, "stage": "reset"}));
     let base: Vec<String> =
-        vec!["--chip".into(), cfg("chip", "esp32s3"), "--port".into(), boot, "--baud".into(), "921600".into()];
+        vec!["--chip".into(), cfg("chip", chip), "--port".into(), boot, "--baud".into(), "921600".into()];
 
     // 2. optional backup of the whole flash
     if f.backup {
@@ -221,7 +259,7 @@ pub fn flash(f: &Flash, emit: &dyn Fn(Value)) -> Result<(), String> {
         std::fs::create_dir_all(&f.backups).map_err(|e| format!("{}: {e}", f.backups.display()))?;
         emit(json!({"line": format!("backing up the stick's flash to {}", out.display())}));
         let mut a = base.clone();
-        a.extend(["--before", "usb-reset", "--after", "no-reset", "read-flash", "0x0", "0x800000"].map(String::from));
+        a.extend(["--before", reset, "--after", "no-reset", "read-flash", "0x0", "0x800000"].map(String::from));
         a.push(out.to_string_lossy().into_owned());
         run_esptool(f.esptool, a, emit, "backup")?;
     }
@@ -230,7 +268,7 @@ pub fn flash(f: &Flash, emit: &dyn Fn(Value)) -> Result<(), String> {
     // PlatformIO): after the touch the chip is held in download mode, and only esptool's USB reset
     // lets the final hard reset start the new firmware.
     let mut a = base;
-    a.extend(["--before", "usb-reset", "--after", "hard-reset", "write-flash"].map(String::from));
+    a.extend(["--before", reset, "--after", "hard-reset", "write-flash"].map(String::from));
     a.extend(["--flash-mode".into(), cfg("mode", "dio"), "--flash-freq".into(), cfg("freq", "80m")]);
     a.extend(["--flash-size".into(), cfg("size", "8MB")]);
     for (off, path) in &parts {
@@ -257,16 +295,32 @@ pub fn start(st: &Arc<AppState>, port: &str, backup: bool) -> Result<String, (u1
     if st.jobs.busy() {
         return Err((409, "a flash is already running".into()));
     }
-    let fw = st.firmware().into_iter().next().ok_or((409, NO_FIRMWARE.to_string()))?;
+    let bundles = st.firmware();
+    if bundles.is_empty() {
+        return Err((409, NO_FIRMWARE.to_string()));
+    }
+    // The shared USB controller has one flashing mode; reserve it before spawning so
+    // simultaneous requests from different device sessions cannot clear each other's guard.
+    if st
+        .usb
+        .flashing
+        .compare_exchange(false, true, std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire)
+        .is_err()
+    {
+        return Err((409, "another USB flash is already running".into()));
+    }
     let job = Job::new();
     st.jobs.add(job.clone());
     let (st2, j, port) = (st.clone(), job.clone(), port.to_string());
     let tool = st.esptool();
     let timings = st.flash_timings.lock().unwrap().clone();
     tokio::spawn(async move {
-        st2.usb.flashing.store(true, std::sync::atomic::Ordering::Relaxed);
         let (j2, p2, backups) = (j.clone(), port.clone(), st2.paths.home.join("backups"));
         let r = tokio::task::spawn_blocking(move || {
+            let state = usb
+                .proto(&p2, "@state", Duration::from_millis(1500))
+                .ok_or("Device model cannot be verified over USB; update unavailable")?;
+            let fw = crate::firmware::compatible_bundle(&bundles, state["board"].as_str().unwrap_or(""))?.clone();
             let f = Flash { usb: &*usb, esptool: &*tool, port: p2, backup, fw, backups, timings };
             flash(&f, &|e| j2.emit(e))
         })
@@ -308,7 +362,11 @@ pub mod tests {
         fn run(&self, args: &[String], line: &mut dyn FnMut(&str)) -> Result<i32, String> {
             self.runs.lock().unwrap().push(args.to_vec());
             line("esptool.py v4.8.1");
-            for p in ["Writing at 0x00010000... (10 %)", "Writing at 0x00020000... (10 %)", "Writing at 0x00090000... (100 %)"] {
+            for p in [
+                "Writing at 0x00010000... (10 %)",
+                "Writing at 0x00020000... (10 %)",
+                "Writing at 0x00090000... (100 %)",
+            ] {
                 line(p);
             }
             line("Hash of data verified.");
@@ -320,9 +378,15 @@ pub mod tests {
         let d = std::env::temp_dir().join(format!("stickybot-flash-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("bootloader.bin"), vec![1u8; 100]).unwrap();
-        std::fs::write(d.join("app.bin"), vec![0xE9u8; 5000]).unwrap();
-        let m = json!({"version": "2.3.0", "flash": {"mode": "qio"}, "parts": [
+        let mut boot = vec![0u8; 100];
+        boot[0] = 0xe9;
+        boot[12] = 9;
+        std::fs::write(d.join("bootloader.bin"), boot).unwrap();
+        let mut app = vec![0u8; 5000];
+        app[0] = 0xe9;
+        app[12] = 9;
+        std::fs::write(d.join("app.bin"), app).unwrap();
+        let m = json!({"version": "2.3.0", "board": "m5-sticks3", "flash": {"mode": "qio", "chip": "esp32s3"}, "parts": [
             {"file": "bootloader.bin", "offset": "0x0", "size": 100},
             {"file": "app.bin", "offset": app_offset, "size": 5000}]});
         std::fs::write(d.join("manifest.json"), m.to_string()).unwrap();
@@ -369,10 +433,15 @@ pub mod tests {
         assert_eq!(*usb.touches.lock().unwrap(), vec!["/dev/cu.usbmodem1".to_string()]);
         let runs = tool.runs.lock().unwrap();
         assert_eq!(runs.len(), 2);
-        assert!(runs[0].join(" ").contains("--port /dev/cu.usbmodem2 --baud 921600 --before usb-reset --after no-reset read-flash 0x0 0x800000"));
+        assert!(runs[0].join(" ").contains(
+            "--port /dev/cu.usbmodem2 --baud 921600 --before usb-reset --after no-reset read-flash 0x0 0x800000"
+        ));
         assert!(runs[0].last().unwrap().starts_with(&backups.join("SN1-").to_string_lossy().into_owned()));
         let w = runs[1].join(" ");
-        assert!(w.contains("--after hard-reset write-flash --flash-mode qio --flash-freq 80m --flash-size 8MB 0x0 "), "{w}");
+        assert!(
+            w.contains("--after hard-reset write-flash --flash-mode qio --flash-freq 80m --flash-size 8MB 0x0 "),
+            "{w}"
+        );
         assert!(w.contains(" 0x10000 ") && w.ends_with("app.bin"), "{w}");
         let ev = events.lock().unwrap();
         // progress once per value, no flood
@@ -404,5 +473,68 @@ pub mod tests {
         *usb2.boot_port.lock().unwrap() = None;
         f.usb = &*usb2;
         assert!(flash(&f, &|_| {}).unwrap_err().contains("download mode"));
+    }
+    #[test]
+    fn wrong_board_and_unknown_device_never_reset_or_write() {
+        let usb = FakeUsb::stick("/dev/cu.fake", "2.2.0");
+        let tool = FakeEsptool::default();
+        let f = Flash {
+            usb: &*usb,
+            esptool: &tool,
+            port: "/dev/cu.fake".into(),
+            backup: false,
+            fw: bundle("wrong-board", "0x10000"),
+            backups: std::env::temp_dir(),
+            timings: quick(),
+        };
+        usb.states.lock().unwrap().get_mut("/dev/cu.fake").unwrap()["board"] = json!("m5-stickc-plus2");
+        assert!(flash(&f, &|_| {}).unwrap_err().contains("compatible"));
+        usb.states.lock().unwrap().clear();
+        assert!(flash(&f, &|_| {}).unwrap_err().contains("verified"));
+        assert!(usb.touches.lock().unwrap().is_empty());
+        assert!(tool.runs.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn bootloader_search_never_switches_to_another_stick() {
+        let usb = FakeUsb::stick("/dev/cu.other", "2.2.0");
+        usb.touch_1200("/dev/cu.other").unwrap();
+        assert!(wait_for_bootloader(&*usb, "/dev/cu.selected", "SN2", &quick()).is_err());
+        assert!(wait_for_bootloader(&*usb, "/dev/cu.other", "SN2", &quick()).is_err());
+        assert_eq!(wait_for_bootloader(&*usb, "/dev/cu.old", "SN1", &quick()).unwrap(), "/dev/cu.other");
+    }
+    #[test]
+    fn plus2_uses_its_chip_offsets_and_bridge_reset() {
+        let usb = FakeUsb::stick("/dev/cu.fakeplus", "2.2.0");
+        usb.states.lock().unwrap().get_mut("/dev/cu.fakeplus").unwrap()["board"] = json!("m5-stickc-plus2");
+        let mut fw = bundle("plus2", "0x10000");
+        fw["board"] = json!("m5-stickc-plus2");
+        fw["flash"]["chip"] = json!("esp32");
+        fw["parts"][0]["offset"] = json!("0x1000");
+        fw["files"][0][0] = json!("0x1000");
+        let boot_path = fw["files"][0][1].as_str().unwrap();
+        let mut boot = std::fs::read(boot_path).unwrap();
+        boot[12] = 0;
+        std::fs::write(boot_path, boot).unwrap();
+        let path = fw["files"][1][1].as_str().unwrap();
+        let mut app = std::fs::read(path).unwrap();
+        app[12] = 0;
+        std::fs::write(path, app).unwrap();
+        let tool = FakeEsptool::default();
+        let f = Flash {
+            usb: &*usb,
+            esptool: &tool,
+            port: "/dev/cu.fakeplus".into(),
+            backup: false,
+            fw,
+            backups: std::env::temp_dir(),
+            timings: quick(),
+        };
+        flash(&f, &|_| {}).unwrap();
+        assert!(usb.touches.lock().unwrap().is_empty());
+        let args = tool.runs.lock().unwrap()[0].join(" ");
+        assert!(args.contains("--chip esp32 --port /dev/cu.fakeplus"));
+        assert!(args.contains("--before default-reset"));
+        assert!(args.contains("8MB 0x1000"));
     }
 }

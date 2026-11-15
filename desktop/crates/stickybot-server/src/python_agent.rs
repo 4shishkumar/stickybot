@@ -24,6 +24,21 @@ pub fn holds_stick(status_body: &str, port: u16) -> Option<String> {
 
 /// Asks the running Python agent (1 s at most; nothing listening = go ahead).
 pub async fn check(port: u16) -> Option<String> {
+    check_target(port, None).await
+}
+
+pub fn holds_target(body: &str, port: u16, address: Option<&str>) -> Option<String> {
+    if let Some(address) = address {
+        let state: Value = serde_json::from_str(body).ok()?;
+        if let Some(held) = state["stick"]["address"].as_str()
+            && !held.eq_ignore_ascii_case(address)
+        {
+            return None;
+        }
+    }
+    holds_stick(body, port)
+}
+pub async fn check_target(port: u16, address: Option<String>) -> Option<String> {
     let ask = async {
         let mut s = TcpStream::connect(("127.0.0.1", port)).await.ok()?;
         let req = format!("GET /api/status HTTP/1.0\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n");
@@ -35,7 +50,7 @@ pub async fn check(port: u16) -> Option<String> {
         Some(body)
     };
     let body = tokio::time::timeout(Duration::from_secs(1), ask).await.ok().flatten()?;
-    holds_stick(&body, port)
+    holds_target(&body, port, address.as_deref())
 }
 
 #[cfg(test)]

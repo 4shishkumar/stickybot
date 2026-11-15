@@ -1,11 +1,25 @@
 // Shared helpers for the dashboard pages: API calls, a tiny element builder,
 // the shared store (agent status + live events), toasts and formatting.
 
+import {devicePath} from "./device_routes.js";
+
+let selectedDevice = null;
+export const deviceId = () => selectedDevice;
+export const deviceUrl = path => devicePath(path, selectedDevice);
+export function selectDevice(id) {
+  const next = id || null;
+  if (next === selectedDevice) return;
+  selectedDevice = next;
+  remember("device", next);
+  store.status = {}; store.events = [];
+  store.emit("device", next);
+}
+
 export const TOKEN = window.STICK_TOKEN || "";
 
 // Every call resolves (never throws): on failure the result has an `error`
 // string, plus `missing: true` for endpoints this agent doesn't have yet.
-export async function api(path, opts = {}) {
+async function request(path, opts = {}) {
   let r;
   try {
     r = await fetch(path, {
@@ -25,6 +39,14 @@ export async function api(path, opts = {}) {
     return {...base, error: base.error || `The agent answered ${r.status}.`, status: r.status};
   }
   return data === null ? {} : data;
+}
+export const api = (path, opts) => request(deviceUrl(path), opts);
+// Capture once for jobs, dialogs and delayed callbacks, including the legacy/default view.
+export function deviceApi() {
+  const id = selectedDevice;
+  const url = path => devicePath(path, id);
+  const call = (path, opts) => request(url(path), opts);
+  return {id, url, get: path => call(path), put: (path, body) => call(path, {method: "PUT", body: JSON.stringify(body || {})}), post: (path, body) => call(path, {method: "POST", body: JSON.stringify(body || {})})};
 }
 export const get = path => api(path);
 export const post = (path, body) => api(path, {method: "POST", body: JSON.stringify(body || {})});
@@ -165,7 +187,9 @@ export const store = {
 };
 
 export async function refreshStatus() {
+  const selected = selectedDevice;
   const s = await get("/api/status");
+  if (selected !== selectedDevice) return s;
   store.online = !s.error;
   if (!s.error) store.status = s;
   store.emit("status", store.status);

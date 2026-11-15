@@ -248,11 +248,11 @@ void HijelHID_Internal::KBServerCallbacks::onConnect(NimBLEServer* pServer, NimB
 
 void HijelHID_Internal::KBServerCallbacks::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
     (void)reason;
-    _parent->_onDisconnect();
+    _parent->_onDisconnect(connInfo.getConnHandle());
 }
 
 void HijelHID_Internal::KBServerCallbacks::onAuthenticationComplete(NimBLEConnInfo& connInfo) {
-    _parent->_onAuthComplete(connInfo.isEncrypted());
+    _parent->_onAuthComplete(connInfo.isEncrypted(), connInfo.getConnHandle());
 }
 
 void HijelHID_Internal::KBServerCallbacks::onConfirmPassKey(NimBLEConnInfo& connInfo, uint32_t pass_key) {
@@ -266,10 +266,17 @@ void HijelHID_Internal::KBServerCallbacks::onConfirmPassKey(NimBLEConnInfo& conn
 // ─── LED Callback Implementation ─────────────────────────────────────────────
 
 void HijelHID_Internal::KBLEDCallbacks::onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) {
+    if (connInfo.getConnHandle() != _parent->selectedConnection()) return;
     std::string val = pChar->getValue();
     if (val.length() >= 1) {
         _parent->_onLEDWrite((uint8_t)val[0]);
     }
+}
+
+void HijelHID_Internal::KBLEDCallbacks::onRead(NimBLECharacteristic* pChar, NimBLEConnInfo&) {
+    // The output attribute is shared by NimBLE; never expose another peer's last write.
+    uint8_t none = 0;
+    pChar->setValue(&none, 1);
 }
 
 // ─── Idle Timer Callback ──────────────────────────────────────────────────
@@ -1005,14 +1012,17 @@ bool HijelHID_BLEKeyboard::mouseButtons(uint8_t buttons) {
 // dropped at once (the caller keeps the motion for the next one) instead of blocking
 // the loop. A button change must arrive, so it waits up to 500 ms like a key.
 bool HijelHID_BLEKeyboard::_sendMouseReport(int8_t x, int8_t y, int8_t wheel, int8_t pan, bool wait) {
+    const uint16_t target = _connHandle;
+    const uint32_t epoch = _connectionEpoch;
+    if (target == BLE_HS_CONN_HANDLE_NONE || !_authenticated) return false;
     if (_pMouseInput == nullptr || !_connected) return false;
     uint8_t report[HID_MOUSE_REPORT_SIZE] = {_mouseButtons, (uint8_t)x, (uint8_t)y, (uint8_t)wheel, (uint8_t)pan};
-    _pMouseInput->setValue(report, HID_MOUSE_REPORT_SIZE);
-    bool ok = _pMouseInput->notify();
+
+    bool ok = _pMouseInput->notify(report, HID_MOUSE_REPORT_SIZE, target);
     const uint32_t start = millis();
-    while (!ok && wait && _connected && millis() - start < 500) {
+    while (!ok && wait && _connected && epoch == _connectionEpoch && millis() - start < 500) {
         vTaskDelay(2);
-        ok = _pMouseInput->notify();
+        ok = _pMouseInput->notify(report, HID_MOUSE_REPORT_SIZE, target);
     }
     if (ok) _lastReportMs = millis();
     return ok;
@@ -1218,16 +1228,20 @@ void HijelHID_BLEKeyboard::afterWake() {
 }
 
 void HijelHID_BLEKeyboard::_onConnect(uint16_t connHandle) {
+    if (_sharedHosts) { NimBLEDevice::startAdvertising(); return; }
+    if (_connected && _connHandle != connHandle) { _pServer->disconnect(connHandle); return; }
     _connected  = true;
     _connHandle = connHandle;
     _connState  = _ConnState::Connecting;
     _logNf("Host connected (handle=0x%04X).", connHandle);
 }
 
-void HijelHID_BLEKeyboard::_onDisconnect() {
+void HijelHID_BLEKeyboard::_onDisconnect(uint16_t handle) {
+    if (handle != _connHandle) { NimBLEDevice::startAdvertising(); return; }
     _stopIdleTimer();
     _pendingIdleTransition = false;
     _connState  = _ConnState::Disconnected;
+    ++_connectionEpoch;
     _connHandle = BLE_HS_CONN_HANDLE_NONE;
 
     _connected = false;
@@ -1246,7 +1260,20 @@ void HijelHID_BLEKeyboard::_onDisconnect() {
     }
 }
 
-void HijelHID_BLEKeyboard::_onAuthComplete(bool success) {
+void HijelHID_BLEKeyboard::selectConnection(uint16_t handle) {
+    if (handle == _connHandle) return;
+    if (_connected && _authenticated) releaseAll();
+    _onDisconnect(_connHandle);
+    if (handle == BLE_HS_CONN_HANDLE_NONE || !_pServer) return;
+    NimBLEConnInfo info = _pServer->getPeerInfoByHandle(handle);
+    if (!info.isEncrypted()) return;
+    _connHandle = handle;
+    _connected = true;
+    _onAuthComplete(true, handle);
+}
+
+void HijelHID_BLEKeyboard::_onAuthComplete(bool success, uint16_t handle) {
+    if (handle != _connHandle) { if (_cbPairingComplete) _cbPairingComplete(success); return; }
     if (success) {
         _authenticated = true;
         _connState     = _ConnState::Active;
@@ -1290,6 +1317,9 @@ void HijelHID_BLEKeyboard::_onLEDWrite(uint8_t ledByte) {
 // ─── Internal Helpers ─────────────────────────────────────────────────────
 
 void HijelHID_BLEKeyboard::_sendKeyReport() {
+    const uint16_t target = _connHandle;
+    const uint32_t epoch = _connectionEpoch;
+    if (target == BLE_HS_CONN_HANDLE_NONE || !_authenticated) return;
     if (_pKeyboardInput == nullptr || !_connected) return;
     _logVf("keyReport: mod=0x%02X fn=%d [0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X]",
            _keyReport[0], _keyReport[1] & 0x01,
@@ -1319,25 +1349,28 @@ void HijelHID_BLEKeyboard::_sendKeyReport() {
         }
         if (!reportEmpty) {
             uint8_t empty[HID_KEYBOARD_REPORT_SIZE] = {};
-            _pKeyboardInput->setValue(empty, HID_KEYBOARD_REPORT_SIZE);
-            _pKeyboardInput->notify();
+
+            _pKeyboardInput->notify(empty, HID_KEYBOARD_REPORT_SIZE, target);
             delay(50);
         }
         _reportPrimingNeeded = false;
     }
 
-    _pKeyboardInput->setValue(_keyReport, HID_KEYBOARD_REPORT_SIZE);
+
     // [stick-key change] wait up to 500 ms for a free Bluetooth buffer (was ~20 ms). A dropped
     // report is a missing or stuck key: a typed password came out wrong while other
     // traffic (a long reply to the Mac app) had the buffers.
     const uint32_t start = millis();
-    while (!_pKeyboardInput->notify() && _connected && millis() - start < 500) {
+    while (_connected && epoch == _connectionEpoch && !_pKeyboardInput->notify(_keyReport, HID_KEYBOARD_REPORT_SIZE, target) && millis() - start < 500) {
         vTaskDelay(2);
     }
     _lastReportMs = millis();
 }
 
 void HijelHID_BLEKeyboard::_sendConsumerReport(uint16_t usageId) {
+    const uint16_t target = _connHandle;
+    const uint32_t epoch = _connectionEpoch;
+    if (target == BLE_HS_CONN_HANDLE_NONE || !_authenticated) return;
     if (_pConsumerInput == nullptr || !_connected) return;
     uint8_t report[HID_CONSUMER_REPORT_SIZE];
     report[0] = (uint8_t)(usageId & 0xFF);
@@ -1350,15 +1383,15 @@ void HijelHID_BLEKeyboard::_sendConsumerReport(uint16_t usageId) {
                       ((millis() - _lastReportMs) >= HID_WINDOWS_PRIME_MS);
     if (needsPrime && usageId != 0x0000) {
         uint8_t empty[HID_CONSUMER_REPORT_SIZE] = {};
-        _pConsumerInput->setValue(empty, HID_CONSUMER_REPORT_SIZE);
-        _pConsumerInput->notify();
+
+        _pConsumerInput->notify(empty, HID_CONSUMER_REPORT_SIZE, target);
         delay(50);
         _reportPrimingNeeded = false;
     }
 
-    _pConsumerInput->setValue(report, HID_CONSUMER_REPORT_SIZE);
+
     int retries = 0;
-    while (!_pConsumerInput->notify() && _connected && retries++ < 20) {
+    while (_connected && epoch == _connectionEpoch && !_pConsumerInput->notify(report, HID_CONSUMER_REPORT_SIZE, target) && retries++ < 20) {
         vTaskDelay(1);
     }
     _lastReportMs = millis();

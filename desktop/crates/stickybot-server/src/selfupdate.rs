@@ -296,6 +296,20 @@ pub struct Busy {
 
 impl Busy {
     pub fn of(st: &AppState) -> Self {
+        let mut busy = Self::one(st);
+        for device in st.devices.all() {
+            let b = Self::one(&device);
+            busy.firmware |= b.firmware;
+            busy.usb_flash |= b.usb_flash;
+            busy.voice |= b.voice;
+            busy.prompt |= b.prompt;
+            busy.asking |= b.asking;
+            busy.wireless_mic |= b.wireless_mic;
+            busy.face_install |= b.face_install;
+        }
+        busy
+    }
+    fn one(st: &AppState) -> Self {
         Self {
             firmware: st.jobs.busy(),
             usb_flash: st.usb.is_flashing(),

@@ -274,6 +274,7 @@ static void render() {
       break;
     }
   }
+  if (settings::sharedHosts() && mode == Mode::STATUS) ui::drawHostLabel(buddy::activeHostLabel());
 }
 
 // --- Standby -----------------------------------------------------------------
@@ -307,11 +308,12 @@ static void powerOff() {
 
 // Double-press B: wake the Mac's lock screen and type the saved password.
 static void unlockMac() {
-  String pass = settings::macPassword();
+  String pass = buddy::macPassword();
   if (pass.isEmpty()) { showMessage("No password", "Set it on the settings page", COLOR_WARN, 2500); return; }
   if (!hid::connected()) { showMessage("Not connected", nullptr, COLOR_WARN); return; }
   ui::wake(5000);
-  ui::drawMessage("Unlocking", "Mac", COLOR_OK);
+  String targetName = buddy::activeHostLabel();
+  ui::drawMessage("Unlocking", targetName.length() ? targetName.c_str() : "Mac", COLOR_OK);
   hid::tap(Combo{KEY_MOD_LSHIFT, 0});  // wake the display / lock screen
   delay(1200);
   hid::typeText(pass);
@@ -376,6 +378,10 @@ static void comboPress() {
   aPath = wispr::choosePath({settings::wirelessMic(), buddy::agentWirelessMic(), buddy::agentPreparesMic(),
                              buddy::agentLinked(), mic::usbMounted(), mic::usbStreaming(),
                              mic::wisprStreaming() || agentTalking});
+  if (settings::sharedHosts() && settings::wirelessMic() && aPath != wispr::Path::BT_PREPARE) {
+    showMessage("Mac mic unavailable", "Open the app on the input Mac", COLOR_WARN);
+    return;
+  }
   bool prepare = aPath == wispr::Path::BT_PREPARE;
   if (wispr::streams(aPath) && !mic::wisprStart(prepare, ++holdId)) aPath = wispr::Path::NONE;  // mic busy
   wisprMic = wispr::streams(aPath);
@@ -394,8 +400,19 @@ static void comboPress() {
 // The agent's "ready" (or the timeout) puts the key down for a waiting press.
 static void wisprGateLoop() {
   uint16_t id;
+  if (buddy::takeWisprBusy(id) && id == holdId) {
+    wisprGate.release(); hid::up(); mic::wisprEnd();
+    wisprMic = comboDown = false; enterAt = keyUpAt = 0;
+    showMessage("Microphone busy", "Another stick is dictating", COLOR_WARN);
+    dirty = true; return;
+  }
   if (buddy::takeWisprReady(id) && !wisprGate.ready(id)) Log.printf("Agent: late ready (hold %u)\n", id);
   if (wisprGate.poll(millis()) != wispr::Gate::Step::PRESS) return;
+  if (wisprGate.timedOut() && settings::sharedHosts()) {
+    mic::wisprEnd(); wisprMic = comboDown = false; enterAt = keyUpAt = 0;
+    showMessage("Mic not ready", "Try again when the Mac is ready", COLOR_WARN);
+    dirty = true; return;
+  }
   if (wisprGate.timedOut()) Log.printf("Agent: no ready in %lu ms, pressing anyway\n", (unsigned long)wisprGate.waitedMs());
   else Log.printf("Agent: mic ready in %lu ms\n", (unsigned long)wisprGate.waitedMs());
   comboKeyDown();
@@ -507,6 +524,14 @@ static void onMenu(menu::Action a) {
     case menu::Action::BT_TOGGLE:
       if (hid::state() == hid::Bt::OFF) hid::reconnect();
       else hid::disconnect();
+      break;
+    case menu::Action::HOST_INFO: {
+      String name = buddy::activeHostName(), label = buddy::activeHostLabel();
+      showMessage(label.length() ? label.c_str() : "Legacy mode", name.c_str(), COLOR_OK, 6000);
+      break;
+    }
+    case menu::Action::HOST_BUSY:
+      showMessage("Cannot switch Mac", buddy::hostBusy() ? "Finish the active task first" : "No other Mac connected", COLOR_WARN, 3000);
       break;
     case menu::Action::FORGET:
       hid::forget(hid::slot());
@@ -1050,9 +1075,9 @@ void loop() {
   static String shownPrompt;
   if (buddy::hasPrompt()) {
     const buddy::Prompt& p = buddy::prompt();
-    bool fresh = shownPrompt != p.id;
+    bool fresh = shownPrompt != p.from + ":" + p.id;
     if (fresh) {
-      shownPrompt = p.id;
+      shownPrompt = p.from + ":" + p.id;
       promptAt = millis();
       lastPing = 0;
       ui::wake(60000);
@@ -1063,6 +1088,7 @@ void loop() {
     if (fresh || turned) {  // turning the stick redraws it; its timers carry on
       if (p.ask) ui::drawAsk(p.q.length() ? p.q : p.hint, p.from, p.a, p.b);
       else ui::drawPrompt(p.tool, p.hint, p.from);
+      if (settings::sharedHosts()) ui::drawHostLabel(buddy::activeHostLabel());
     }
     ui::keepAwake();
     if (comboDown) comboRelease();
@@ -1125,6 +1151,7 @@ void loop() {
         if (millis() - lastFrame >= 40) {
           lastFrame = millis();
           ui::drawEvent((uint8_t)e.level, e.title, e.sub, e.icon, events::elapsed());
+          if (settings::sharedHosts()) ui::drawHostLabel(buddy::activeHostLabel());
         }
         delay(10);
         return;

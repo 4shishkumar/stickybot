@@ -152,13 +152,18 @@ pub fn defaults() -> Map<String, Value> {
     });
     match v {
         Value::Object(mut m) => {
+            m.insert("approval_devices".into(), Value::Null);
+            m.insert("notification_devices".into(), Value::Null);
             // the IR remote (stick 2.5.0; ir.rs): remotes mapped to built-in code sets
             // ({"tv": "samsung"}), and whether the TV phrases were added to commands.json
             m.insert("ir_brands".into(), json!({}));
             m.insert("ir_voice_added".into(), json!(false));
             // the connections (connections/): the Mac's Calendar, off until the person connects it; and
             // whether its voice phrases were added to commands.json
-            m.insert("connections".into(), json!({"calendar": crate::connections::agenda::Settings::default().to_json()}));
+            m.insert(
+                "connections".into(),
+                json!({"calendar": crate::connections::agenda::Settings::default().to_json()}),
+            );
             m.insert("calendar_voice_added".into(), json!(false));
             // a sound per event kind (events.rs; "" = the level's, "off"); unlisted: DEFAULT_SOUNDS
             m.insert("event_sounds".into(), json!({}));

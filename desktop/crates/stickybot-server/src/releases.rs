@@ -266,7 +266,10 @@ impl Source for Gh {
             .output()
             .map_err(|e| fail(format!("gh release download {name}: {e}")))?;
         if !out.status.success() {
-            return Err(fail(format!("gh release download {name}: {}", tail(&String::from_utf8_lossy(&out.stderr), 200))));
+            return Err(fail(format!(
+                "gh release download {name}: {}",
+                tail(&String::from_utf8_lossy(&out.stderr), 200)
+            )));
         }
         if dest.file_name().is_some_and(|f| f != name) {
             std::fs::rename(dir.join(name), dest).map_err(|e| fail(e.to_string()))?;
@@ -310,9 +313,8 @@ impl Source for Https {
     }
     fn download(&self, rel: &Release, name: &str, dest: &Path) -> Result<(), ReleaseError> {
         let asset = rel.assets.get(name);
-        let url = asset
-            .and_then(|a| a.download.clone())
-            .ok_or_else(|| fail(format!("release {} has no {name}", rel.tag)))?;
+        let url =
+            asset.and_then(|a| a.download.clone()).ok_or_else(|| fail(format!("release {} has no {name}", rel.tag)))?;
         let limit = asset.and_then(|a| a.size).unwrap_or(64 << 20);
         let r = self.get(&url, "application/octet-stream")?;
         let mut body = Vec::new();
@@ -342,7 +344,11 @@ pub fn sources(repo: &str) -> Vec<Box<dyn Source>> {
 }
 
 /// The latest release for the channel and the source that answered.
-pub fn latest<'a>(srcs: &'a [Box<dyn Source>], repo: &str, channel: &str) -> Result<(Release, &'a dyn Source), ReleaseError> {
+pub fn latest<'a>(
+    srcs: &'a [Box<dyn Source>],
+    repo: &str,
+    channel: &str,
+) -> Result<(Release, &'a dyn Source), ReleaseError> {
     let mut errors = Vec::new();
     for src in srcs {
         match src.json(&format!("repos/{repo}/releases?per_page=30")) {
@@ -392,6 +398,7 @@ pub fn check_manifest(m: &Value, rel: Option<&Release>) -> Result<(), ReleaseErr
             return Err(fail(format!("release {} lists {name} but doesn't have it", r.tag)));
         }
     }
+    crate::firmware::check_board(m, m["board"].as_str().unwrap_or("")).map_err(fail)?;
     Ok(())
 }
 
@@ -538,7 +545,10 @@ pub mod tests {
         pub fn add_release(&mut self, tag: &str, fw: &str, prerelease: bool) {
             let boot = format!("boot-{fw}").into_bytes();
             let mut app = format!("app-{fw}").into_bytes();
-            app.insert(0, 0xE9);
+            app.resize(32, 0);
+            app[0] = 0xe9;
+            app[12] = 9;
+            app[13] = 0;
             let m = json!({"version": fw, "board": "m5stick-s3", "sha256": sha(&app), "parts": [
                 {"file": "bootloader.bin", "offset": "0x0", "size": boot.len(), "sha256": sha(&boot)},
                 {"file": "app.bin", "offset": "0x10000", "size": app.len(), "sha256": sha(&app)}]});
@@ -602,7 +612,18 @@ pub mod tests {
 
     #[test]
     fn semver_precedence() {
-        let order = ["junk", "1.7.9", "1.8.0-alpha", "1.8.0-beta.2", "1.8.0-beta.10", "1.8.0-beta.x", "1.8.0-rc.1", "1.8.0", "v1.8.1", "2.0.0"];
+        let order = [
+            "junk",
+            "1.7.9",
+            "1.8.0-alpha",
+            "1.8.0-beta.2",
+            "1.8.0-beta.10",
+            "1.8.0-beta.x",
+            "1.8.0-rc.1",
+            "1.8.0",
+            "v1.8.1",
+            "2.0.0",
+        ];
         for w in order.windows(2) {
             assert!(version_key(w[0]) < version_key(w[1]), "{} < {}", w[0], w[1]);
         }
