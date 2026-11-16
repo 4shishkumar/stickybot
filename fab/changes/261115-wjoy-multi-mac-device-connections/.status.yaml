@@ -10,7 +10,7 @@ progress:
     review: done
     hydrate: done
     ship: active
-    review-pr: active
+    review-pr: done
 plan:
     generated: true
     task_count: 14
@@ -34,7 +34,7 @@ stage_metrics:
     review: {started_at: "2026-11-15T10:15:33Z", driver: fab-ff, iterations: 4, completed_at: "2026-11-15T10:18:35Z"}
     hydrate: {started_at: "2026-11-15T10:18:35Z", driver: fab-ff, iterations: 2, completed_at: "2026-11-15T10:21:54Z"}
     ship: {started_at: "2026-11-15T10:21:54Z", driver: fab-ff, iterations: 1}
-    review-pr: {started_at: "2026-11-16T04:59:43Z", driver: git-pr-review, iterations: 1, phase: fixing, reviewer: '@ashish-kumar-noon'}
+    review-pr: {started_at: "2026-11-16T04:59:43Z", driver: git-pr-review, iterations: 1, completed_at: "2026-11-16T05:21:51Z"}
 prs: []
 change_type_source: explicit
 base_branch: main
@@ -55,4 +55,4 @@ true_impact:
 summary: Documented multi-host/device ownership, compatibility, safe updates and diagnostics, plus destination-aware Calendar reminder retries.
 # base_branch: written by /git-branch or /fab-new when the change's branch is created (no placeholder here).
 # true_impact: lazily created on first stage-finish that computes it (no placeholder here).
-last_updated: 2026-11-16T04:59:43Z
+last_updated: 2026-11-16T05:21:51Z
