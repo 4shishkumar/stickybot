@@ -62,8 +62,8 @@ mode. Saved slots and bonds are retained. Macs paired to other slot identities m
 re-pairing with the shared identity. Old apps require legacy mode. The Rust app checks Python
 coexistence for the particular target, leaving unrelated devices available. Shared records can
 be removed with `@hosts forget=<host-id|all>` or the confirmed **Forget saved Macs** action.
-The corresponding passwords are cleared, bonds/legacy slots are preserved, and the stick
-restarts after acknowledgement so new installation identities can enroll.
+Legacy slots and Bluetooth bonds remain intact. Forgetting a host clears its saved credentials
+and restarts the stick after acknowledgement so new installation identities can enroll.
 
 ### Requirement: One selected host receives input
 Keyboard, mouse, media, unlock and new voice input go to the selected host. The stick picker
