@@ -378,6 +378,22 @@ void peerDisconnected(uint16_t handle) {
   for (auto& in : inboxes) if (in.handle == handle) in = {};
   hostsChanged = true;
 }
+bool forgetHosts(const String& id) {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  if (occupied() || (id != "all" && peers.byId(id.c_str()) < 0)) return false;
+  for (size_t i = 0; i < hosts::CAPACITY; ++i) {
+    if (id != "all" && peers.peers[i].id != id.c_str()) continue;
+    peers.forget(peers.peers[i].id);
+    settings::saveHostRecord(i, "");
+    settings::saveHostPassword(i, "");
+    hostPrompts[i] = {};
+  }
+  settings::saveActiveHost(peers.active.c_str());
+  // The caller restarts after acknowledging: release input before reconnecting the bonds.
+  hid::selectHost(hosts::NONE);
+  clearActiveView();
+  return true;
+}
 static void persistPeer(int i) {
   const auto& p = peers.peers[i]; JsonDocument d;
   d["address"] = p.address; d["id"] = p.id; d["name"] = p.name; d["label"] = p.label;
@@ -547,7 +563,7 @@ static void handle(const String& l) {
   if (!info.isEncrypted()) return;
   int index = peers.byHandle(requestPeer);
   bool hello = d["src"] == "agent" && d["hello"].is<int>() && d["host"].is<JsonObject>();
-  if (hello) {
+  if (hello && shared) {
     JsonObject h = d["host"];
     std::lock_guard<std::recursive_mutex> lock(peersMutex);
     auto old = peers.lease(requestPeer);

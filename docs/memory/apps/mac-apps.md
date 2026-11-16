@@ -85,17 +85,20 @@ keep settings, faces, sounds, IR and firmware scoped and capability-gated. The P
 single-device and explains unavailable multi-device controls when the endpoints are absent.
 
 ### Requirement: Approvals resolve once within their captured destinations
-The shared approvals coordinator records an owning device and destination `(device_id,generation)`
-pairs. The first valid decision resolves a fanout prompt once and clears the other displays only
-on the captured sessions. Hardware answers outside those destinations/generations are rejected;
-dashboard reads, answers and busy checks are owner/destination-scoped. Questions retain their
+The shared approvals coordinator records an owning device and destination device IDs. Permission
+prompts resend and clear on those devices' current connections across reconnects. The first valid
+decision resolves once; unrelated devices and stale connection work cannot decide a prompt.
+Dashboard reads, answers and busy checks are owner/destination-scoped. Questions retain their
 source generation for initial send, resend and cleanup; disconnect/generation changes cancel them.
 Voice replies retain the originating device/session even if the view/default changes.
 
 Config `notification_devices` and `approval_devices` accept `null` for default, an array of configured
 IDs for explicit destinations, or `[]` for no hardware destinations. Devices edits this policy
 through `/api/devices/primary/api/config`, independently of the viewed/default device. Notifications
-are scoped to their destination and approvals do not appear on unrelated home cards.
+are scoped to their destination and approvals do not appear on unrelated home cards. Empty or
+unresolvable approval lists return immediately. Device removal prunes both routing lists and
+refreshes child snapshots. Invalid saved entries are skipped with metadata-only warnings; a
+bad entry or excess capacity does not stop healthy sessions from starting.
 
 ### Requirement: The dashboard API is local and token-guarded
 The server listens on 127.0.0.1 only, checks the `Host` header, and needs the token for changes.

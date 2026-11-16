@@ -33,8 +33,9 @@ a separate bounded RX inbox and line assembler per peer; an overlong line is dro
 Firmware advertises stable physical `deviceId`, canonical `board`, `multiHost:1` and `maxHosts:3`.
 On capable firmware the Rust app sends `host:{id,name,label,session}` in hello. A host installation
 ID, physical device ID and CoreBluetooth peripheral UUID are distinct identities. Names and labels
-are display metadata; the encrypted bonded BLE peer owns its host ID. Firmware refuses identity
-collisions, invalid names and sessions. Shared-mode application writes carry matching `hs`;
+are display metadata; the encrypted bonded BLE peer owns its host ID. Shared-mode firmware refuses identity
+collisions, invalid names and sessions. Legacy hellos bypass the shared registry. Timed-out
+capability negotiation retries with bounded backoff; a definite legacy response stops negotiation. Shared-mode application writes carry matching `hs`;
 discovery queries (`@state`, `@hosts`, `@keys`) and the handshake permit initial negotiation.
 
 Connection generations invalidate old requests and resource leases. TX, audio and HID notifications
@@ -59,7 +60,10 @@ Legacy mode accepts one central using the selected saved slot. `@hosts shared=1`
 to three hosts using the current slot's persistent BLE identity; `shared=0` returns to legacy
 mode. Saved slots and bonds are retained. Macs paired to other slot identities may need guided
 re-pairing with the shared identity. Old apps require legacy mode. The Rust app checks Python
-coexistence for the particular target, leaving unrelated devices available.
+coexistence for the particular target, leaving unrelated devices available. Shared records can
+be removed with `@hosts forget=<host-id|all>` or the confirmed **Forget saved Macs** action.
+The corresponding passwords are cleared, bonds/legacy slots are preserved, and the stick
+restarts after acknowledgement so new installation identities can enroll.
 
 ### Requirement: One selected host receives input
 Keyboard, mouse, media, unlock and new voice input go to the selected host. The stick picker

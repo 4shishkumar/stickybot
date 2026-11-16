@@ -106,6 +106,11 @@ Result run(const String& action, const Args& arg) {
   if (action == "state") return ok(stateJson());
   if (action == "keys")  return ok(keysJson());
   if (action == "hosts") {
+    String forget = arg("forget");
+    if (forget.length()) {
+      if (!buddy::forgetHosts(forget)) return fail("Unknown saved Mac or device is busy", 409);
+      Result r = ok("\"restarting\":true"); r.restart = true; return r;
+    }
     String mode = arg("shared");
     if (mode.length()) {
       if (mode != "0" && mode != "1") return fail("shared must be 0 or 1");

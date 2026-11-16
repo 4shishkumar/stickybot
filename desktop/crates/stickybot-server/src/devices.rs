@@ -47,12 +47,22 @@ impl DeviceManager {
     pub fn init(&self, root: &Arc<AppState>) -> Result<(), String> {
         *self.root.lock().unwrap() = Arc::downgrade(root);
         let entries = root.cfg.lock().unwrap().get("devices").and_then(Value::as_array).cloned().unwrap_or_default();
-        for entry in entries {
-            let Some(address) = entry["address"].as_str() else { continue };
+        for (index, entry) in entries.into_iter().enumerate() {
+            let Some(address) = entry["address"].as_str() else {
+                log::warn!("Skipping invalid saved device at position {index}");
+                continue;
+            };
             if entry["id"] == "primary" {
                 continue;
             }
-            self.add_inner(root, address, entry["name"].as_str().unwrap_or("Stick"), Some(entry.clone()), false)?;
+            if self
+                .add_inner(root, address, entry["name"].as_str().unwrap_or("Stick"), Some(entry.clone()), false)
+                .is_err()
+            {
+                // Saved user input must not prevent healthy sessions (or the dashboard) starting.
+                // Do not log the entry or its error: either can contain private names or paths.
+                log::warn!("Skipping invalid saved device at position {index}");
+            }
         }
         Ok(())
     }
@@ -220,11 +230,18 @@ impl DeviceManager {
         if let Some(entries) = next.get_mut("devices").and_then(Value::as_array_mut) {
             entries.retain(|e| e["id"] != id);
         }
+        for key in ["approval_devices", "notification_devices"] {
+            if let Some(ids) = next.get_mut(key).and_then(Value::as_array_mut) {
+                ids.retain(|value| value.as_str() != Some(id));
+            }
+        }
         if next.get("default_device_id").and_then(Value::as_str) == Some(id) {
             next.insert("default_device_id".into(), json!("primary"));
         }
         config::save(&root.paths, &next).map_err(|e| e.to_string())?;
-        *cfg = next;
+        *cfg = next.clone();
+        drop(cfg);
+        self.refresh_children(&next);
         st.link.set_target(None);
         st.brain().cancel();
         crate::speak::stop(&st);
@@ -366,6 +383,42 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&body).unwrap())
     }
+    #[test]
+    fn invalid_saved_entries_and_capacity_do_not_prevent_other_sessions_loading() {
+        let root = root("bad-saved-devices");
+        let mut entries = vec![json!({"id":"bad","address":""})];
+        entries.extend(
+            (0..34).map(|n| json!({"id":format!("saved-{n}"),"address":format!("ADDR-{n}"),"name":"Test stick"})),
+        );
+        root.cfg.lock().unwrap().insert("devices".into(), json!(entries));
+        root.devices.init(&root).unwrap();
+        assert!(root.devices.resolve("primary").is_some());
+        assert!(root.devices.resolve("bad").is_none());
+        assert!(root.devices.resolve("saved-0").is_some());
+        assert!(root.devices.resolve("saved-31").is_some());
+        assert!(root.devices.resolve("saved-32").is_none());
+    }
+
+    #[tokio::test]
+    async fn removing_a_device_prunes_saved_and_live_destination_lists() {
+        let root = root("remove-destinations");
+        let a = root.devices.add(&root, "A", "One").unwrap();
+        let b = root.devices.add(&root, "B", "Two").unwrap();
+        root.update_config(
+            json!({"approval_devices":[a.device_id], "notification_devices":[a.device_id,b.device_id]})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .unwrap();
+        root.devices.remove(&root, &a.device_id).unwrap();
+        for cfg in [config::load(&root.paths), root.cfg.lock().unwrap().clone(), b.cfg.lock().unwrap().clone()] {
+            assert_eq!(cfg["approval_devices"], json!([]));
+            assert_eq!(cfg["notification_devices"], json!([b.device_id]));
+        }
+        root.devices.remove(&root, &b.device_id).unwrap();
+    }
+
     #[tokio::test]
     async fn sessions_share_mac_services_but_preserve_default_and_configuration() {
         let root = root("registry");

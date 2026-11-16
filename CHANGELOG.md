@@ -21,6 +21,16 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   name such as Desk or Travel. The stick shows that name for its selected Mac and the Mac
   asking for an approval. Name changes keep the existing pairing.
 
+### Fixed
+- Permission prompts survive stick reconnects; choosing no approval devices returns immediately.
+  Removing a stick cleans its notification destinations, and a bad saved entry no longer stops
+  other sticks from loading.
+- Legacy pairing works after reinstalling the app. Shared-mode host records can be forgotten
+  from the stick or USB, and delayed session negotiation retries without needing a reconnect.
+- USB recovery works from an explicitly selected port and model without running firmware, with
+  a chip check before writing. USB discovery leaves unrelated serial bridges alone, and updates
+  verify the selected port once. S3 bootloader matching handles changed serial descriptors.
+
 ### Changed
 - Calendar reminders follow your chosen notification sticks, even when the primary stick is
   offline. A reminder waits for a destination to reconnect within its alert window if none can receive it.

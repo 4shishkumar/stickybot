@@ -34,9 +34,12 @@ S3 bootloader offset is `0x0`, Plus2 `0x1000`; partition table, boot_app0 and ap
 `make_release.py --board` selects either canonical board and validates app/bootloader silicon
 before writing the bundle. Local version folders may contain separate board-ID subfolders.
 Bundle selection filters by compatibility before choosing a version; missing Plus2 firmware
-never offers an S3 image. USB flashing queries `@state` on the selected port and validates the
-bundle and parts before reset/write. An unidentified device in download/recovery mode requires
-manual board-specific recovery tooling.
+never offers an S3 image. Normal USB flashing queries `@state` once on the selected port and validates the bundle and
+parts before reset/write. Explicit USB recovery chooses a physical port and board model; esptool
+verifies the matching ROM chip before writing when firmware cannot answer. Recovery preserves
+all bundle/layout/hash/NVS checks. Passive enumeration never probes generic WCH bridges. After
+an S3 touch, serial mismatch fallback accepts only one newly appeared bootloader with the old
+app port gone; pre-existing or ambiguous bootloaders are refused.
 
 ### Requirement: Jobs retain device and transfer ownership
 Each Rust device runtime owns its firmware jobs. Changing the dashboard view or default cannot

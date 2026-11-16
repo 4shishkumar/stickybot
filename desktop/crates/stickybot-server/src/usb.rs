@@ -44,17 +44,7 @@ pub trait Usb: Send + Sync {
     /// Just the sticks: ours ([`PortInfo::is_stick`]) and chips in download mode (flasher.py
     /// `espressif_ports()`). Nothing else is ever talked to or flashed as "the stick".
     fn sticks(&self) -> Vec<PortInfo> {
-        self.ports()
-            .into_iter()
-            .filter(|p| {
-                p.is_stick()
-                    || p.in_bootloader()
-                    || (matches!(p.pid, 0x55D4 | 0x55D3)
-                        && self
-                            .proto(&p.port, "@state", Duration::from_millis(1500))
-                            .is_some_and(|state| state["board"] == "m5-stickc-plus2"))
-            })
-            .collect()
+        self.ports().into_iter().filter(|p| p.is_stick() || p.in_bootloader()).collect()
     }
     /// Sends one `@…` line and returns the `@{…}` reply, or `None`.
     fn proto(&self, port: &str, line: &str, timeout: Duration) -> Option<Value>;
@@ -267,6 +257,8 @@ pub struct FakeUsb {
     pub touches: Mutex<Vec<String>>,
     /// after a touch the port comes back as the bootloader under this name (`None`: it doesn't)
     pub boot_port: Mutex<Option<String>>,
+    /// ROM USB descriptors may differ from the app descriptors.
+    pub boot_serial: Mutex<Option<String>>,
 }
 
 impl FakeUsb {
@@ -304,7 +296,7 @@ impl Usb for FakeUsb {
         if let Some(b) = boot {
             ports.push(PortInfo {
                 port: b,
-                serial: "SN1".into(),
+                serial: self.boot_serial.lock().unwrap().clone().unwrap_or_else(|| "SN1".into()),
                 product: "USB JTAG/serial debug unit".into(),
                 pid: 0x1001,
             });
@@ -351,6 +343,32 @@ mod tests {
         // while flashing, no port is opened
         u.flashing.store(true, std::sync::atomic::Ordering::Relaxed);
         assert_eq!(u.run("@state").await["error"], "the stick is being flashed");
+    }
+
+    #[tokio::test]
+    async fn generic_wch_bridges_are_never_probed_by_discovery_or_fallbacks() {
+        let fake = FakeUsb::stick("/dev/cu.stick", "2.2.0");
+        fake.states.lock().unwrap().get_mut("/dev/cu.stick").unwrap()["deviceId"] = json!("test-stick");
+        for pid in [0x55D4, 0x55D3] {
+            let port = format!("/dev/cu.bridge-{pid}");
+            fake.ports.lock().unwrap().push(PortInfo {
+                port: port.clone(),
+                serial: "OTHER".into(),
+                product: "USB Serial".into(),
+                pid,
+            });
+            fake.states.lock().unwrap().insert(port, json!({"board":"m5-stickc-plus2","deviceId":"test-stick"}));
+        }
+        let u = UsbSticks::new(fake.clone());
+        for _ in 0..3 {
+            assert_eq!(fake.sticks().len(), 1);
+            u.forget();
+            assert_eq!(u.sticks().await.len(), 1);
+            u.run("@state").await;
+            u.run_device("@state", "test-stick").await;
+        }
+        assert!(fake.lines.lock().unwrap().iter().all(|(port, _)| port == "/dev/cu.stick"));
+        assert_eq!(fake.ports().len(), 3, "explicit recovery can enumerate candidates without probing them");
     }
 
     /// Another ESP32 board on the Mac (MicroPython: "Espressif Device", 303a:4001) is never "the

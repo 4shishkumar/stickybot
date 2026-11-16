@@ -150,13 +150,28 @@ impl Default for FlashTimings {
 }
 
 /// After the touch the port disappears and the bootloader's comes back (maybe under a new name).
-fn wait_for_bootloader(usb: &dyn Usb, old: &str, serial: &str, t: &FlashTimings) -> Result<String, String> {
+fn wait_for_bootloader(
+    usb: &dyn Usb,
+    old: &str,
+    serial: &str,
+    before: &[crate::usb::PortInfo],
+    t: &FlashTimings,
+) -> Result<String, String> {
     let deadline = Instant::now() + t.bootloader;
     std::thread::sleep(t.settle);
     while Instant::now() < deadline {
-        let boot: Vec<_> = usb.sticks().into_iter().filter(|p| p.in_bootloader()).collect();
+        let ports = usb.ports();
+        let boot: Vec<_> = ports.iter().filter(|p| p.in_bootloader()).collect();
         if let Some(port) = boot.iter().find(|p| if serial.is_empty() { p.port == old } else { p.serial == serial }) {
             return Ok(port.port.clone());
+        }
+        // TinyUSB and ROM USB-Serial-JTAG need not share a serial. Only a unique
+        // newly appeared bootloader is eligible; never pick one present before the touch.
+        let new: Vec<_> =
+            boot.iter().filter(|p| !before.iter().any(|b| b.in_bootloader() && b.port == p.port)).collect();
+        let old_app_gone = !ports.iter().any(|p| p.port == old && !p.in_bootloader());
+        if old_app_gone && boot.len() == 1 && new.len() == 1 {
+            return Ok(new[0].port.clone());
         }
         std::thread::sleep(t.poll);
     }
@@ -191,27 +206,45 @@ pub struct Flash<'a> {
     pub esptool: &'a dyn Esptool,
     pub port: String,
     pub backup: bool,
-    pub fw: Value,
+    pub bundles: Vec<Value>,
+    pub expected_device: Option<String>,
+    pub recovery_board: Option<String>,
     pub backups: PathBuf,
     pub timings: FlashTimings,
 }
 
 /// Flashes the bundle to the stick on `port`, keeping its settings (flasher.py `flash`). Blocking.
 pub fn flash(f: &Flash, emit: &dyn Fn(Value)) -> Result<(), String> {
-    let parts = parts_of(&f.fw);
+    let ports_before = f.usb.ports();
+    let info = ports_before.iter().find(|p| p.port == f.port).ok_or_else(|| not_a_stick(&f.port))?;
+    // One explicit-port probe per operation; no API/start/discovery reopens it.
+    let state = if info.in_bootloader() { None } else { f.usb.proto(&f.port, "@state", Duration::from_millis(1500)) };
+    let board = if let Some(state) = &state {
+        if let Some(expected) = &f.expected_device
+            && state["deviceId"].as_str() != Some(expected.as_str())
+        {
+            return Err("USB port does not belong to the selected device".into());
+        }
+        let board = state["board"].as_str().unwrap_or("");
+        if let Some(chosen) = &f.recovery_board
+            && crate::firmware::canonical_board(board) != crate::firmware::canonical_board(chosen)
+        {
+            return Err("Selected recovery model does not match the running firmware".into());
+        }
+        board
+    } else {
+        f.recovery_board.as_deref().ok_or("Device model cannot be verified over USB. Choose its port and model under USB recovery, put it in download mode and try again.")?
+    };
+    let fw = crate::firmware::compatible_bundle(&f.bundles, board)?;
+    let parts = parts_of(fw);
     if parts.is_empty() {
         return Err(NO_FIRMWARE.into());
     }
     check_parts(&parts)?;
-    let info = f.usb.ports().into_iter().find(|p| p.port == f.port).ok_or_else(|| not_a_stick(&f.port))?;
-    let state = f
-        .usb
-        .proto(&f.port, "@state", Duration::from_millis(1500))
-        .ok_or("Device model cannot be verified over USB; update unavailable. Start its firmware and try again.")?;
-    crate::firmware::check_board(&f.fw, state["board"].as_str().unwrap_or(""))?;
-    crate::firmware::bundled_app(Some(&f.fw))?;
+    crate::firmware::check_board(fw, board)?;
+    crate::firmware::bundled_app(Some(fw))?;
     // Check every part's hash, not only the app, before resetting the selected device.
-    for part in f.fw["parts"].as_array().into_iter().flatten() {
+    for part in fw["parts"].as_array().into_iter().flatten() {
         let path = parts
             .iter()
             .find(|(offset, _)| offset == part["offset"].as_str().unwrap_or(""))
@@ -219,7 +252,7 @@ pub fn flash(f: &Flash, emit: &dyn Fn(Value)) -> Result<(), String> {
             .ok_or("Missing firmware part")?;
         if part["file"] == "bootloader.bin" {
             let data = std::fs::read(path).map_err(|e| e.to_string())?;
-            crate::firmware::check_image_board(&data, state["board"].as_str().unwrap_or(""))?;
+            crate::firmware::check_image_board(&data, board)?;
         }
         if let Some(expected) = part["sha256"].as_str()
             && crate::releases::sha256_file(path).as_deref() != Some(expected)
@@ -227,8 +260,8 @@ pub fn flash(f: &Flash, emit: &dyn Fn(Value)) -> Result<(), String> {
             return Err("Firmware part does not match its manifest; refusing update".into());
         }
     }
-    let flash_cfg = &f.fw["flash"];
-    let classic = crate::firmware::canonical_board(state["board"].as_str().unwrap_or("")) == Some("m5-stickc-plus2");
+    let flash_cfg = &fw["flash"];
+    let classic = crate::firmware::canonical_board(board) == Some("m5-stickc-plus2");
     let chip = if classic { "esp32" } else { "esp32s3" };
     let reset = if classic { "default-reset" } else { "usb-reset" };
     let cfg = |k: &str, d: &str| flash_cfg.get(k).and_then(Value::as_str).unwrap_or(d).to_string();
@@ -244,11 +277,28 @@ pub fn flash(f: &Flash, emit: &dyn Fn(Value)) -> Result<(), String> {
     } else {
         emit(json!({"line": format!("resetting {} into download mode (1200-baud touch)", f.port)}));
         f.usb.touch_1200(&f.port)?;
-        let b = wait_for_bootloader(f.usb, &f.port, &info.serial, &f.timings)?;
+        let b = wait_for_bootloader(f.usb, &f.port, &info.serial, &ports_before, &f.timings)?;
         emit(json!({"line": format!("bootloader on {b}")}));
         b
     };
     emit(json!({"progress": 100, "stage": "reset"}));
+    if state.is_none() {
+        // The user chose the board; a ROM command verifies the corresponding silicon
+        // before any flash write. No board identity is inferred from a generic USB PID.
+        let args = vec![
+            "--chip".into(),
+            chip.into(),
+            "--port".into(),
+            boot.clone(),
+            "--before".into(),
+            if classic { "default-reset".into() } else { "no-reset".into() },
+            "--after".into(),
+            "no-reset".into(),
+            "--no-stub".into(),
+            "chip-id".into(),
+        ];
+        run_esptool(f.esptool, args, emit, "identify")?;
+    }
     let base: Vec<String> =
         vec!["--chip".into(), cfg("chip", chip), "--port".into(), boot, "--baud".into(), "921600".into()];
 
@@ -287,13 +337,28 @@ fn not_a_stick(port: &str) -> String {
 }
 
 /// `POST /api/firmware/flash` `{"port","backup"}`: starts a job, or says why not.
-pub fn start(st: &Arc<AppState>, port: &str, backup: bool) -> Result<String, (u16, String)> {
+pub fn start(
+    st: &Arc<AppState>,
+    port: &str,
+    backup: bool,
+    recovery_board: Option<String>,
+) -> Result<String, (u16, String)> {
     let usb = st.usb.backend();
     if !usb.ports().iter().any(|p| p.port == port) {
         return Err((400, not_a_stick(port)));
     }
     if st.jobs.busy() {
         return Err((409, "a flash is already running".into()));
+    }
+    if recovery_board.as_deref().is_some_and(|b| crate::firmware::canonical_board(b).is_none()) {
+        return Err((400, "Choose a supported recovery model".into()));
+    }
+    let expected_device = st.host_state.lock().unwrap()["deviceId"].as_str().map(str::to_owned);
+    if recovery_board.is_none()
+        && expected_device.is_none()
+        && (st.device_id != "primary" || st.devices.all().len() > 1)
+    {
+        return Err((409, "Selected device's USB identity is unknown; use explicit USB recovery".into()));
     }
     let bundles = st.firmware();
     if bundles.is_empty() {
@@ -317,11 +382,17 @@ pub fn start(st: &Arc<AppState>, port: &str, backup: bool) -> Result<String, (u1
     tokio::spawn(async move {
         let (j2, p2, backups) = (j.clone(), port.clone(), st2.paths.home.join("backups"));
         let r = tokio::task::spawn_blocking(move || {
-            let state = usb
-                .proto(&p2, "@state", Duration::from_millis(1500))
-                .ok_or("Device model cannot be verified over USB; update unavailable")?;
-            let fw = crate::firmware::compatible_bundle(&bundles, state["board"].as_str().unwrap_or(""))?.clone();
-            let f = Flash { usb: &*usb, esptool: &*tool, port: p2, backup, fw, backups, timings };
+            let f = Flash {
+                usb: &*usb,
+                esptool: &*tool,
+                port: p2,
+                backup,
+                bundles,
+                expected_device,
+                recovery_board,
+                backups,
+                timings,
+            };
             flash(&f, &|e| j2.emit(e))
         })
         .await
@@ -356,12 +427,16 @@ pub mod tests {
     pub struct FakeEsptool {
         pub runs: Mutex<Vec<Vec<String>>>,
         pub code: i32,
+        pub reject_identify: bool,
     }
 
     impl Esptool for FakeEsptool {
         fn run(&self, args: &[String], line: &mut dyn FnMut(&str)) -> Result<i32, String> {
             self.runs.lock().unwrap().push(args.to_vec());
-            line("esptool.py v4.8.1");
+            line("esptool v5");
+            if args.last().is_some_and(|a| a == "chip-id") {
+                return Ok(if self.reject_identify { 2 } else { self.code });
+            }
             for p in [
                 "Writing at 0x00010000... (10 %)",
                 "Writing at 0x00020000... (10 %)",
@@ -424,7 +499,9 @@ pub mod tests {
             esptool: &tool,
             port: "/dev/cu.usbmodem1".into(),
             backup: true,
-            fw: bundle("all", "0x10000"),
+            bundles: vec![bundle("all", "0x10000")],
+            expected_device: None,
+            recovery_board: None,
             backups: backups.clone(),
             timings: quick(),
         };
@@ -461,7 +538,9 @@ pub mod tests {
             esptool: &tool,
             port: "/dev/cu.nope".into(),
             backup: false,
-            fw: bundle("fail", "0x10000"),
+            bundles: vec![bundle("fail", "0x10000")],
+            expected_device: None,
+            recovery_board: None,
             backups: std::env::temp_dir(),
             timings: quick(),
         };
@@ -483,7 +562,9 @@ pub mod tests {
             esptool: &tool,
             port: "/dev/cu.fake".into(),
             backup: false,
-            fw: bundle("wrong-board", "0x10000"),
+            bundles: vec![bundle("wrong-board", "0x10000")],
+            expected_device: None,
+            recovery_board: None,
             backups: std::env::temp_dir(),
             timings: quick(),
         };
@@ -499,10 +580,69 @@ pub mod tests {
     fn bootloader_search_never_switches_to_another_stick() {
         let usb = FakeUsb::stick("/dev/cu.other", "2.2.0");
         usb.touch_1200("/dev/cu.other").unwrap();
-        assert!(wait_for_bootloader(&*usb, "/dev/cu.selected", "SN2", &quick()).is_err());
-        assert!(wait_for_bootloader(&*usb, "/dev/cu.other", "SN2", &quick()).is_err());
-        assert_eq!(wait_for_bootloader(&*usb, "/dev/cu.old", "SN1", &quick()).unwrap(), "/dev/cu.other");
+        assert!(wait_for_bootloader(&*usb, "/dev/cu.selected", "SN2", &usb.ports(), &quick()).is_err());
+        assert!(wait_for_bootloader(&*usb, "/dev/cu.other", "SN2", &usb.ports(), &quick()).is_err());
+        assert_eq!(wait_for_bootloader(&*usb, "/dev/cu.old", "SN1", &usb.ports(), &quick()).unwrap(), "/dev/cu.other");
     }
+    #[test]
+    fn changed_rom_serial_uses_only_a_unique_new_bootloader() {
+        let usb = FakeUsb::stick("/dev/cu.app", "2.2.0");
+        *usb.boot_port.lock().unwrap() = Some("/dev/cu.rom".into());
+        *usb.boot_serial.lock().unwrap() = Some("ROM-DIFFERENT".into());
+        let before = usb.ports();
+        usb.touch_1200("/dev/cu.app").unwrap();
+        assert_eq!(wait_for_bootloader(&*usb, "/dev/cu.app", "SN1", &before, &quick()).unwrap(), "/dev/cu.rom");
+        let rom = usb.ports()[0].clone();
+        // A bootloader that already existed is never the serial-mismatch fallback.
+        assert!(wait_for_bootloader(&*usb, "/dev/cu.app", "SN1", std::slice::from_ref(&rom), &quick()).is_err());
+        let mut second = rom;
+        second.port = "/dev/cu.second-rom".into();
+        usb.ports.lock().unwrap().push(second);
+        assert!(wait_for_bootloader(&*usb, "/dev/cu.app", "SN1", &before, &quick()).is_err());
+        assert!(usb.lines.lock().unwrap().is_empty(), "enumeration never opens serial ports");
+    }
+
+    #[test]
+    fn recovery_verifies_the_selected_rom_chip_before_writing_without_state() {
+        for crashed_app in [false, true] {
+            let usb = FakeUsb::stick("/dev/cu.recovery", "2.2.0");
+            usb.states.lock().unwrap().clear();
+            if !crashed_app {
+                usb.touch_1200("/dev/cu.recovery").unwrap();
+            }
+            let tool = FakeEsptool::default();
+            let mut f = Flash {
+                usb: &*usb,
+                esptool: &tool,
+                port: "/dev/cu.recovery".into(),
+                backup: false,
+                bundles: vec![bundle(if crashed_app { "crashed" } else { "rom" }, "0x10000")],
+                expected_device: Some("known-stick".into()),
+                recovery_board: None,
+                backups: std::env::temp_dir(),
+                timings: quick(),
+            };
+            assert!(flash(&f, &|_| {}).unwrap_err().contains("recovery"));
+            assert!(tool.runs.lock().unwrap().is_empty());
+            f.recovery_board = Some("m5-sticks3".into());
+            usb.lines.lock().unwrap().clear();
+            flash(&f, &|_| {}).unwrap();
+            let runs = tool.runs.lock().unwrap();
+            assert_eq!(runs.len(), 2);
+            assert_eq!(runs[0].last().unwrap(), "chip-id");
+            assert!(runs[0].join(" ").contains("--chip esp32s3 --port /dev/cu.recovery"));
+            assert!(runs[0].join(" ").contains("--no-stub"));
+            assert!(runs[1].iter().any(|a| a == "write-flash"));
+            assert_eq!(usb.lines.lock().unwrap().len(), usize::from(crashed_app));
+            drop(runs);
+            let wrong = FakeEsptool { reject_identify: true, ..Default::default() };
+            f.esptool = &wrong;
+            assert!(flash(&f, &|_| {}).is_err());
+            assert_eq!(wrong.runs.lock().unwrap().len(), 1);
+            assert_eq!(wrong.runs.lock().unwrap()[0].last().unwrap(), "chip-id");
+        }
+    }
+
     #[test]
     fn plus2_uses_its_chip_offsets_and_bridge_reset() {
         let usb = FakeUsb::stick("/dev/cu.fakeplus", "2.2.0");
@@ -526,7 +666,9 @@ pub mod tests {
             esptool: &tool,
             port: "/dev/cu.fakeplus".into(),
             backup: false,
-            fw,
+            bundles: vec![fw],
+            expected_device: None,
+            recovery_board: None,
             backups: std::env::temp_dir(),
             timings: quick(),
         };

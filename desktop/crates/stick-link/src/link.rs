@@ -564,21 +564,24 @@ impl<C: Connector> Link<C> {
             let me = self.clone();
             tokio::spawn(async move {
                 let has_host = me.inner.host.lock().unwrap().is_some();
-                if has_host
-                    && me
-                        .request_timeout("@state", Duration::from_secs(2))
-                        .await
-                        .is_some_and(|v| v["multiHost"] == 1 || v["multiHost"] == true)
-                {
-                    let mut bytes = [0u8; 16];
-                    if getrandom::fill(&mut bytes).is_ok() {
-                        let nonce = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
-                        *me.inner.session.lock().unwrap() = Some(nonce);
-                    }
-                }
+                let mut negotiated = !has_host;
+                let mut retry = Duration::from_secs(1);
                 loop {
+                    if !negotiated && let Some(state) = me.request_timeout("@state", Duration::from_secs(2)).await {
+                        negotiated = true; // a real legacy reply is definitive; silence isn't
+                        if state["multiHost"] == 1 || state["multiHost"] == true {
+                            let mut bytes = [0u8; 16];
+                            if getrandom::fill(&mut bytes).is_ok() {
+                                let nonce = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+                                *me.inner.session.lock().unwrap() = Some(nonce);
+                            } else {
+                                negotiated = false;
+                            }
+                        }
+                    }
                     me.refresh_hello().await;
-                    tokio::time::sleep(every).await;
+                    tokio::time::sleep(if negotiated { every } else { retry }).await;
+                    retry = (retry * 2).min(Duration::from_secs(30));
                 }
             })
         });
@@ -1124,6 +1127,25 @@ mod multi_host_tests {
         assert!(!messages.iter().any(|m| m["text"] == "stale private reply"));
         task.abort();
     }
+    #[tokio::test]
+    async fn a_lost_first_state_reply_retries_without_reconnecting() {
+        let fake = FakeStick::new();
+        fake.set_stick("multiHost", json!(1));
+        fake.set_silent(true);
+        let link = Link::new(fake.clone());
+        link.set_host(|| json!({"id":"test-host","name":"Test Mac","label":"Test"}));
+        let task = link.spawn();
+        link.set_target(Some(Target { address: "A".into(), name: "Stick".into() }));
+        let first = hello(&fake, |_| true).await; // first probe timed out, legacy hello still goes out
+        assert!(first.get("host").is_none());
+        let generation = link.generation();
+        fake.set_silent(false);
+        let recovered = hello(&fake, |v| v["host"]["session"].is_string()).await;
+        assert_eq!(generation, link.generation());
+        assert_eq!(recovered["hs"], recovered["host"]["session"]);
+        task.abort();
+    }
+
     #[tokio::test]
     async fn legacy_firmware_never_receives_host_metadata_or_session_fields() {
         let fake = FakeStick::new();

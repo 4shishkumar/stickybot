@@ -28,6 +28,7 @@ struct Prompt {
 };
 
 String deviceId();
+bool forgetHosts(const String& id); // explicit recovery; caller restarts after acknowledgement
 String hostState();             // bounded JSON, no secrets
 String activeHostLabel();
 String activeHostName();

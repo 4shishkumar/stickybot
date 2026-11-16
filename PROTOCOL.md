@@ -622,7 +622,10 @@ labels for offline hosts. A host record may also include `display`, its disambig
 which dashboards should prefer. Duplicate labels are distinguished with a stable short ID suffix
 in pickers; the short label itself is never a security identity.
 
-The firmware binds the host to the authenticated BLE identity and that connection's session.
+Shared-mode firmware binds the host to the authenticated BLE identity and that connection's
+session. Legacy mode does not enroll or enforce shared host records; reinstalling the app or
+changing macOS users cannot prevent the legacy hello from being handled. A timed-out capability
+probe is retried with bounded backoff; a definite legacy reply keeps the legacy wire format.
 In shared mode every subsequent app JSON write carries `hs` equal to this session. Handshake
 is allowed before `hs` is established; a different host ID cannot overwrite an existing bonded
 peer's identity. A new session invalidates old requests; invalid session, unencrypted writes,
@@ -644,6 +647,12 @@ identity; the command explains that other slot identities may need guided re-pai
 returns to legacy mode without deleting saved slots or bonds. An old app is supported in legacy
 mode; it must upgrade before participating in shared mode. The XIAO C3 has no Mac-link extension
 and retains its existing keyboard behavior.
+
+`@hosts forget=<host-id>` removes one saved shared host; `@hosts forget=all` removes all.
+The stick's shared-mode **Forget saved Macs** menu action also removes all after a second press.
+These actions refuse while a resource is busy, remove the corresponding host passwords and
+restart after acknowledgement. Bluetooth bonds and legacy slots remain intact; Macs can enroll
+again through a fresh hello. USB commands provide recovery when no app can enroll.
 
 `{"src":"agent","hs":"connection-nonce","hosts":{"select":"host-id"}}` requests a focus
 change; a request from an app requires physical confirmation. The stick's host picker can select
@@ -691,9 +700,35 @@ the device manager and retain the legacy single-device UI when these endpoints a
 Voice replies retain originating device/session. A shared speech model and Mac audio device
 are arbitrated: only one dictation stream runs per Mac, with explicit busy responses to others.
 Approval requests sent to multiple configured destinations resolve once, then clear all other
-displays. Notifications default to the default device; additional destinations are explicit.
+displays. Permission prompts retain destination device IDs across reconnects and resend on each
+device's current session; stale-session work and answers from unrelated devices are rejected.
+Questions and voice results remain session-bound. With no valid configured approval destinations,
+the permission hook returns immediately for terminal fallback. Removal prunes saved destination
+lists, and invalid saved device entries are skipped at startup without stopping healthy sessions.
+Notifications default to the default device; additional destinations are explicit.
 Mac config `notification_devices` and `approval_devices` are `null` for the default, an array of
 configured IDs for those destinations, or `[]` for no hardware destinations. The Devices page
 edits these through `/api/devices/primary/api/config`, independent of the selected/default view.
 Firmware operations bind to a device and require compatible board/chip/layout metadata before
 any BLE/USB write. Missing compatible firmware means unavailable, never a different board's image.
+
+### USB identity checks and recovery
+
+`GET /api/firmware` in the Rust app includes `usb_recovery:{ports,boards}`: passive candidate port
+metadata and supported models with available matching bundles. Generic CH9102/CH343 bridges are
+never opened during discovery, fallback routing or bootloader polling. Only an explicitly selected
+flash/recovery port is probed. Normal flash jobs issue `@state` at most once and use its identity
+for both device selection and bundle validation.
+
+`POST /api/firmware/flash` accepts `{port,backup,recovery_board?}`. Recovery requires an explicit
+physical model (`m5-sticks3` or `m5-stickc-plus2`) and USB port; it can work without running
+firmware. A supplied model must agree with any working firmware reply. Without a reply, esptool
+checks the model's chip using a ROM command before writing; a mismatch/error stops the job.
+The chip check does not claim to identify the physical board model, which the person selects.
+App/bootloader silicon, manifest layout, hashes and the NVS exclusion are still enforced.
+
+After an S3 touch, a matching serial is preferred. If ROM uses a different serial, the fallback
+requires exactly one bootloader, newly appeared since that touch, with the old application port
+gone. Existing unrelated bootloaders and ambiguous candidates never qualify. Exact descriptor
+behavior remains a real-hardware verification item. Legacy Python omits this recovery capability
+and retains its existing USB API/UI.

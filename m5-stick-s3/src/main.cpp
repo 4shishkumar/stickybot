@@ -525,9 +525,14 @@ static void onMenu(menu::Action a) {
       showMessage("Cannot switch Mac", buddy::hostBusy() ? "Finish the active task first" : "No other Mac connected", COLOR_WARN, 3000);
       break;
     case menu::Action::FORGET:
-      hid::forget(hid::slot());
+      if (settings::sharedHosts()) {
+        if (!buddy::forgetHosts("all")) {
+          showMessage("Device is busy", "Finish the active task first", COLOR_WARN, 3000);
+          break;
+        }
+      } else hid::forget(hid::slot());
       Log.event(diagnostics::Event::Settings);
-      ui::drawMessage("Forgotten", "Remove it on the Mac too", COLOR_WARN);
+      ui::drawMessage("Forgotten", settings::sharedHosts() ? "Macs can enroll again" : "Remove it on the Mac too", COLOR_WARN);
       delay(2000);
       ESP.restart();
       break;

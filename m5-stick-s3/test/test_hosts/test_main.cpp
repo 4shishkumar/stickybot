@@ -99,8 +99,23 @@ void test_transfer_resume_requires_same_bonded_host_and_new_begin() {
   TEST_ASSERT_FALSE(r.owns(before,7));
   TEST_ASSERT_EQUAL_STRING("host-a",bulk.host.c_str());
 }
+void test_forget_recovers_identity_and_capacity_without_reviving_old_leases() {
+  auto r = pair();
+  auto old = r.lease(1);
+  TEST_ASSERT_EQUAL(2, r.hello(3,"bond-c",true,"host-c","Test","Third","s",1));
+  TEST_ASSERT_EQUAL(-1, r.hello(4,"bond-d",true,"host-d","Test","Fourth","s",1));
+  TEST_ASSERT_EQUAL(0, r.forget("host-a"));
+  TEST_ASSERT_EQUAL(NONE, r.selected());
+  TEST_ASSERT_FALSE(r.owns(old,1));
+  TEST_ASSERT_EQUAL(0, r.hello(1,"bond-a",true,"reinstalled","Test","Desk","new-session",20));
+  TEST_ASSERT_FALSE(r.owns(old,1));
+  TEST_ASSERT_EQUAL(1, r.forget("host-b"));
+  TEST_ASSERT_EQUAL(1, r.hello(4,"bond-d",true,"host-d","Test","Fourth","s",30));
+  TEST_ASSERT_EQUAL(-1, r.forget("unknown"));
+}
 int main(int,char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_forget_recovers_identity_and_capacity_without_reviving_old_leases);
   RUN_TEST(test_identity_is_bound_to_bond_and_session);
   RUN_TEST(test_focus_never_follows_reconnect_or_busy_switch);
   RUN_TEST(test_names_capacity_and_presence_are_bounded);

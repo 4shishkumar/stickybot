@@ -34,6 +34,7 @@ class Registry {
   void reconnect(uint16_t handle, const std::string& address);
   void disconnect(uint16_t handle);
   void retire(uint16_t handle);
+  int forget(const std::string& id);
   bool valid(uint16_t h, const std::string& session) const;
   Lease lease(uint16_t h) const;
   bool owns(Lease lease, uint16_t h) const;

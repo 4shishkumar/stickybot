@@ -1206,13 +1206,15 @@ void HijelHID_BLEKeyboard::_onDisconnect(uint16_t handle) {
 void HijelHID_BLEKeyboard::selectConnection(uint16_t handle) {
     if (handle == _connHandle) return;
     releaseAll();  // clear local holds even when the former host already disconnected
-    _onDisconnect(_connHandle);
+    if (_connHandle != BLE_HS_CONN_HANDLE_NONE) _onDisconnect(_connHandle);
     if (handle == BLE_HS_CONN_HANDLE_NONE || !_pServer) return;
-    NimBLEConnInfo info = _pServer->getPeerInfoByHandle(handle);
-    if (!info.isEncrypted()) return;
+    // Remember a pending selection too. The authentication callback completes it;
+    // the main loop must not reset HID/advertising again while encryption is pending.
     _connHandle = handle;
     _connected = true;
-    _onAuthComplete(true, handle);
+    _connState = _ConnState::Connecting;
+    NimBLEConnInfo info = _pServer->getPeerInfoByHandle(handle);
+    if (info.isEncrypted()) _onAuthComplete(true, handle);
 }
 
 void HijelHID_BLEKeyboard::_onAuthComplete(bool success, uint16_t handle) {

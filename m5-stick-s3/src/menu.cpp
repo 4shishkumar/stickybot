@@ -84,7 +84,6 @@ Action select() {
     case HOST_DETAILS: return Action::HOST_INFO;
     case BT:      btOff_ = !btOff_; return Action::BT_TOGGLE;
     case FORGET:
-      if (settings::sharedHosts()) return Action::REDRAW; // legacy slots retained, never erase a shared bond by slot
       if (forgetArmed) { forgetArmed = false; return Action::FORGET; }
       forgetArmed = true;
       forgetArmedAt = millis();
@@ -136,7 +135,7 @@ ui::MenuView view() {
   v.lines[SLOT] = settings::sharedHosts() ? "Input Mac: " + buddy::activeHostLabel() : String("Mac slot: ") + draft_.slot + (draft_.slot != originalSlot ? " *" : "");
   v.lines[HOST_DETAILS] = settings::sharedHosts() ? "About input Mac" : "About Mac (shared mode)";
   v.lines[BT]      = btOff_ ? "Reconnect BT" : "Disconnect BT";
-  v.lines[FORGET]  = settings::sharedHosts() ? String("Legacy slots retained") : forgetArmed ? "B again: forget" : String("Forget Mac ") + originalSlot;
+  v.lines[FORGET]  = forgetArmed ? "B again: forget" : settings::sharedHosts() ? String("Forget saved Macs") : String("Forget Mac ") + originalSlot;
   v.lines[STANDBY] = draft_.standbyMin ? String("Standby: ") + draft_.standbyMin + " min" : "Standby: off";
   v.lines[M_LIFT]  = String("Lift wakes: ") + (draft_.lift ? "ON" : "off");
   v.lines[M_FACE]  = String("Face-down sleep: ") + (draft_.faceDown ? "ON" : "off");

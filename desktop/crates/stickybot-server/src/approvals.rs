@@ -95,12 +95,20 @@ impl Approvals {
         allowed && self.decide(id, decision, "dashboard")
     }
 
-    /// Hardware answers are valid only on a destination connection captured when the prompt began.
+    /// Permissions survive reconnects on the same device; questions remain session-bound.
     pub fn decide_from_device(&self, id: &str, decision: &str, device: &AppState) -> bool {
         let expected = (device.device_id.clone(), device.link.generation());
-        let allowed = self.prompts.lock().unwrap().get(id).is_some_and(|p| p.destinations.contains(&expected))
+        let allowed = self
+            .prompts
+            .lock()
+            .unwrap()
+            .get(id)
+            .is_some_and(|p| p.destinations.iter().any(|(id, _)| id == &device.device_id))
             || self.asks.lock().unwrap().get(id).is_some_and(|p| p.destinations.contains(&expected));
-        allowed && self.decide(id, decision, "stick")
+        allowed
+            && device.link.connected()
+            && device.link.bound_generation() == device.link.generation()
+            && self.decide(id, decision, "stick")
     }
     /// Questions waiting, for `GET /api/status` (`asks`).
     pub fn asks(&self) -> Value {
@@ -177,6 +185,9 @@ pub async fn ask_permission(
         return None;
     }
     let destinations = destinations(st, "approval_devices");
+    if destinations.is_empty() {
+        return None;
+    }
     let owners = destinations.iter().map(|(s, g)| (s.device_id.clone(), *g)).collect();
     let id = new_id();
     let (tx, mut rx) = oneshot::channel();
@@ -203,10 +214,9 @@ pub async fn ask_permission(
     let deadline = tokio::time::Instant::now() + wait.min(WAIT);
     let mut decision = None;
     while tokio::time::Instant::now() < deadline {
-        for (device, generation) in &destinations {
-            if device.link.generation() == *generation {
-                device.link.send(&prompt).await;
-            }
+        for (device, _) in &destinations {
+            let generation = device.link.generation();
+            device.link.with_generation(generation, device.link.send(&prompt)).await;
         }
         let until = (tokio::time::Instant::now() + resend).min(deadline);
         match tokio::time::timeout_at(until, &mut rx).await {
@@ -219,10 +229,9 @@ pub async fn ask_permission(
         }
     }
     st.approvals.prompts.lock().unwrap().remove(&id);
-    for (device, generation) in &destinations {
-        if device.link.generation() == *generation {
-            device.link.send(&clear_message(device, &id)).await;
-        }
+    for (device, _) in &destinations {
+        let generation = device.link.generation();
+        device.link.with_generation(generation, device.link.send(&clear_message(device, &id))).await;
         device.hub.emit("prompt_done", json!({"id":id,"decision":decision}));
     }
     st.hub.emit("prompt_done", json!({"id": id, "decision": decision}));
@@ -428,6 +437,7 @@ pub fn destinations(st: &Arc<AppState>, setting: &str) -> Vec<(Arc<AppState>, u6
     };
     devices
         .into_iter()
+        .filter(|s| s.stick().is_some())
         .map(|s| {
             let generation = s.link.generation();
             (s, generation)
@@ -519,6 +529,85 @@ mod multi_device_tests {
         assert!(!after.iter().any(|m| m["src"] == "cli" && m.get("prompt").is_none()));
         assert!(t.st.approvals.decide_from_device(&fresh_id, "once", &t.st));
         assert_eq!(fresh.await.unwrap(), "Yes");
+    }
+
+    #[tokio::test]
+    async fn permissions_follow_reconnect_but_reject_old_connection_work() {
+        let t = agent("permission-reconnect", false).await;
+        *t.st.approvals.resend.lock().unwrap() = Some(Duration::from_millis(20));
+        for initially_offline in [false, true] {
+            let mut state = t.st.link.watch_state();
+            if initially_offline {
+                t.st.link.pause(true);
+                state.wait_for(|s| *s == stick_link::LinkState::Paused).await.unwrap();
+            }
+            let root = t.st.clone();
+            let task = tokio::spawn(async move { ask_permission(&root, "Bash", "test", "test", WAIT).await });
+            let id = tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    if let Some(id) = t.st.approvals.list()[0]["id"].as_str() {
+                        break id.to_owned();
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            let old = t.st.link.generation();
+            if !initially_offline {
+                t.st.link.pause(true);
+                state.wait_for(|s| *s == stick_link::LinkState::Paused).await.unwrap();
+            }
+            t.st.link.pause(false);
+            state.wait_for(|s| *s == stick_link::LinkState::Connected).await.unwrap();
+            let before = t.fake.writes().len();
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    let writes = t.fake.writes();
+                    let text = String::from_utf8(writes[before..].concat()).unwrap();
+                    if text
+                        .lines()
+                        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                        .any(|m| m["prompt"]["id"] == id)
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let stale =
+                t.st.link.with_generation(old, async { t.st.approvals.decide_from_device(&id, "once", &t.st) }).await;
+            assert!(!stale);
+            assert!(t.st.approvals.decide_from_device(&id, "once", &t.st));
+            assert!(!t.st.approvals.decide_from_device(&id, "deny", &t.st));
+            assert_eq!(task.await.unwrap().as_deref(), Some("allow"));
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_or_missing_approval_destinations_return_without_waiting() {
+        let t = agent("permission-no-destinations", false).await;
+        t.st.devices.init(&t.st).unwrap();
+        for ids in [json!([]), json!(["removed-device"])] {
+            t.st.update_config(json!({"approval_devices": ids}).as_object().unwrap().clone()).unwrap();
+            assert_eq!(
+                tokio::time::timeout(Duration::from_millis(100), ask_permission(&t.st, "Bash", "test", "test", WAIT))
+                    .await
+                    .unwrap(),
+                None
+            );
+            assert!(!t.st.approvals.pending());
+        }
+        t.st.cfg.lock().unwrap().insert("stick".into(), Value::Null);
+        t.st.cfg.lock().unwrap().insert("approval_devices".into(), json!(["primary"]));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_millis(100), ask_permission(&t.st, "Bash", "test", "test", WAIT))
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     #[tokio::test]

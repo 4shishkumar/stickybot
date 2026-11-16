@@ -982,7 +982,22 @@ async fn firmware_info(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
         Ok(bundle) => (crate::firmware::describe(bundle), Value::Null),
         Err(reason) => (Value::Null, json!(reason)),
     };
-    axum::Json(json!({"bundled":bundled,"unavailable":unavailable,"usb":usb,"connected":connected}))
+    let backend = st.usb.backend();
+    let recovery_ports = tokio::task::spawn_blocking(move || {
+        backend
+            .ports()
+            .into_iter()
+            .map(|p| json!({"port":p.port,"product":p.product,"bootloader":p.in_bootloader()}))
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
+    let recovery_boards: Vec<_> = ["m5-sticks3", "m5-stickc-plus2"]
+        .into_iter()
+        .filter(|board| crate::firmware::compatible_bundle(&bundles, board).is_ok())
+        .collect();
+    axum::Json(json!({"bundled":bundled,"unavailable":unavailable,"usb":usb,"connected":connected,
+        "usb_recovery":{"ports":recovery_ports,"boards":recovery_boards}}))
 }
 
 /// Starts a firmware update over Bluetooth: `{"force"}` -> `{"job"}`.
@@ -991,31 +1006,8 @@ async fn usb_flash(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
     let b = body_obj(&body);
     let port = b.get("port").and_then(Value::as_str).unwrap_or("").to_string();
     let backup = b.get("backup").and_then(Value::as_bool).unwrap_or(false);
-    let st2 = st.clone();
-    let r = tokio::task::spawn_blocking(move || st2.usb.backend().ports())
-        .await
-        .map(|ports| ports.iter().any(|p| p.port == port));
-    if !matches!(r, Ok(true)) {
-        return err(StatusCode::BAD_REQUEST, &format!("{port} isn't an Espressif USB device (not a stick) — refusing"));
-    }
-    let identity = st.host_state.lock().unwrap()["deviceId"].as_str().map(str::to_owned);
-    if identity.is_some() || st.device_id != "primary" || st.devices.all().len() > 1 {
-        let Some(identity) = identity else {
-            return err(StatusCode::CONFLICT, "Selected device's USB identity is unknown");
-        };
-        let usb = st.usb.backend();
-        let selected_port = port.clone();
-        let matches = tokio::task::spawn_blocking(move || {
-            usb.proto(&selected_port, "@state", Duration::from_millis(1500))
-                .is_some_and(|state| state["deviceId"] == identity)
-        })
-        .await
-        .unwrap_or(false);
-        if !matches {
-            return err(StatusCode::CONFLICT, "USB port does not belong to the selected device");
-        }
-    }
-    match crate::flasher::start(&st, &port, backup) {
+    let recovery_board = b.get("recovery_board").and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_owned);
+    match crate::flasher::start(&st, &port, backup, recovery_board) {
         Ok(job) => axum::Json(json!({"job": job})).into_response(),
         Err((code, e)) => err(StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_REQUEST), &e),
     }
@@ -1673,6 +1665,8 @@ mod tests {
         image[13] = 0;
         std::fs::write(d.join("app.bin"), image).unwrap();
         std::fs::write(d.join("manifest.json"), json!({"version": "2.3.0", "board":"m5-sticks3", "parts": [{"file": "app.bin", "offset": "0x10000", "size": 64}]}).to_string()).unwrap();
+        st.host_state.lock().unwrap()["deviceId"] = json!("selected-test-stick");
+        usb.states.lock().unwrap().get_mut("/dev/cu.usbmodem3").unwrap()["deviceId"] = json!("selected-test-stick");
         st.usb.flashing.store(true, std::sync::atomic::Ordering::Release);
         let (busy, _, _) =
             call(&app, req("POST", "/api/firmware/flash", Some(json!({"port":"/dev/cu.usbmodem3"})), tok)).await;
@@ -1694,6 +1688,11 @@ mod tests {
         let evs = job.events_from(0);
         assert_eq!(evs.last().unwrap()["ok"], true, "{evs:?}");
         assert_eq!(tool.runs.lock().unwrap().len(), 1); // no backup asked
+        assert_eq!(
+            usb.lines.lock().unwrap().iter().filter(|(_, line)| line == "@state").count(),
+            1,
+            "one identity probe, including scoped verification"
+        );
         assert_eq!(*usb.touches.lock().unwrap(), vec!["/dev/cu.usbmodem3".to_string()]);
         assert!(!st.usb.is_flashing());
     }

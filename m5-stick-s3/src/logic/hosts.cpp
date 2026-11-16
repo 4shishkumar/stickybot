@@ -82,6 +82,13 @@ void Registry::retire(uint16_t h) {
   auto& p = peers[i];
   p.session.clear(); p.present = false; p.generation = ++nextGeneration;
 }
+int Registry::forget(const std::string& id) {
+  int i = byId(id);
+  if (i < 0) return -1;
+  if (active == id) active.clear();
+  peers[i] = {};
+  return i;
+}
 bool Registry::valid(uint16_t h, const std::string& session) const {
   int i = byHandle(h);
   return i >= 0 && !session.empty() && peers[i].session == session;

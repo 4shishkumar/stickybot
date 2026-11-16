@@ -19,10 +19,16 @@ mouse and dictation input. Reconnecting a Mac does not take focus. Use the stick
 choose the input destination; a dashboard request requires physical confirmation on the stick.
 Busy recording, playback or transfers must finish before switching. An approval can belong to a
 Mac other than the input destination, and its displayed host label identifies where the decision
-goes. Only the first valid approval decision resolves a prompt shown on several sticks.
+goes. Only the first valid approval decision resolves a prompt shown on several sticks. Permission
+prompts return on the same stick after a reconnect; choosing no approval devices returns control
+to the terminal immediately.
 
 Legacy slots and bonds are retained. Shared mode uses the identity of the slot selected when it
 is enabled; a Mac paired with another slot may need to pair again with this shared identity.
+A reinstalled app can use legacy mode without shared-host enrollment. To clear shared records,
+use the stick's **Forget saved Macs** action (press again to confirm), or send `@hosts forget=all`
+over USB; `@hosts forget=<host-id>` removes one. The stick restarts, clears the corresponding
+host passwords and keeps Bluetooth bonds and legacy slots. Macs can introduce themselves again.
 Switch back to legacy slots for an older Mac app. The legacy Python app continues to manage one
 stick and shows an explanation on Devices instead of offering unsupported multi-device controls.
 Its firmware updater remains the legacy implementation; use StickyBot.app for board-aware updates.
@@ -37,8 +43,11 @@ its normal response, only on the connection that requested it; other log viewers
 
 Firmware bundles carry the board, chip, separate part offsets, size and hashes. StickyBot.app
 refuses incompatible or unidentified images before writing. If a matching bundle is unavailable,
-there is no update to install. USB update needs running firmware that can identify its model;
-a device already in recovery/download mode needs manual board-specific recovery tooling. The
+there is no update to install. Normal USB updates verify the running firmware once. For a crashed
+or download-mode stick, choose its physical port and model under **USB recovery**. Recovery checks
+the ROM chip before writing a matching bundle. The port you choose is the physical target even
+when a different Bluetooth device is selected. Generic USB bridges are only listed as candidates;
+the app does not open them during discovery. The
 release packaging helper accepts `--board m5-sticks3` or `--board m5-stickc-plus2` and checks the
 image's silicon ID before assigning the board name. A version folder may contain a bundle for
 each board in subfolders named with these board IDs. No merged image or settings partition is
@@ -69,6 +78,13 @@ real stick, started the real app or changed the person's app configuration.
 - Offer an S3-only bundle with a Plus2 selected: verify unavailable and no write. With matching
   bundles, test Bluetooth interruption/resume, cancellation, confirmation/rollback, and selected
   USB serial-port re-enumeration with another stick also attached.
+- Reinstall the app/change its installation identity in legacy mode; verify it remains usable.
+  In shared mode, fill all three host records, forget one/all, then enroll again without erasing NVS.
+- Capture S3 app and ROM USB serial descriptors; verify a changed serial uses only a unique newly
+  appeared bootloader. Leave another bootloader attached and confirm ambiguous routing refuses.
+  Recover a crashed/ROM-mode S3 and Plus2; verify a wrong model/chip refuses before any flash write.
+- Disconnect/reconnect during a pending permission prompt and answer after it returns. Verify
+  no-destination hooks return immediately and removing a selected destination cleans both lists.
 - Capture dashboard screenshots: Devices with two boards/two named hosts, edit short name,
   background-host approval, and Plus2 update unavailable. Photograph each stick's Mac picker,
   active-host label, remote-switch confirmation and approval-owner label. Use synthetic names.
