@@ -351,9 +351,12 @@ mod tests {
         assert_eq!(prepared.arguments, json!({"open":["https://example.com/a"]}));
         prepared.run(&t.st.runner());
         assert_eq!(*t.ran.lock().unwrap(), [commands::Action::Open(vec!["https://example.com/a".into()])]);
-        let app = Prepared::resolve(&t.st, "open_app", json!({"name":"Slack"}).as_object().unwrap()).await.unwrap();
-        assert_eq!(app.arguments, json!({"open":["-a","/Applications/Slack.app"]}));
-        assert_eq!(app.hint, "/Applications/Slack.app");
+        let app =
+            Prepared::resolve(&t.st, "open_app", json!({"name":"Fixture Editor"}).as_object().unwrap()).await.unwrap();
+        assert_eq!(app.arguments, json!({"open":["-a","/Applications/Fixture Editor.app"]}));
+        assert_eq!(app.hint, "/Applications/Fixture Editor.app");
+        // A host-installed app outside the fixture cannot leak into discovery.
+        assert!(Prepared::resolve(&t.st, "open_app", json!({"name":"Safari"}).as_object().unwrap()).await.is_err());
     }
 
     #[test]

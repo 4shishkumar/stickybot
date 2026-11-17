@@ -194,7 +194,7 @@ impl DeviceManager {
         cfg.insert("stick".into(), json!({"address":address,"name":name}));
         let opts = Options { port: root.port, home: root.paths.home.clone(), fake_stick: root.fake, import_from: None };
         let backend = if root.fake { Backend::Fake(stick_link::fake::FakeStick::new()) } else { root.backend.clone() };
-        let child = AppState::new_session(&opts, backend, Some(root), id.clone(), Some(cfg))?;
+        let child = AppState::new_session(&opts, backend, Some(root), id.clone(), Some(cfg), root.apps.clone())?;
         if persist {
             let mut cfg = root.cfg.lock().unwrap();
             let mut entries = cfg.get("devices").and_then(Value::as_array).cloned().unwrap_or_default();

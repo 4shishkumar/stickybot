@@ -195,7 +195,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(opts: &Options, backend: Backend) -> Result<Arc<Self>, String> {
-        Self::new_session(opts, backend, None, "primary".into(), None)
+        Self::new_session(opts, backend, None, "primary".into(), None, Arc::new(commands::Apps::system()))
     }
 
     fn new_session(
@@ -204,6 +204,7 @@ impl AppState {
         parent: Option<&Arc<Self>>,
         device_id: String,
         session_cfg: Option<Map<String, Value>>,
+        apps: Arc<commands::Apps>,
     ) -> Result<Arc<Self>, String> {
         let paths = config::Paths::new(&opts.home)?;
         paths.ensure().map_err(|e| format!("{}: {e}", paths.home.display()))?;
@@ -249,7 +250,7 @@ impl AppState {
             fake,
             speech: parent.map(|p| p.speech.clone()).unwrap_or_else(|| Arc::new(speech::Speech::default())),
             commands: parent.map(|p| p.commands.clone()).unwrap_or_else(|| Arc::new(commands)),
-            apps: parent.map(|p| p.apps.clone()).unwrap_or_else(|| Arc::new(commands::Apps::system())),
+            apps,
             runner: parent.map(|p| p.runner.clone()).unwrap_or_else(|| Arc::new(Mutex::new(commands::system_runner()))),
             brain: Mutex::new(Arc::new(talk::NoBrain)),
             activity: Mutex::new(None),

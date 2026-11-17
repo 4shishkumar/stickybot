@@ -718,7 +718,13 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&home);
         let opts = Options { port: 8670, home, fake_stick: true, import_from: None };
         let fake = FakeStick::new();
-        let st = AppState::new(&opts, Backend::Fake(fake.clone())).unwrap();
+        // App discovery is also a fake: tests must not depend on /Applications or the user's apps.
+        let apps = commands::Apps {
+            fixed: Some([("slack".into(), "Slack".into()), ("fixture editor".into(), "Fixture Editor".into())].into()),
+        };
+        let st =
+            AppState::new_session(&opts, Backend::Fake(fake.clone()), None, "primary".into(), None, Arc::new(apps))
+                .unwrap();
         let ran = Arc::new(Mutex::new(Vec::new()));
         let r = ran.clone();
         st.set_runner(Arc::new(move |a: &Action| {
