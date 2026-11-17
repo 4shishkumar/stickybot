@@ -18,7 +18,6 @@
 #include "air.h"
 #include "games/games.h"
 #include "ir/ir.h"
-#include "logic/ir_names.h"
 #include "launcher_session.h"
 
 namespace protocol {
@@ -321,33 +320,6 @@ Result run(const String& action, const Args& arg) {
 
 // --- Serial -------------------------------------------------------------------
 
-static String urlDecode(const String& s) {
-  String o;
-  for (size_t i = 0; i < s.length(); i++) {
-    char c = s[i];
-    if (c == '+') o += ' ';
-    else if (c == '%' && i + 2 < s.length()) {
-      o += (char)strtol(s.substring(i + 1, i + 3).c_str(), nullptr, 16);
-      i += 2;
-    } else o += c;
-  }
-  return o;
-}
-
-// "a=1&b=x%20y" -> value of `name`
-static String queryArg(const String& query, const char* name) {
-  String key = String(name) + "=";
-  int start = 0;
-  while (start < (int)query.length()) {
-    int amp = query.indexOf('&', start);
-    if (amp < 0) amp = query.length();
-    if (query.substring(start, amp).startsWith(key))
-      return urlDecode(query.substring(start + key.length(), amp));
-    start = amp + 1;
-  }
-  return "";
-}
-
 void finish(const Result& r) {
   if (r.restart) {
     Serial.flush();
@@ -356,25 +328,8 @@ void finish(const Result& r) {
   }
 }
 
-Result runLine(const String& line) {
-  if (!line.length() || line[0] != '@') {
-    Result r;
-    r.status = 400;
-    r.json = "{\"ok\":false,\"error\":\"expected @action\"}";
-    return r;
-  }
-  int sp = line.indexOf(' ');
-  String action = line.substring(1, sp < 0 ? line.length() : sp);
-  String query = sp < 0 ? "" : line.substring(sp + 1);
-  if (action == "ir") {  // "@ir send dev=tv btn=volume up" -> op=send&dev=tv&btn=volume%20up
-    std::string q(query.length() * 3 + 16, '\0');
-    if (irnames::normalizeQuery(query.c_str(), &q[0], q.size()) || !query.length()) query = q.c_str();
-  }
-  return run(action, [&](const char* name) { return queryArg(query, name); });
-}
-
 static void runMachine(const String& line, Print& reply) {
-  Result r = runLine(line);
+  Result r = runLine(line, Source::Serial);
   machineReply(reply, r.json);
   finish(r);
 }
@@ -505,7 +460,7 @@ static void runHuman(const String& line, Print& reply) {
     r = run("face", [=](const char* n) { return String(n) == "demo" ? demo : String(n) == "id" ? rest : String(); });
   }
   else if (cmd == "ir") {  // ir list | ir diag | ir send dev=tv btn=power | ir learn dev=tv btn=power ...
-    Result ir = runLine("@ir " + rest);
+    Result ir = runLine("@ir " + rest, Source::Serial);
     reply.println(ir.json);
     return;
   }

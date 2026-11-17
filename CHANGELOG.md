@@ -27,6 +27,7 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   other sticks from loading.
 - Legacy pairing works after reinstalling the app. Shared-mode host records can be forgotten
   from the stick or USB, and delayed session negotiation retries without needing a reconnect.
+- Connected Macs cannot erase saved shared hosts over Bluetooth; use the stick or USB to forget them.
 - USB recovery works from an explicitly selected port and model without running firmware, with
   a chip check before writing. USB discovery leaves unrelated serial bridges alone, and updates
   verify the selected port once. S3 bootloader matching handles changed serial descriptors.

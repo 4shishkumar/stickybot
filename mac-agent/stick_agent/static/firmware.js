@@ -111,7 +111,7 @@ export function firmwarePanel(opts = {}) {
       model.addEventListener("change", update);
       box.appendChild(h("div", {class: "notice"}, h("div", {class: "grow"},
         h("b", null, "USB recovery"),
-        h("span", {class: "dim"}, "For a stick that cannot start. Put it in download mode and choose its port and model. Recovery writes to that USB device, which may differ from the Bluetooth device above. Its chip is checked before writing."),
+        h("span", {class: "dim"}, "For a stick that cannot start. Put it in download mode and choose its port and model. In download mode, that USB port determines the target; check it carefully. A running stick must match the selected device. The recovery chip is checked before writing."),
         h("div", {class: "row", style: "margin-top:8px;gap:8px"}, port, model, recover),
         !(recovery.boards || []).length ? h("span", {class: "dim"}, "Download a matching firmware bundle first.") : null)));
     }

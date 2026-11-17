@@ -479,7 +479,7 @@ static void handleAgent(JsonDocument& d) {
     String line = d["proto"].as<String>();
     line.trim();
     if (shared && line.startsWith("@ir")) irOwner = peers.lease(requestPeer);
-    protocol::Result r = protocol::runLine(line);
+    protocol::Result r = protocol::runLine(line, protocol::Source::Bluetooth);
     String id = d["id"] | "";
     String esc;
     for (char c : id) if (c != '"' && c != '\\') esc += c;  // ids are short tokens
@@ -596,7 +596,7 @@ static void handle(const String& l) {
     String proto = d["proto"] | ""; proto.trim();
     bool discovery = d["src"] == "agent" && (proto == "@state" || proto == "@hosts" || proto == "@keys");
     if (discovery && !hello) {
-      protocol::Result r = protocol::runLine(proto);
+      protocol::Result r = protocol::runLine(proto, protocol::Source::Bluetooth);
       protoReply(d["id"],r.json); return;
     }
     if (!hello && !peers.valid(requestPeer, d["hs"] | "")) {

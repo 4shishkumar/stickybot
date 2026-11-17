@@ -61,7 +61,8 @@ to three hosts using the current slot's persistent BLE identity; `shared=0` retu
 mode. Saved slots and bonds are retained. Macs paired to other slot identities may need guided
 re-pairing with the shared identity. Old apps require legacy mode. The Rust app checks Python
 coexistence for the particular target, leaving unrelated devices available. Shared records can
-be removed with `@hosts forget=<host-id|all>` or the confirmed **Forget saved Macs** action.
+be removed over USB with `@hosts forget=<host-id|all>` or the confirmed **Forget saved Macs** action.
+Bluetooth rejects host-forget commands before dispatch, including from the active authenticated Mac.
 Legacy slots and Bluetooth bonds remain intact. Forgetting a host clears its saved credentials
 and restarts the stick after acknowledgement so new installation identities can enroll.
 

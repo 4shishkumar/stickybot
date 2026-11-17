@@ -16,6 +16,15 @@ class String {
   const char* c_str() const { return value_.c_str(); }
   String& operator+=(char c) { value_ += c; return *this; }
   bool operator==(const char* s) const { return value_ == s; }
+  char operator[](size_t i) const { return value_[i]; }
+  String operator+(const String& s) const { return value_ + s.value_; }
+  int indexOf(char c, size_t start = 0) const {
+    size_t at = value_.find(c, start);
+    return at == std::string::npos ? -1 : (int)at;
+  }
+  String substring(size_t start, size_t end) const { return value_.substr(start, end - start); }
+  String substring(size_t start) const { return value_.substr(start); }
+  bool startsWith(const String& prefix) const { return value_.compare(0, prefix.length(), prefix.value_) == 0; }
  private:
   std::string value_;
 };

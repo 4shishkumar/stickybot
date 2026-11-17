@@ -31,7 +31,9 @@ inline void humanReply(Print& reply, const String& json) { reply.println(json); 
 // A machine line ("@state", "@combo text=Option+Cmd") run without printing:
 // used by the Mac agent over Bluetooth. If the result asks for a restart, call
 // finish() once the reply has been sent.
-Result runLine(const String& line);
+// Every caller states its transport; Bluetooth cannot erase shared host records.
+enum class Source { Serial, Bluetooth };
+Result runLine(const String& line, Source source);
 void   finish(const Result& r);
 
 }  // namespace protocol

@@ -649,6 +649,8 @@ mode; it must upgrade before participating in shared mode. The XIAO C3 has no Ma
 and retains its existing keyboard behavior.
 
 `@hosts forget=<host-id>` removes one saved shared host; `@hosts forget=all` removes all.
+Over Bluetooth, either form returns `ok:false` with an explanation to use the stick or USB;
+no settings are changed and no restart is requested, even for the active authenticated host.
 The stick's shared-mode **Forget saved Macs** menu action also removes all after a second press.
 These actions refuse while a resource is busy, remove the corresponding host passwords and
 restart after acknowledgement. Bluetooth bonds and legacy slots remain intact; Macs can enroll
@@ -730,5 +732,5 @@ App/bootloader silicon, manifest layout, hashes and the NVS exclusion are still 
 After an S3 touch, a matching serial is preferred. If ROM uses a different serial, the fallback
 requires exactly one bootloader, newly appeared since that touch, with the old application port
 gone. Existing unrelated bootloaders and ambiguous candidates never qualify. Exact descriptor
-behavior remains a real-hardware verification item. Legacy Python omits this recovery capability
-and retains its existing USB API/UI.
+observations and remaining recovery checks are recorded in `docs/MULTI_DEVICE.md`. Legacy Python
+omits this recovery capability and retains its existing USB API/UI.

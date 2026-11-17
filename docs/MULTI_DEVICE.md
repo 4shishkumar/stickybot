@@ -45,8 +45,9 @@ Firmware bundles carry the board, chip, separate part offsets, size and hashes. 
 refuses incompatible or unidentified images before writing. If a matching bundle is unavailable,
 there is no update to install. Normal USB updates verify the running firmware once. For a crashed
 or download-mode stick, choose its physical port and model under **USB recovery**. Recovery checks
-the ROM chip before writing a matching bundle. The port you choose is the physical target even
-when a different Bluetooth device is selected. Generic USB bridges are only listed as candidates;
+the ROM chip before writing a matching bundle. In download mode, the port you choose determines
+the physical target. A running stick must match the selected device's known identity; a different
+running stick is refused. Generic USB bridges are only listed as candidates;
 the app does not open them during discovery. The
 release packaging helper accepts `--board m5-sticks3` or `--board m5-stickc-plus2` and checks the
 image's silicon ID before assigning the board name. A version folder may contain a bundle for
@@ -55,10 +56,18 @@ written by the app updater.
 
 ## Hardware verification before release
 
-These checks are **pending**, require a person with two Macs and two boards, and are not replaced
+Except for the recorded evidence below, these checks are **pending**, require a person with two Macs and two boards, and are not replaced
 by fake/native tests. The draft PR must retain `needs-hardware` until they are recorded with the
 firmware build and app commit tested. No automated implementation work connected to or flashed a
 real stick, started the real app or changed the person's app configuration.
+
+Recorded by the reviewer on 2026-11-17 using a real StickS3, firmware 2.8.0 and esptool 5.4.0
+([PR evidence](https://github.com/4shishkumar/stickybot/pull/12#discussion_r4599667072)):
+firmware enumerated as `StickyBot`, PID `0x1001`, with a serial. After a 1200-baud touch, ROM
+enumerated as `USB JTAG_serial debug unit`, PID `0x1001`, with no serial and a different port.
+The ROM `chip-id` command succeeded for `esp32s3`, rejected `esp32`, and resetting returned to
+firmware. These observations support the new-bootloader fallback and chip check. A full recovery
+flash through this PR's app build remains **pending**; this report does not certify that path.
 
 - Record existing legacy pairings/settings; update both S3 and Plus2 and verify they remain intact.
 - On each model, opt into shared mode, pair both Macs, and verify full/short names, duplicate-name
@@ -80,6 +89,8 @@ real stick, started the real app or changed the person's app configuration.
   USB serial-port re-enumeration with another stick also attached.
 - Reinstall the app/change its installation identity in legacy mode; verify it remains usable.
   In shared mode, fill all three host records, forget one/all, then enroll again without erasing NVS.
+  From the active Mac, send `@hosts forget=all` over Bluetooth and verify an error, no restart,
+  and unchanged saved hosts; verify USB and the confirmed menu action can still forget hosts.
 - Capture S3 app and ROM USB serial descriptors; verify a changed serial uses only a unique newly
   appeared bootloader. Leave another bootloader attached and confirm ambiguous routing refuses.
   Recover a crashed/ROM-mode S3 and Plus2; verify a wrong model/chip refuses before any flash write.
