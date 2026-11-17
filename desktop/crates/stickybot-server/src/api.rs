@@ -322,11 +322,14 @@ fn err(status: StatusCode, msg: &str) -> Response {
     (status, axum::Json(json!({"error": msg}))).into_response()
 }
 
-fn same(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-async fn guard(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+#[derive(Clone)]
+struct VoiceCredential(String);
+
+async fn guard(State(st): State<Arc<AppState>>, mut req: Request, next: Next) -> Response {
     let host = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("");
     if host != format!("localhost:{}", st.port) && host != format!("127.0.0.1:{}", st.port) {
         return err(StatusCode::FORBIDDEN, "bad host");
@@ -336,9 +339,25 @@ async fn guard(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Res
     if mcp || (req.method() != Method::GET && req.method() != Method::HEAD) {
         let h = |k: &str| req.headers().get(k).map(|v| v.as_bytes()).unwrap_or(b"");
         let bearer = h("authorization").strip_prefix(b"Bearer ").unwrap_or(b"");
-        let ok = same(h("x-stick-token"), st.token.as_bytes()) || (mcp && same(bearer, st.token.as_bytes()));
+        let voice = req
+            .uri()
+            .path()
+            .strip_prefix("/api/devices/")
+            .and_then(|p| p.strip_suffix("/mcp"))
+            .and_then(|id| st.devices.resolve(id))
+            .filter(|device| same(bearer, device.mcp.voice_token.as_bytes()));
+        let forwarded_voice = req.uri().path() == "/mcp"
+            && req.extensions().get::<VoiceCredential>().is_some_and(|v| v.0 == st.device_id)
+            && same(bearer, st.mcp.voice_token.as_bytes());
+        let ok = voice.is_some()
+            || forwarded_voice
+            || same(h("x-stick-token"), st.token.as_bytes())
+            || (mcp && same(bearer, st.token.as_bytes()));
         if !ok {
             return err(StatusCode::FORBIDDEN, "bad token");
+        }
+        if let Some(device) = voice {
+            req.extensions_mut().insert(VoiceCredential(device.device_id.clone()));
         }
     }
     let revalidate = req.uri().path() == "/" || req.uri().path().starts_with("/static/");
@@ -2208,14 +2227,25 @@ mod tests {
     async fn ir_stick_tools() {
         let (_app, st, fake) = app("ir-mcp", true).await;
         remotes(&fake, &[("ac", "cool 24", "raw:38:1,2,3", false), ("ac", "off", "nec:1:2", false)]);
-        let (text, err, res) = crate::mcp::call(&st, "ir_list", &json!({}), "test").await;
+        let (text, err, res) =
+            crate::mcp::call(&st, "ir_list", &json!({}), &crate::tool_policy::Context::internal("test")).await;
         assert!(!err && text.contains("ac: cool 24, off"), "{text}");
         assert_eq!(res.unwrap()["devices"]["ac"], json!(["cool 24", "off"]));
-        let (text, err, _) =
-            crate::mcp::call(&st, "ir_send", &json!({"device": "ac", "button": "cool 24"}), "test").await;
+        let (text, err, _) = crate::mcp::call(
+            &st,
+            "ir_send",
+            &json!({"device": "ac", "button": "cool 24"}),
+            &crate::tool_policy::Context::internal("test"),
+        )
+        .await;
         assert!(!err && text == "ac: cool 24 sent", "{text}");
-        let (text, err, _) =
-            crate::mcp::call(&st, "ir_send", &json!({"device": "ac", "button": "heat 30"}), "test").await;
+        let (text, err, _) = crate::mcp::call(
+            &st,
+            "ir_send",
+            &json!({"device": "ac", "button": "heat 30"}),
+            &crate::tool_policy::Context::internal("test"),
+        )
+        .await;
         assert!(err && text.contains("no 'heat 30' button"), "{text}");
         assert!(crate::mcp::allowed_tool_names().contains(&"mcp__stick__ir_send".to_string()));
         assert!(crate::mcp::openai_tools().iter().any(|t| t["function"]["name"] == "ir_list"));

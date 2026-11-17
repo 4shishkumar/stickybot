@@ -493,7 +493,17 @@ async fn handle_text_inner(st: Arc<AppState>, text: String, source: &str) {
         }
         text = rest;
     }
-    if let Some((cmd, slots)) = st.commands.find(&text) {
+    // Assistant turns must reach the broker: saved voice shortcuts can run shell/IR or launch URLs.
+    let shortcuts = {
+        let cfg = st.cfg.lock().unwrap();
+        let caller = if crate::brains::selected(&cfg) == "openrouter" {
+            crate::tool_policy::Caller::OpenRouter
+        } else {
+            crate::tool_policy::Caller::Claude
+        };
+        crate::tool_policy::Profile::configured(&cfg, caller).allows("quick_command")
+    };
+    if shortcuts && let Some((cmd, slots)) = st.commands.find(&text) {
         if let Some(spec) = cmd.get("ir") {
             // an IR remote button (ir.rs): sent by the stick
             let (ok, result) = crate::ir::voice(&st, spec).await;
@@ -813,6 +823,24 @@ pub(crate) mod tests {
     async fn model_not_loaded_yet() {
         let t = agent("noload", false).await;
         assert_eq!(talk(&t, 1.5).await, vec![pair("error", "Speech model still loading, try again in a moment.")]);
+    }
+
+    #[tokio::test]
+    async fn assistant_voice_does_not_execute_saved_shortcuts_before_the_brain() {
+        let t = agent("assistant-shortcut", true).await;
+        t.st.cfg.lock().unwrap().insert("tool_profiles".into(), json!({"claude":"assistant","openrouter":"assistant"}));
+        t.st.commands
+            .save(
+                json!({"commands":[{"name":"Shortcut","phrases":["open docs"],"open_url":"https://example.com"}]})
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap();
+        for brain in ["claude", "openrouter"] {
+            t.st.cfg.lock().unwrap().insert("brain".into(), json!(brain));
+            handle_text(t.st.clone(), "open docs".into(), "typed").await;
+            assert!(t.ran.lock().unwrap().is_empty());
+        }
     }
 
     #[tokio::test]

@@ -419,6 +419,24 @@ impl Apps {
         apps
     }
 
+    /// Freeze the installed bundle path before requesting permission. Never launch by fuzzy name.
+    pub fn resolve(&self, spoken: &str) -> Option<String> {
+        let name = self.find(spoken)?;
+        if self.fixed.is_some() {
+            return Some(format!("/Applications/{name}.app"));
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        [
+            PathBuf::from("/Applications"),
+            PathBuf::from("/System/Applications"),
+            PathBuf::from("/System/Applications/Utilities"),
+            home.join("Applications"),
+        ]
+        .iter()
+        .find_map(|dir| std::fs::canonicalize(dir.join(format!("{name}.app"))).ok())
+        .map(|path| path.to_string_lossy().into_owned())
+    }
+
     /// The app a spoken name means (commands.py `find_app`).
     pub fn find(&self, spoken: &str) -> Option<String> {
         let apps = self.list();

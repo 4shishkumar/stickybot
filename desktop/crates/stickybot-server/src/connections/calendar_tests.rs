@@ -962,7 +962,7 @@ async fn the_calendar_tools_answer_without_a_stick_and_say_when_calendar_is_off(
     assert!(!st.link.connected());
     let call = |name: &'static str, args: Value| {
         let st = st.clone();
-        async move { crate::mcp::call(&st, name, &args, "Agent").await }
+        async move { crate::mcp::call(&st, name, &args, &crate::tool_policy::Context::internal("Agent")).await }
     };
     // off: tool errors in words (the stick tools would say "stick not connected")
     for name in ["calendar_next", "calendar_today", "calendar_join"] {
@@ -985,8 +985,8 @@ async fn the_calendar_tools_answer_without_a_stick_and_say_when_calendar_is_off(
         "a day that is not today / tomorrow is a tool error"
     );
     let (joined, err, _) = call("calendar_join", json!({})).await;
-    assert_eq!((joined.as_str(), err), ("Opened Google Meet for Standup.", false));
-    assert_eq!(*ran.lock().unwrap(), vec![Action::Open(vec!["https://meet.google.com/abc-defg-hij".into()])]);
+    assert!(err && joined.contains("approval"), "{joined}");
+    assert!(ran.lock().unwrap().is_empty());
     // an empty day, and the cap on lines
     let (st2, cal2, _) = no_stick("tools-many").await;
     connect(&st2).await.unwrap();
@@ -1003,13 +1003,14 @@ async fn the_calendar_tools_answer_without_a_stick_and_say_when_calendar_is_off(
             .collect(),
     );
     refresh(&st2).await;
-    let text = crate::mcp::call(&st2, "calendar_today", &json!({}), "Agent").await.0;
+    let text =
+        crate::mcp::call(&st2, "calendar_today", &json!({}), &crate::tool_policy::Context::internal("Agent")).await.0;
     assert_eq!(text.lines().count(), 1 + 12 + 1, "{text}");
     assert!(text.starts_with("15 events today:") && text.ends_with("+ 3 more"), "{text}");
     cal2.set_events(vec![]);
     refresh(&st2).await;
     assert_eq!(
-        crate::mcp::call(&st2, "calendar_today", &json!({}), "Agent").await.0,
+        crate::mcp::call(&st2, "calendar_today", &json!({}), &crate::tool_policy::Context::internal("Agent")).await.0,
         "Nothing on your calendar today."
     );
 }
@@ -1052,8 +1053,9 @@ async fn no_meeting_text_reaches_an_info_log_line() {
     ask(&t, "What's my next meeting?").await;
     ask(&t, "What's my day like?").await;
     ask(&t, "Join my meeting").await;
-    let _ = crate::mcp::call(&t.st, "calendar_today", &json!({}), "Agent").await;
-    let _ = crate::mcp::call(&t.st, "calendar_next", &json!({}), "Agent").await;
+    let _ =
+        crate::mcp::call(&t.st, "calendar_today", &json!({}), &crate::tool_policy::Context::internal("Agent")).await;
+    let _ = crate::mcp::call(&t.st, "calendar_next", &json!({}), &crate::tool_policy::Context::internal("Agent")).await;
     let _ = crate::events::test(&t.st, "meeting_soon", None, None).await;
     let lines = CAPTURE.0.lock().unwrap().clone();
     for private in ["7f3a", "Teammate", "zzz-yyyy", "Standup", "Design review", "meet.google.com", "Room 9"] {

@@ -211,6 +211,45 @@ The stick takes one Bluetooth central, and the Python agent normally has it. So:
   `STICKYBOT_RS_ALLOW_SHARED=1` turns that off (don't).
 - Scanning is read-only and fine at any time.
 
+## Assistant tool policy (Phase 1.1–1.3)
+
+The server's `mcp::call` is the tool broker for HTTP MCP, Claude Code, OpenRouter and internal
+callers. Configure `tool_profiles` per device through its existing config API, for example:
+
+```json
+{"tool_profiles":{"mcp":"assistant","claude":"assistant","openrouter":"assistant","internal":"assistant"}}
+```
+
+Missing entries use `default`, which retains the existing tool catalog. `assistant` advertises
+and permits only `ask`, `stick_status`, `ir_list`, `calendar_next`, `calendar_today`, `open_app`,
+`open_url` and `calendar_join`. Calls to hidden tools are refused. Unknown saved profile values
+fail closed. Assistant voice requests skip the saved-command fast path so shell/IR/launch
+shortcuts cannot bypass the broker. Default voice shortcuts retain their behavior.
+
+Every brokered Mac action—including default-profile `quick_command`—requires an **on-stick,
+allow-once** response. Dashboard approval, a plain `ask` answer, disabled approvals, a disconnected
+stick, or an expired/previously used response cannot authorize it. The broker resolves the app
+bundle, normalized HTTP(S) URL, meeting URL or saved command before showing the prompt; it never
+looks up a new destination after approval. The grant binds the Mac identity, originating device
+and connection generation, responding stick and generation, server-owned session/turn, caller,
+tool and resolved action. Grants expire after at most 120 seconds and die on turn/request cancellation.
+The prompt displays the full destination with line-breaking spaces for existing firmware;
+destinations that cannot fit or use unsupported characters are refused. Test this on real hardware
+before release (portrait/landscape and shared/legacy modes).
+
+The app-managed Claude session uses a separate, per-device, process-lifetime MCP credential;
+it can access only that device's MCP route during a live turn, and cannot change configuration.
+Display headers such as `X-Stick-Client` do not select the profile. External MCP credentials retain
+the `mcp` profile. Shared administrator credentials remain administrator credentials; do not give
+them to an untrusted harness. Scoped BYO credentials belong to the later BYO-agent phase.
+Claude pre-allows entry into our brokered tools and the permission hook skips their duplicate
+prompt. The hook still applies to built-in tools such as Bash/Write.
+
+This phase restricts **StickyBot tools**, not an entire agent process: Claude's built-ins, the
+existing cloud configuration and administrator APIs are not a filesystem/network sandbox.
+Folder allowlists, secret exclusions, sandboxing and a local harness remain later phases.
+Launching an explicitly approved app or URL can itself cause that app to write or communicate.
+
 ## Testing
 
 `cargo test --workspace` never touches audio hardware: the wireless mic's tests run on the fake

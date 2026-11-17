@@ -21,6 +21,7 @@ struct Prompt {
     hint: String,
     from: String,
     answer: Option<oneshot::Sender<&'static str>>,
+    bound: Option<Arc<Bound>>,
 }
 
 /// A question from a Claude session (the stick tools' `ask`): A = the first option, B = the second.
@@ -95,9 +96,28 @@ impl Approvals {
         allowed && self.decide(id, decision, "dashboard")
     }
 
-    /// Permissions survive reconnects on the same device; questions remain session-bound.
+    /// Broker approvals belong to an exact connection; legacy built-in prompts retain their behavior.
     pub fn decide_from_device(&self, id: &str, decision: &str, device: &AppState) -> bool {
         let expected = (device.device_id.clone(), device.link.generation());
+        if !device.link.connected() || device.link.bound_generation() != expected.1 {
+            return false;
+        }
+        {
+            let mut prompts = self.prompts.lock().unwrap();
+            if let Some(p) = prompts.get_mut(id)
+                && let Some(bound) = &p.bound
+            {
+                if !p.destinations.contains(&expected) || !bound.live() || device.host.json()["id"] != bound.binding.mac
+                {
+                    return false;
+                }
+                let Some(tx) = p.answer.take() else {
+                    return false;
+                };
+                *bound.responder.lock().unwrap() = Some(expected);
+                return tx.send(if decision == "once" { "allow" } else { "deny" }).is_ok();
+            }
+        }
         let allowed = self
             .prompts
             .lock()
@@ -105,10 +125,7 @@ impl Approvals {
             .get(id)
             .is_some_and(|p| p.destinations.iter().any(|(id, _)| id == &device.device_id))
             || self.asks.lock().unwrap().get(id).is_some_and(|p| p.destinations.contains(&expected));
-        allowed
-            && device.link.connected()
-            && device.link.bound_generation() == device.link.generation()
-            && self.decide(id, decision, "stick")
+        allowed && self.decide(id, decision, "stick")
     }
     /// Questions waiting, for `GET /api/status` (`asks`).
     pub fn asks(&self) -> Value {
@@ -157,7 +174,13 @@ impl Approvals {
         if self.asks.lock().unwrap().contains_key(id) {
             return self.answer(id, decision, by);
         }
-        let tx = self.prompts.lock().unwrap().get_mut(id).and_then(|p| p.answer.take());
+        let tx = self.prompts.lock().unwrap().get_mut(id).and_then(|p| {
+            // Neither a dashboard click nor an ordinary ask can mint a broker approval.
+            if p.bound.is_some() && matches!(decision, "once" | "allow" | "always") {
+                return None;
+            }
+            p.answer.take()
+        });
         let Some(tx) = tx else { return false };
         let allow = matches!(decision, "once" | "allow" | "always");
         log::info!("prompt {id} {} on {by}", if allow { "approved" } else { "denied" });
@@ -166,7 +189,7 @@ impl Approvals {
 }
 
 fn new_id() -> String {
-    let mut b = [0u8; 4];
+    let mut b = [0u8; 16];
     getrandom::fill(&mut b).expect("system randomness");
     format!("cli-{}", b.iter().map(|x| format!("{x:02x}")).collect::<String>())
 }
@@ -200,6 +223,7 @@ pub async fn ask_permission(
             hint: hint.into(),
             from: origin.into(),
             answer: Some(tx),
+            bound: None,
         },
     );
     st.hub.emit("prompt", json!({"id": id, "tool": tool, "hint": hint, "origin": origin}));
@@ -236,6 +260,193 @@ pub async fn ask_permission(
     }
     st.hub.emit("prompt_done", json!({"id": id, "decision": decision}));
     decision
+}
+
+/// The action and authority being approved, immutable throughout the wait.
+#[derive(Clone, PartialEq, Eq)]
+struct Binding {
+    mac: Value,
+    device: String,
+    generation: u64,
+    session: String,
+    turn: String,
+    caller: crate::tool_policy::Caller,
+    tool: String,
+    arguments: Value,
+}
+impl Binding {
+    fn new(st: &AppState, ctx: &crate::tool_policy::Context, tool: &str, arguments: &Value) -> Self {
+        Self {
+            mac: st.host.json()["id"].clone(),
+            device: st.device_id.clone(),
+            generation: st.link.generation(),
+            session: ctx.scope.session.clone(),
+            turn: ctx.scope.turn.clone(),
+            caller: ctx.caller,
+            tool: tool.into(),
+            arguments: arguments.clone(),
+        }
+    }
+}
+struct Bound {
+    binding: Binding,
+    target: std::sync::Weak<AppState>,
+    context: crate::tool_policy::Context,
+    deadline: tokio::time::Instant,
+    destinations: Vec<(std::sync::Weak<AppState>, u64)>,
+    responder: Mutex<Option<(String, u64)>>,
+}
+impl Bound {
+    fn live(&self) -> bool {
+        self.context.active()
+            && tokio::time::Instant::now() < self.deadline
+            && self
+                .target
+                .upgrade()
+                .is_some_and(|st| connection(&st, self.binding.generation) && st.host.json()["id"] == self.binding.mac)
+    }
+    fn responder_live(&self) -> bool {
+        let responder = self.responder.lock().unwrap();
+        self.destinations.iter().any(|(device, generation)| {
+            device.upgrade().is_some_and(|st| {
+                responder.as_ref() == Some(&(st.device_id.clone(), *generation)) && connection(&st, *generation)
+            })
+        })
+    }
+}
+fn connection(st: &AppState, generation: u64) -> bool {
+    st.link.connected() && st.link.generation() == generation && st.link.bound_generation() == generation
+}
+
+/// Not serializable or cloneable. Consumption takes the only grant, including on a mismatch.
+pub(crate) struct Permit(Option<Arc<Bound>>);
+impl Permit {
+    pub(crate) fn consume(
+        &mut self,
+        st: &AppState,
+        ctx: &crate::tool_policy::Context,
+        tool: &str,
+        arguments: &Value,
+    ) -> Result<(), String> {
+        let bound = self.0.take().ok_or("Approval already used")?;
+        if bound.binding != Binding::new(st, ctx, tool, arguments)
+            || !ctx.active()
+            || !bound.live()
+            || !bound.responder_live()
+        {
+            return Err("Approval is stale or does not match this action".into());
+        }
+        Ok(())
+    }
+}
+struct PromptGuard {
+    st: Arc<AppState>,
+    id: String,
+    destinations: Vec<(Arc<AppState>, u64)>,
+}
+impl Drop for PromptGuard {
+    fn drop(&mut self) {
+        self.st.approvals.prompts.lock().unwrap().remove(&self.id);
+        let destinations = self.destinations.clone();
+        let id = self.id.clone();
+        self.st.hub.emit("prompt_done", json!({"id":id}));
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                for (st, generation) in destinations {
+                    // Old firmware's clear has no id: do not clear a newer prompt.
+                    if !st.approvals.pending_for(&st.device_id) {
+                        st.link.with_generation(generation, st.link.send(&clear_message(&st, &id))).await;
+                    }
+                    st.hub.emit("prompt_done", json!({"id":id}));
+                }
+            });
+        }
+    }
+}
+
+pub(crate) async fn approve_tool(
+    st: &Arc<AppState>,
+    ctx: &crate::tool_policy::Context,
+    tool: &str,
+    prepared: &crate::tool_policy::Prepared,
+    wait: Duration,
+) -> Result<Permit, String> {
+    if !st.cfg.lock().unwrap().get("stick_approvals").and_then(Value::as_bool).unwrap_or(true) {
+        return Err("Stick approvals are turned off; approval is required".into());
+    }
+    let destinations: Vec<_> =
+        destinations(st, "approval_devices").into_iter().filter(|(s, g)| connection(s, *g)).collect();
+    if destinations.is_empty() {
+        return Err("Stick approval is required: no connected approval device".into());
+    }
+    let bound = Arc::new(Bound {
+        binding: Binding::new(st, ctx, tool, &prepared.arguments),
+        target: Arc::downgrade(st),
+        context: ctx.clone(),
+        deadline: tokio::time::Instant::now() + wait.min(WAIT),
+        destinations: destinations.iter().map(|(s, g)| (Arc::downgrade(s), *g)).collect(),
+        responder: Mutex::new(None),
+    });
+    if !bound.live() {
+        return Err("The device or turn is no longer active".into());
+    }
+    let (tx, mut rx) = oneshot::channel();
+    let id = new_id();
+    let origin = format!("{} · {}", ctx.who, st.host.json()["label"].as_str().unwrap_or("Mac"));
+    {
+        let mut prompts = st.approvals.prompts.lock().unwrap();
+        // A stick displays one permission at a time. Do not replace a prompt under the user's finger.
+        if prompts.contains_key(&id)
+            || prompts
+                .values()
+                .any(|p| p.destinations.iter().any(|(id, _)| destinations.iter().any(|(s, _)| &s.device_id == id)))
+        {
+            return Err("Another approval is already waiting on the stick".into());
+        }
+        prompts.insert(
+            id.clone(),
+            Prompt {
+                destinations: destinations.iter().map(|(s, g)| (s.device_id.clone(), *g)).collect(),
+                owner: st.device_id.clone(),
+                tool: tool.into(),
+                hint: prepared.hint.clone(),
+                from: origin.clone(),
+                answer: Some(tx),
+                bound: Some(bound.clone()),
+            },
+        );
+    }
+    let _guard = PromptGuard { st: st.clone(), id: id.clone(), destinations: destinations.clone() };
+    let shown = crate::tool_policy::display_hint(&prepared.hint)?;
+    let mac_label = st.host.json()["label"].as_str().unwrap_or("Mac").to_string();
+    for (device, _) in &destinations {
+        device.hub.emit("prompt", json!({"id":id,"tool":tool,"hint":prepared.hint,"origin":origin}));
+    }
+    let resend = st.approvals.resend.lock().unwrap().unwrap_or(RESEND);
+    let mut send_at = tokio::time::Instant::now();
+    loop {
+        if !bound.live() || !destinations.iter().any(|(s, g)| connection(s, *g)) {
+            return Err("Approval expired or the device/turn disconnected".into());
+        }
+        if tokio::time::Instant::now() >= send_at {
+            for (device, generation) in &destinations {
+                if connection(device, *generation) {
+                    // Shared firmware already prefixes its trusted paired Mac label.
+                    let from = if device.link.multi_host() { "Agent" } else { &mac_label };
+                    let prompt = json!({"src":"cli","prompt":{"id":id,"tool":tool,"hint":shown,"from":from}});
+                    device.link.with_generation(*generation, device.link.send(&prompt)).await;
+                }
+            }
+            send_at = tokio::time::Instant::now() + resend;
+        }
+        tokio::select! {
+            answer = &mut rx => return match answer {
+                Ok("allow") if bound.live() && bound.responder_live() => Ok(Permit(Some(bound))),
+                _ => Err("the user didn't approve it".into()),
+            },
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+    }
 }
 
 /// Why the stick can't take a question now ("" = it can) (core.py `busy_reason`).
@@ -646,5 +857,198 @@ mod multi_device_tests {
         assert!(!t.st.approvals.pending());
         t.st.devices.remove(&t.st, &child.device_id).unwrap();
         t.st.devices.remove(&t.st, &outsider.device_id).unwrap();
+    }
+}
+
+#[cfg(test)]
+pub(crate) async fn approve_next(st: &AppState, decision: &str) -> String {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Some(id) = st.approvals.list_for(&st.device_id)[0]["id"].as_str() {
+                let id = id.to_owned();
+                assert!(st.approvals.decide_from_device(&id, decision, st));
+                return id;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("approval must appear")
+}
+
+#[cfg(test)]
+mod broker_tests {
+    use super::*;
+    use crate::{
+        talk::tests::agent,
+        tool_policy::{Context, Prepared},
+    };
+
+    async fn grant(st: &Arc<AppState>, ctx: &Context, wait: Duration) -> (Permit, Prepared, String) {
+        let action = Prepared::resolve(st, "open_url", json!({"url":"HTTPS://EXAMPLE.COM:443/a"}).as_object().unwrap())
+            .await
+            .unwrap();
+        let (permit, id) = tokio::join!(approve_tool(st, ctx, "open_url", &action, wait), approve_next(st, "once"));
+        (permit.unwrap(), action, id)
+    }
+
+    #[tokio::test]
+    async fn exact_action_is_consumed_once_and_cannot_be_replayed() {
+        let t = agent("broker-once", false).await;
+        let ctx = Context::internal("test");
+        let (mut permit, action, id) = grant(&t.st, &ctx, WAIT).await;
+        assert_eq!(action.hint, "https://example.com/a");
+        assert!(permit.consume(&t.st, &ctx, "open_url", &action.arguments).is_ok());
+        assert!(permit.consume(&t.st, &ctx, "open_url", &action.arguments).is_err());
+        assert!(!t.st.approvals.decide_from_device(&id, "once", &t.st));
+        assert!(t.ran.lock().unwrap().is_empty()); // only the broker executes, never the approval API
+    }
+
+    #[tokio::test]
+    async fn grants_bind_url_tool_mac_device_caller_session_and_turn() {
+        let t = agent("broker-bindings", false).await;
+        let other = agent("broker-other-mac", false).await;
+        t.st.devices.init(&t.st).unwrap();
+        let sibling = t.st.devices.add(&t.st, "SECOND", "Second").unwrap();
+        sibling.link.watch_state().wait_for(|s| *s == stick_link::LinkState::Connected).await.unwrap();
+        for field in ["url", "tool", "mac", "device", "caller", "session", "turn"] {
+            let ctx = Context::internal("test");
+            let (mut permit, action, _) = grant(&t.st, &ctx, WAIT).await;
+            let mut changed = ctx.clone();
+            let mut args = action.arguments.clone();
+            let mut tool = "open_url";
+            let target = match field {
+                "mac" => &other.st,
+                "device" => &sibling,
+                _ => &t.st,
+            };
+            match field {
+                "url" => args = json!({"open":["https://example.com/b"]}),
+                "tool" => tool = "calendar_join",
+                "caller" => changed.caller = crate::tool_policy::Caller::Mcp,
+                "session" => changed.scope.session = "different-session".into(),
+                "turn" => changed.scope.turn = "different-turn".into(),
+                _ => {}
+            }
+            assert!(permit.consume(target, &changed, tool, &args).is_err(), "{field}");
+            assert!(permit.consume(&t.st, &ctx, "open_url", &action.arguments).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn expiry_turn_end_and_disconnect_invalidate_grants() {
+        let t = agent("broker-stale", false).await;
+        for reason in ["expiry", "turn", "disconnect"] {
+            let ctx = Context::internal("test");
+            let wait = WAIT;
+            let (mut permit, action, _) = grant(&t.st, &ctx, wait).await;
+            match reason {
+                "expiry" => {
+                    tokio::time::pause();
+                    tokio::time::advance(WAIT + Duration::from_secs(1)).await;
+                    tokio::time::resume();
+                }
+                "turn" => ctx.scope.cancel(),
+                _ => {
+                    t.st.link.pause(true);
+                    t.st.link.watch_state().wait_for(|s| *s == stick_link::LinkState::Paused).await.unwrap();
+                }
+            }
+            assert!(permit.consume(&t.st, &ctx, "open_url", &action.arguments).is_err(), "{reason}");
+        }
+    }
+
+    #[tokio::test]
+    async fn dashboard_and_ask_answers_cannot_authorize_and_abort_cleans_up() {
+        let t = agent("broker-dashboard", false).await;
+        let st = t.st.clone();
+        let task = tokio::spawn(async move {
+            let ctx = Context::internal("test");
+            let action =
+                Prepared::resolve(&st, "open_url", json!({"url":"https://example.com/a"}).as_object().unwrap())
+                    .await
+                    .unwrap();
+            approve_tool(&st, &ctx, "open_url", &action, WAIT).await
+        });
+        let id = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(id) = t.st.approvals.list()[0]["id"].as_str() {
+                    break id.to_owned();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!t.st.approvals.decide_dashboard(&id, "once", &t.st.device_id));
+        assert!(!t.st.approvals.decide(&id, "always", "stick"));
+        assert!(!t.st.approvals.answer(&id, "once", "stick"));
+        task.abort();
+        let _ = task.await;
+        assert!(!t.st.approvals.pending());
+        assert!(!t.st.approvals.decide_from_device(&id, "once", &t.st));
+    }
+
+    #[tokio::test]
+    async fn only_selected_device_can_answer_and_responder_disconnect_revokes_grant() {
+        let t = agent("broker-selected", false).await;
+        t.st.devices.init(&t.st).unwrap();
+        let other = t.st.devices.add(&t.st, "SECOND", "Second").unwrap();
+        other.link.watch_state().wait_for(|s| *s == stick_link::LinkState::Connected).await.unwrap();
+        t.st.cfg.lock().unwrap().insert("approval_devices".into(), json!([other.device_id]));
+        let ctx = Context::internal("test");
+        let prepared =
+            Prepared::resolve(&t.st, "open_url", json!({"url":"https://example.com/a"}).as_object().unwrap())
+                .await
+                .unwrap();
+        let answer = async {
+            let id = tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if let Some(id) = t.st.approvals.list()[0]["id"].as_str() {
+                        break id.to_string();
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(!t.st.approvals.decide_from_device(&id, "once", &t.st));
+            assert!(t.st.approvals.decide_from_device(&id, "once", &other));
+        };
+        let (grant, ()) = tokio::join!(approve_tool(&t.st, &ctx, "open_url", &prepared, WAIT), answer);
+        let mut grant = grant.unwrap();
+        other.link.pause(true);
+        other.link.watch_state().wait_for(|s| *s == stick_link::LinkState::Paused).await.unwrap();
+        assert!(t.st.link.connected());
+        assert!(grant.consume(&t.st, &ctx, "open_url", &prepared.arguments).is_err());
+    }
+
+    #[tokio::test]
+    async fn disconnected_prompt_cannot_resume_after_reconnect() {
+        let t = agent("broker-reconnect", false).await;
+        let ctx = Context::internal("test");
+        let st = t.st.clone();
+        let call = tokio::spawn(async move {
+            crate::mcp::call(&st, "open_url", &json!({"url":"https://example.com"}), &ctx).await
+        });
+        let id = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(id) = t.st.approvals.list()[0]["id"].as_str() {
+                    break id.to_owned();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        t.st.link.pause(true);
+        let mut states = t.st.link.watch_state();
+        states.wait_for(|s| *s == stick_link::LinkState::Paused).await.unwrap();
+        assert!(!t.st.approvals.decide_from_device(&id, "once", &t.st));
+        t.st.link.pause(false);
+        states.wait_for(|s| *s == stick_link::LinkState::Connected).await.unwrap();
+        assert!(!t.st.approvals.decide_from_device(&id, "once", &t.st));
+        assert!(tokio::time::timeout(Duration::from_secs(2), call).await.unwrap().unwrap().1);
+        assert!(t.ran.lock().unwrap().is_empty());
     }
 }

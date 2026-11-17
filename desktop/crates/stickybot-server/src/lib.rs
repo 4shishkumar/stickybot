@@ -43,6 +43,7 @@ pub mod speech;
 pub mod switch;
 pub mod sysrun;
 pub mod talk;
+pub mod tool_policy;
 pub mod updates;
 pub mod usb;
 pub mod weather;
@@ -724,7 +725,8 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     let cfg: brain::Config =
         Arc::new(move || weak.upgrade().map(|s| s.cfg.lock().unwrap().clone()).unwrap_or_else(config::defaults));
     let claude = brain::ClaudeBrain::new(cfg, state.paths.home.join("workspace"));
-    let (home, port, token) = (state.paths.home.clone(), addr.port(), state.token.clone());
+    let (home, port, token) = (state.paths.home.clone(), addr.port(), state.mcp.voice_token.clone());
+    claude.set_tool_session(state.mcp.session.clone());
     claude.set_mcp(move || mcp::brain_config_device(&home, port, &token, "primary"));
     let or = Arc::new(state.openrouter());
     state.set_brain(Arc::new(brains::Brains::new(Arc::new(claude), or, Arc::downgrade(&state))));
@@ -782,7 +784,8 @@ fn start_device_session(state: Arc<AppState>) {
             Arc::new(move || weak.upgrade().map(|s| s.cfg.lock().unwrap().clone()).unwrap_or_default());
         let claude = brain::ClaudeBrain::new(cfg, state.paths.home.join("workspaces").join(&state.device_id));
         let (home, port, token, id) =
-            (state.paths.home.clone(), state.port, state.token.clone(), state.device_id.clone());
+            (state.paths.home.clone(), state.port, state.mcp.voice_token.clone(), state.device_id.clone());
+        claude.set_tool_session(state.mcp.session.clone());
         claude.set_mcp(move || mcp::brain_config_device(&home, port, &token, &id));
         state.set_brain(Arc::new(brains::Brains::new(
             Arc::new(claude),
