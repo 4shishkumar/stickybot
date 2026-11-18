@@ -47,7 +47,7 @@ static launcherui::QuickView quickView() {
   launcherui::QuickView v;
   v.sel = qsel;
   v.brightness = settings::brightnessPct();
-  v.volume = settings::soundVolume();
+  v.volume = sound::volume();
   v.sound = sound::on();
   v.wmic = settings::wirelessMic();
   v.clock24 = settings::clock24();
@@ -109,7 +109,7 @@ static Action quickChange() {
       break;
     }
     case Quick::VOLUME:  // turning it up unmutes; a preview at the new level
-      settings::saveSoundVolume(nextVolume(settings::soundVolume()));
+      sound::setVolume(nextVolume(sound::volume()));
       if (!sound::on()) sound::setOn(true);
       sound::play(sound::Cue::TEST);
       break;

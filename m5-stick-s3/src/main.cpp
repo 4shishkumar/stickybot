@@ -505,7 +505,7 @@ static void onMenu(menu::Action a) {
       powerOff();
       break;
     case menu::Action::VOLUME:  // takes effect (and plays a preview) right away
-      settings::saveSoundVolume(menu::draft().volume);
+      sound::setVolume(menu::draft().volume);
       if (menu::draft().sound && !sound::on()) sound::setOn(true);  // Sounds ON in the draft: hear the level
       sound::play(sound::Cue::TEST);
       dirty = true;
@@ -547,7 +547,7 @@ static void onMenu(menu::Action a) {
       settings::saveClock24(d.clock24);
       settings::saveDevMode(d.devMode);
       sound::setOn(d.sound);
-      settings::saveSoundVolume(d.volume);
+      sound::setVolume(d.volume);
       settings::saveWirelessMic(d.wmic);
       if (!d.autoRotate) ui::setFlipped(settings::flipped());
       settings::saveStandbyMin(d.standbyMin);
@@ -585,7 +585,7 @@ static void openSettings() {
   menu::open({settings::combo(), hid::slot(), settings::standbyMin(), settings::brightnessPct(),
               settings::enterDelayMs(),
               settings::liftWakes(), settings::faceDownSleeps(), settings::shakeEscapes(),
-              settings::autoRotate(), settings::landscape(), settings::clock24(), settings::devMode(), sound::on(), settings::soundVolume(),
+              settings::autoRotate(), settings::landscape(), settings::clock24(), settings::devMode(), sound::on(), sound::volume(),
               settings::wirelessMic()},
              hid::state() == hid::Bt::OFF);
   mode = Mode::MENU;
@@ -756,14 +756,14 @@ static void pollSerial() {
         String arg = line.substring(5);
         arg.trim();
         if (arg == "on" || arg == "off") sound::setOn(arg == "on");
-        else if (arg.startsWith("vol")) settings::saveSoundVolume(constrain(arg.substring(3).toInt(), 0, 255));
+        else if (arg.startsWith("vol")) sound::setVolume(constrain(arg.substring(3).toInt(), 0, 255));
         else if (arg.startsWith("play ")) {
           String name = arg.substring(5);
           name.trim();
           if (!sound::play(name)) Serial.printf("unknown sound '%s'\n", name.c_str());
-          else Serial.printf(sound::on() ? "playing %s\n" : "%s: muted (sound off)\n", name.c_str());
+          else Serial.printf(sound::on() && sound::volume() ? "playing %s\n" : "%s: muted\n", name.c_str());
         } else sound::play(sound::Cue::TEST);
-        Serial.printf("Sounds %s, volume %u\n", sound::on() ? "on" : "off", settings::soundVolume());
+        Serial.printf("Sounds %s, volume %u\n", sound::on() ? "on" : "off", sound::volume());
       }
       else protocol::serialLine(line);
       line = "";
