@@ -32,6 +32,9 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 ### Fixed
 - MCP clients can no longer bypass stick approval for Mac actions. Each approval is single-use,
   tied to its exact destination, Mac, stick connection and request; stale answers cannot run it.
+- **Sound off on the stick now mutes everything** (firmware): game effects, the test sound, event
+  and notification sounds and audio clips from the Mac. Turning it off stops a sound that is
+  already playing.
 - Permission prompts survive stick reconnects; choosing no approval devices returns immediately.
   Removing a stick cleans its notification destinations, and a bad saved entry no longer stops
   other sticks from loading.

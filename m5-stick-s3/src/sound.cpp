@@ -141,6 +141,7 @@ void clipPacket(const uint8_t* data, size_t len) {
 static void decodeFrame(const uint8_t* f, size_t len) { clipAsm.add(f, len); }
 
 static void startBuiltin(const BuiltinClip* c) {
+  if (!settings::soundOn()) return;
   clipBegin(c->samples, 16000);
   for (size_t i = 0; i < c->bytes;) {
     size_t len = c->data[i++];
@@ -158,7 +159,7 @@ struct ClipQueueSink : clip::Sink {
   }
   void frame(const uint8_t* f, size_t len) override { decodeFrame(f, len); }
   void end() override {
-    if (!clipBuf) return;
+    if (!clipBuf || !settings::soundOn()) return;  // muted: the clip is dropped
     clipReady = true;
     Log.event(diagnostics::Event::Sound);
     Log.count(diagnostics::Counter::ClipFrames, clipAsm.frames);
@@ -201,7 +202,7 @@ void cancelClip() {
 }
 
 static void start(const Tune* t) {
-  if (!t) return;
+  if (!t || !settings::soundOn()) return;  // Sound off mutes everything: cues, games, the Mac's sounds
   cur = t;
   step = 0;
   stepEnd = 0;
@@ -229,8 +230,8 @@ void playListen() {
   }
 }
 
-void play(Cue c, bool force) {
-  if (!settings::soundOn() && !force && c != Cue::TEST) return;
+void play(Cue c) {
+  if (!settings::soundOn()) return;
   for (size_t i = 0; i < EVENT_COUNT; i++)
     if (EVENTS[i].cue == c) {
       startNamed(choice[i]);
@@ -241,7 +242,7 @@ void play(Cue c, bool force) {
 bool play(const String& name) {
   int e = eventIndex(name);
   if (e >= 0) {
-    startNamed(choice[e]);  // asked for by name: always plays
+    startNamed(choice[e]);  // asked for by name (still silent with sound off)
     return true;
   }
   return startNamed(name);
@@ -308,8 +309,26 @@ static bool speakerUp() {
   return speakerOn;
 }
 
+// Sound turned off while something plays (a game, a clip): stop it now.
+static void silence() {
+  cur = nullptr;
+  pending = false;
+  clipReady = false;
+  if (clipPlaying) {
+    clipPlaying = false;
+    M5.Speaker.stop();
+    free(clipBuf);
+    clipBuf = nullptr;
+  }
+  const bool keep = keep_;  // a game keeps the speaker up: power it down anyway while muted
+  keep_ = false;
+  speakerOff();
+  keep_ = keep;
+}
+
 void loop() {
   decodeClipFrames();
+  if (busy() && !settings::soundOn()) silence();
   if (clipPlaying) {
     if (millis() < clipEndsAt || M5.Speaker.isPlaying()) return;
     clipPlaying = false;
