@@ -161,6 +161,8 @@ pub struct AppState {
     pub speaker: speak::Speaker,
     /// the stick tools (MCP): rate limit, calls
     pub mcp: mcp::McpState,
+    /// Mac-wide MCP transport sessions and pending requests, independent of the default device.
+    pub(crate) mcp_http: Arc<mcp::HttpState>,
     /// runs `claude mcp …` for terminal sessions (tests swap it)
     pub claude_runner: Arc<Mutex<mcp::ClaudeRunner>>,
     /// when a button was last pressed on the stick (`hub::now()` seconds)
@@ -285,6 +287,7 @@ impl AppState {
             import_from: parent.map(|p| p.import_from.clone()).unwrap_or_else(|| opts.import_from.clone()),
             speaker: speak::Speaker::default(),
             mcp: mcp::McpState::default(),
+            mcp_http: parent.map(|p| p.mcp_http.clone()).unwrap_or_default(),
             claude_runner: parent
                 .map(|p| p.claude_runner.clone())
                 .unwrap_or_else(|| Arc::new(Mutex::new(mcp::system_claude_runner()))),

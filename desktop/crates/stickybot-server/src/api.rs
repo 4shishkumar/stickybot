@@ -69,6 +69,7 @@ pub const PORTED: &[&str] = &[
     "POST /api/switch-over",
     "GET /static-rs/*",
     "POST /mcp",
+    "DELETE /mcp",
     "GET /api/mcp",
     "POST /api/mcp/terminal/{action}",
     "POST /api/mcp/answer",
@@ -284,7 +285,7 @@ fn session_router(state: Arc<AppState>) -> Router {
         .route("/api/import", get(import_info).post(import_run))
         .route("/api/login-item", get(login_item).put(set_login_item))
         .route("/api/switch-over", get(switch_info).post(switch_run))
-        .route("/mcp", post(mcp_post).get(mcp_405).delete(mcp_405))
+        .route("/mcp", post(mcp_post).get(mcp_405).delete(mcp_delete))
         .route("/api/mcp", get(mcp_status))
         .route("/api/mcp/terminal/{action}", post(mcp_terminal))
         .route("/api/mcp/answer", post(mcp_answer))
@@ -402,7 +403,11 @@ async fn mcp_post(State(st): State<Arc<AppState>>, headers: axum::http::HeaderMa
 }
 
 async fn mcp_405() -> Response {
-    (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "POST")]).into_response()
+    (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "POST, DELETE")]).into_response()
+}
+
+async fn mcp_delete(State(st): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> Response {
+    crate::mcp::delete(st, headers).await
 }
 
 /// The server switch, recent use, and whether terminal Claude Code sessions have the tools.

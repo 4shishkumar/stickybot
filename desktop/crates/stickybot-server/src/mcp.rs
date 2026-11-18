@@ -388,9 +388,6 @@ pub struct McpState {
     pub alerts: Mutex<RateLimit>,
     pub calls: Mutex<u64>,
     pub last_call: Mutex<Value>,
-    http_sessions: Mutex<HashMap<String, (Caller, Instant)>>,
-    /// (server-issued MCP session, typed JSON request id) -> call; never a display header.
-    inflight: Mutex<HashMap<(String, String), tokio::task::AbortHandle>>,
     /// the last home-card push, and a later one already planned
     card_at: Mutex<f64>,
     card_later: std::sync::atomic::AtomicBool,
@@ -404,26 +401,51 @@ impl Default for McpState {
             alerts: Mutex::new(RateLimit::new(ALERT_GAP.as_secs_f64(), ALERT_PER_MIN)),
             calls: Mutex::new(0),
             last_call: Mutex::new(Value::Null),
-            http_sessions: Mutex::new(HashMap::new()),
-            inflight: Mutex::new(HashMap::new()),
             card_at: Mutex::new(f64::MIN),
             card_later: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
 
-impl McpState {
-    fn http_session(&self, headers: &HeaderMap, caller: Caller, initialize: bool) -> Result<String, RpcError> {
-        let mut sessions = self.http_sessions.lock().unwrap();
-        sessions.retain(|_, (_, touched)| touched.elapsed() < Duration::from_secs(30 * 60));
-        if let Some(id) = headers.get("mcp-session-id") {
-            let id = id.to_str().unwrap_or_default();
-            let Some((owner, touched)) = sessions.get_mut(id).filter(|(owner, _)| *owner == caller) else {
-                return Err(
-                    RpcError::new(INVALID_REQUEST, "Unknown or expired MCP session").status(StatusCode::NOT_FOUND)
-                );
-            };
-            debug_assert_eq!(*owner, caller);
+const SESSION_IDLE: Duration = Duration::from_secs(30 * 60);
+
+/// Transport ownership is Mac-wide; changing the destination does not change a client session.
+/// Voice credentials remain scoped to their device, even though the store is shared.
+#[derive(Clone, PartialEq, Eq)]
+struct HttpPrincipal {
+    caller: Caller,
+    device: Option<String>,
+}
+impl HttpPrincipal {
+    fn new(st: &AppState, headers: &HeaderMap) -> Self {
+        let bearer = headers
+            .get("authorization")
+            .map(|v| v.as_bytes())
+            .unwrap_or_default()
+            .strip_prefix(b"Bearer ")
+            .unwrap_or_default();
+        if crate::api::same(bearer, st.mcp.voice_token.as_bytes()) {
+            Self { caller: Caller::Claude, device: Some(st.device_id.clone()) }
+        } else {
+            Self { caller: Caller::Mcp, device: None }
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct HttpState {
+    sessions: Mutex<HashMap<String, (HttpPrincipal, Instant)>>,
+    /// (server-issued MCP session, typed JSON request id) -> call; never a display header.
+    inflight: Mutex<HashMap<(String, String), tokio::task::AbortHandle>>,
+}
+
+impl HttpState {
+    fn session(&self, headers: &HeaderMap, principal: HttpPrincipal, initialize: bool) -> Result<String, RpcError> {
+        let mut sessions = self.sessions.lock().unwrap();
+        sessions.retain(|_, (_, touched)| touched.elapsed() < SESSION_IDLE);
+        if let Some(id) = headers.get("mcp-session-id").and_then(|id| id.to_str().ok())
+            && let Some((_, touched)) = sessions.get_mut(id).filter(|(owner, _)| *owner == principal)
+        {
             *touched = Instant::now();
             return Ok(id.to_string());
         }
@@ -432,12 +454,40 @@ impl McpState {
             if sessions.len() >= 256 {
                 return Err(RpcError::new(INTERNAL, "Too many MCP sessions").status(StatusCode::SERVICE_UNAVAILABLE));
             }
-            sessions.insert(id.clone(), (caller, Instant::now()));
+            sessions.insert(id.clone(), (principal, Instant::now()));
         }
-        // Stateless requests have independent owners; without a session, cancellation cannot
-        // identify another request. Dropping its HTTP/SSE response still cancels that request.
+        // Unknown/expired/foreign sessions degrade to stateless requests, including after a
+        // restart. Never adopt a client-supplied ID: each such request has an independent owner.
+        // Dropping its HTTP/SSE response still cancels that request.
         Ok(id)
     }
+}
+
+/// End a client's transport session, including its pending calls. Authentication is in api::guard.
+pub async fn delete(st: Arc<AppState>, headers: HeaderMap) -> Response {
+    if !ok_origin(&headers, st.port) {
+        return rpc_error(None, RpcError::new(INVALID_REQUEST, "bad origin").status(StatusCode::FORBIDDEN));
+    }
+    let Some(id) = headers.get("mcp-session-id").and_then(|id| id.to_str().ok()) else {
+        return rpc_error(
+            None,
+            RpcError::new(INVALID_REQUEST, "Mcp-Session-Id required").status(StatusCode::BAD_REQUEST),
+        );
+    };
+    let principal = HttpPrincipal::new(&st, &headers);
+    let mut sessions = st.mcp_http.sessions.lock().unwrap();
+    if sessions.get(id).is_some_and(|(owner, _)| *owner == principal) {
+        sessions.remove(id);
+        st.mcp_http.inflight.lock().unwrap().retain(|(owner, _), handle| {
+            if owner == id {
+                handle.abort();
+                false
+            } else {
+                true
+            }
+        });
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 fn mono() -> f64 {
@@ -954,16 +1004,11 @@ pub async fn post(st: Arc<AppState>, headers: HeaderMap, body: &[u8]) -> Respons
         return rpc_error(id, RpcError::new(INVALID_REQUEST, "bad method or params").status(StatusCode::BAD_REQUEST));
     };
     let who = caller(&headers);
-    let bearer = headers
-        .get("authorization")
-        .map(|v| v.as_bytes())
-        .unwrap_or_default()
-        .strip_prefix(b"Bearer ")
-        .unwrap_or_default();
-    let identity = if crate::api::same(bearer, st.mcp.voice_token.as_bytes()) { Caller::Claude } else { Caller::Mcp };
+    let principal = HttpPrincipal::new(&st, &headers);
+    let identity = principal.caller;
     let profile = Profile::configured(&st.cfg.lock().unwrap(), identity);
     let initializing = id.is_some() && matches!(method, "initialize" | "server/discover");
-    let owner = match st.mcp.http_session(&headers, identity, initializing) {
+    let owner = match st.mcp_http.session(&headers, principal, initializing) {
         Ok(owner) => owner,
         Err(error) => return rpc_error(id, error),
     };
@@ -974,7 +1019,7 @@ pub async fn post(st: Arc<AppState>, headers: HeaderMap, body: &[u8]) -> Respons
                 Some(v) => v.to_string(),
                 None => String::new(),
             };
-            if let Some(h) = st.mcp.inflight.lock().unwrap().get(&(owner.clone(), rid)) {
+            if let Some(h) = st.mcp_http.inflight.lock().unwrap().get(&(owner.clone(), rid)) {
                 h.abort();
             }
         }
@@ -1037,7 +1082,7 @@ pub async fn post(st: Arc<AppState>, headers: HeaderMap, body: &[u8]) -> Respons
             };
             let st2 = st.clone();
             let task = {
-                let mut inflight = st.mcp.inflight.lock().unwrap();
+                let mut inflight = st.mcp_http.inflight.lock().unwrap();
                 if inflight.contains_key(&key) {
                     return rpc_error(id_ref, RpcError::new(INVALID_REQUEST, "Request id is already running"));
                 }
@@ -1084,7 +1129,7 @@ struct AbortOnDrop(tokio::task::AbortHandle, Arc<AppState>, (String, String));
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
-        self.1.mcp.inflight.lock().unwrap().remove(&self.2);
+        self.1.mcp_http.inflight.lock().unwrap().remove(&self.2);
     }
 }
 
@@ -1376,7 +1421,17 @@ mod tests {
         }
 
         async fn raw(&self, method: &str, body: &str, headers: &[(&str, &str)]) -> (StatusCode, Value, String) {
-            let mut b = axum::http::Request::builder().method(method).uri("/mcp").header("host", "localhost:8670");
+            self.raw_path("/mcp", method, body, headers).await
+        }
+
+        async fn raw_path(
+            &self,
+            path: &str,
+            method: &str,
+            body: &str,
+            headers: &[(&str, &str)],
+        ) -> (StatusCode, Value, String) {
+            let mut b = axum::http::Request::builder().method(method).uri(path).header("host", "localhost:8670");
             for (k, v) in headers {
                 b = b.header(*k, *v);
             }
@@ -1500,7 +1555,7 @@ mod tests {
         let bearer = format!("Bearer {tok}");
         let auth = [("authorization", bearer.as_str())];
         assert_eq!(c.raw("GET", "", &auth).await.0, StatusCode::METHOD_NOT_ALLOWED);
-        assert_eq!(c.raw("DELETE", "", &auth).await.0, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(c.raw("DELETE", "", &auth).await.0, StatusCode::BAD_REQUEST);
         let evil = [auth[0], ("origin", "https://evil.example")];
         assert_eq!(c.raw("POST", ping, &evil).await.0, StatusCode::FORBIDDEN);
         let (s, v, _) = c.raw("POST", "{nope", &auth).await;
@@ -1774,16 +1829,218 @@ mod tests {
     }
 
     async fn initialize_client(c: &C) -> String {
+        initialize_at(c, "/mcp", &c.t.st.token).await
+    }
+
+    async fn initialize_at(c: &C, path: &str, token: &str) -> String {
         let request = axum::http::Request::builder()
             .method("POST")
-            .uri("/mcp")
+            .uri(path)
             .header("host", "localhost:8670")
-            .header("authorization", format!("Bearer {}", c.t.st.token))
+            .header("authorization", format!("Bearer {token}"))
             .body(Body::from(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}).to_string()))
             .unwrap();
         let response = c.app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         response.headers()["mcp-session-id"].to_str().unwrap().to_string()
+    }
+
+    async fn pending_session_call(c: &C, session: &str) -> Response {
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("host", "localhost:8670")
+            .header("authorization", format!("Bearer {}", c.t.st.token))
+            .header("mcp-session-id", session)
+            .header("accept", "text/event-stream")
+            .body(Body::from(
+                json!({"jsonrpc":"2.0","id":5,"method":"tools/call",
+                "params":{"name":"open_url","arguments":{"url":"https://example.com"}}})
+                .to_string(),
+            ))
+            .unwrap();
+        let response = c.app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["content-type"], "text/event-stream");
+        response
+    }
+
+    async fn list_and_call_with_session(c: &C, path: &str, token: &str, session: &str) {
+        let bearer = format!("Bearer {token}");
+        let headers = [("authorization", bearer.as_str()), ("mcp-session-id", session)];
+        for (method, params) in
+            [("tools/list", json!({})), ("tools/call", json!({"name":"stick_status","arguments":{}}))]
+        {
+            let msg = json!({"jsonrpc":"2.0","id":2,"method":method,"params":params});
+            let (status, body, _) = c.raw_path(path, "POST", &msg.to_string(), &headers).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert!(body.get("error").is_none(), "{body}");
+            if method == "tools/list" {
+                assert!(body["result"]["tools"].as_array().is_some_and(|tools| !tools.is_empty()));
+            } else {
+                assert_eq!(body["result"]["isError"], false, "{body}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn sessions_and_cancellation_survive_default_device_changes() {
+        let c = C::new("mcp-default-session").await;
+        let session = initialize_client(&c).await;
+        let pending = pending_session_call(&c, &session).await;
+        let child = c.t.st.devices.add(&c.t.st, "SECOND", "Second").unwrap();
+        c.t.st.devices.default_to(&c.t.st, &child.device_id).unwrap();
+        assert!(Arc::ptr_eq(&c.t.st.mcp_http, &child.mcp_http));
+        list_and_call_with_session(&c, "/mcp", &c.t.st.token, &session).await;
+        assert!(child.mcp_http.sessions.lock().unwrap().contains_key(&session));
+        let cancel = json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":5}});
+        let bearer = format!("Bearer {}", c.t.st.token);
+        assert_eq!(
+            c.raw("POST", &cancel.to_string(), &[("authorization", &bearer), ("mcp-session-id", &session)]).await.0,
+            StatusCode::ACCEPTED
+        );
+        let body = tokio::time::timeout(Duration::from_secs(2), pending.into_body().collect())
+            .await
+            .unwrap()
+            .unwrap()
+            .to_bytes();
+        assert!(String::from_utf8_lossy(&body).contains("cancelled"));
+        assert!(c.t.ran.lock().unwrap().is_empty());
+        c.t.st.devices.remove(&c.t.st, &child.device_id).unwrap();
+    }
+
+    #[tokio::test]
+    async fn idle_sessions_recover_without_reinitializing() {
+        let c = C::new("mcp-expired-session").await;
+        for (path, token) in [("/mcp", &c.t.st.token), ("/api/devices/primary/mcp", &c.t.st.mcp.voice_token)] {
+            let session = initialize_at(&c, path, token).await;
+            c.t.st.mcp_http.sessions.lock().unwrap().get_mut(&session).unwrap().1 = Instant::now() - SESSION_IDLE;
+            let _turn = c.t.st.mcp.session.begin();
+            list_and_call_with_session(&c, path, token, &session).await;
+            assert!(!c.t.st.mcp_http.sessions.lock().unwrap().contains_key(&session));
+        }
+    }
+
+    #[tokio::test]
+    async fn sessions_recover_after_server_restart() {
+        let mut c = C::new("mcp-restart-session").await;
+        let external = initialize_client(&c).await;
+        let voice = initialize_at(&c, "/api/devices/primary/mcp", &c.t.st.mcp.voice_token).await;
+        let opts =
+            crate::Options { port: c.t.st.port, home: c.t.st.paths.home.clone(), fake_stick: true, import_from: None };
+        let restarted =
+            AppState::new_session(&opts, c.t.st.backend.clone(), None, "primary".into(), None, c.t.st.apps.clone())
+                .unwrap();
+        assert!(!Arc::ptr_eq(&restarted.mcp_http, &c.t.st.mcp_http));
+        assert_eq!(restarted.token, c.t.st.token);
+        c.app = crate::api::router(restarted.clone());
+        list_and_call_with_session(&c, "/mcp", &restarted.token, &external).await;
+        let _turn = restarted.mcp.session.begin();
+        list_and_call_with_session(&c, "/api/devices/primary/mcp", &restarted.mcp.voice_token, &voice).await;
+        assert!(restarted.mcp_http.sessions.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn unknown_sessions_are_isolated_stateless_requests() {
+        let mut c = C::new("mcp-unknown-session").await;
+        list_and_call_with_session(&c, "/mcp", &c.t.st.token, "unknown").await;
+        let first = pending_session_call(&c, "unknown").await;
+        let second = pending_session_call(&c, "unknown").await;
+        let bearer = format!("Bearer {}", c.t.st.token);
+        let cancel = json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":5}});
+        assert_eq!(
+            c.raw("POST", &cancel.to_string(), &[("authorization", &bearer), ("mcp-session-id", "unknown")]).await.0,
+            StatusCode::ACCEPTED
+        );
+        {
+            let inflight = c.t.st.mcp_http.inflight.lock().unwrap();
+            assert_eq!(inflight.len(), 2);
+            assert!(inflight.values().all(|handle| !handle.is_finished()));
+        }
+        drop(first);
+        assert_eq!(c.t.st.mcp_http.inflight.lock().unwrap().len(), 1);
+        assert!(!c.t.st.mcp_http.inflight.lock().unwrap().values().next().unwrap().is_finished());
+        drop(second);
+        assert!(c.t.st.mcp_http.inflight.lock().unwrap().is_empty());
+        assert!(c.t.ran.lock().unwrap().is_empty());
+        // A stale header never bypasses credentials or the current tool profile.
+        assert_eq!(c.raw("POST", &cancel.to_string(), &[("mcp-session-id", "unknown")]).await.0, StatusCode::FORBIDDEN);
+        c.t.st.cfg.lock().unwrap().insert("tool_profiles".into(), json!({"mcp":"assistant"}));
+        let (_, error, _) = c.call("quick_command", json!({"phrase":"launch"}), &[("mcp-session-id", "unknown")]).await;
+        assert!(error);
+    }
+
+    #[tokio::test]
+    async fn deleting_sessions_releases_capacity_and_cancels_only_their_calls() {
+        let c = C::new("mcp-delete-session").await;
+        let a = initialize_client(&c).await;
+        let b = initialize_client(&c).await;
+        let first = pending_session_call(&c, &a).await;
+        let second = pending_session_call(&c, &b).await;
+        let bearer = format!("Bearer {}", c.t.st.token);
+        let headers = [("authorization", bearer.as_str()), ("mcp-session-id", a.as_str())];
+        assert_eq!(c.raw("DELETE", "", &[("mcp-session-id", &a)]).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(
+            c.raw("DELETE", "", &[headers[0], headers[1], ("origin", "https://evil.example")]).await.0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(c.raw("DELETE", "", &headers).await.0, StatusCode::NO_CONTENT);
+        assert_eq!(c.raw("DELETE", "", &headers).await.0, StatusCode::NO_CONTENT); // idempotent
+        let body = tokio::time::timeout(Duration::from_secs(2), first.into_body().collect())
+            .await
+            .unwrap()
+            .unwrap()
+            .to_bytes();
+        assert!(String::from_utf8_lossy(&body).contains("cancelled"));
+        assert_eq!(c.t.st.mcp_http.inflight.lock().unwrap().len(), 1);
+        assert!(!c.t.st.mcp_http.inflight.lock().unwrap().values().next().unwrap().is_finished());
+        drop(second);
+        assert!(!c.t.st.mcp_http.sessions.lock().unwrap().contains_key(&a));
+        assert!(c.t.st.mcp_http.sessions.lock().unwrap().contains_key(&b));
+        list_and_call_with_session(&c, "/mcp", &c.t.st.token, &a).await;
+        // Fill the bounded store; explicit termination frees one slot for initialization.
+        {
+            let mut sessions = c.t.st.mcp_http.sessions.lock().unwrap();
+            for n in 1..256 {
+                sessions.insert(
+                    format!("fixture-{n}"),
+                    (HttpPrincipal { caller: Caller::Mcp, device: None }, Instant::now()),
+                );
+            }
+        }
+        let init = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}});
+        assert_eq!(c.raw("POST", &init.to_string(), &[headers[0]]).await.0, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(c.raw("DELETE", "", &[headers[0], ("mcp-session-id", &b)]).await.0, StatusCode::NO_CONTENT);
+        initialize_client(&c).await;
+    }
+
+    #[tokio::test]
+    async fn shared_sessions_keep_voice_credentials_scoped_to_their_device() {
+        let c = C::new("mcp-session-principals").await;
+        let child = c.t.st.devices.add(&c.t.st, "SECOND", "Second").unwrap();
+        let a = initialize_at(&c, "/api/devices/primary/mcp", &c.t.st.mcp.voice_token).await;
+        let path = format!("/api/devices/{}/mcp", child.device_id);
+        let bearer = format!("Bearer {}", child.mcp.voice_token);
+        let headers = [("authorization", bearer.as_str()), ("mcp-session-id", a.as_str())];
+        assert_eq!(c.raw_path(&path, "DELETE", "", &headers).await.0, StatusCode::NO_CONTENT);
+        assert!(c.t.st.mcp_http.sessions.lock().unwrap().contains_key(&a));
+        let header_map: HeaderMap =
+            headers.iter().map(|(k, v)| (k.parse::<axum::http::HeaderName>().unwrap(), v.parse().unwrap())).collect();
+        let owner =
+            c.t.st
+                .mcp_http
+                .session(&header_map, HttpPrincipal::new(&child, &header_map), false)
+                .map_err(|e| e.message)
+                .unwrap();
+        assert_ne!(owner, a);
+        let owner2 =
+            c.t.st
+                .mcp_http
+                .session(&header_map, HttpPrincipal::new(&child, &header_map), false)
+                .map_err(|e| e.message)
+                .unwrap();
+        assert_ne!(owner, owner2);
+        c.t.st.devices.remove(&c.t.st, &child.device_id).unwrap();
     }
 
     #[tokio::test]
@@ -1822,7 +2079,7 @@ mod tests {
         .unwrap();
         let second = start(b.clone(), "https://example.com/b");
         tokio::time::timeout(Duration::from_secs(2), async {
-            while c.t.st.mcp.inflight.lock().unwrap().len() < 2 {
+            while c.t.st.mcp_http.inflight.lock().unwrap().len() < 2 {
                 tokio::task::yield_now().await;
             }
         })
@@ -1840,9 +2097,10 @@ mod tests {
         crate::approvals::approve_next(&c.t.st, "once").await;
         assert_eq!(first.await.unwrap()["result"]["isError"], false);
         assert_eq!(*c.t.ran.lock().unwrap(), [crate::commands::Action::Open(vec!["https://example.com/a".into()])]);
-        let (_, unknown, _) =
-            c.raw("POST", &cancel, &[("authorization", &bearer), ("mcp-session-id", "unknown")]).await;
-        assert!(unknown["error"]["message"].as_str().unwrap().contains("session"));
+        assert_eq!(
+            c.raw("POST", &cancel, &[("authorization", &bearer), ("mcp-session-id", "unknown")]).await.0,
+            StatusCode::ACCEPTED
+        );
     }
 
     #[tokio::test]

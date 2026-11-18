@@ -395,6 +395,7 @@ impl Drop for PromptGuard {
         let leases = self.leases.take();
         let strict = self.strict;
         let decision = self.decision.clone();
+        let owner = self.st.device_id.clone();
         self.st.hub.emit("prompt_done", json!({"id":id,"decision":decision}));
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
@@ -405,7 +406,9 @@ impl Drop for PromptGuard {
                     if !st.approvals.pending_for(&st.device_id) && !st.approvals.asking_for(&st.device_id) {
                         st.link.with_generation(generation, st.link.send(&clear_message(&st, &id))).await;
                     }
-                    st.hub.emit("prompt_done", json!({"id":id}));
+                    if st.device_id != owner {
+                        st.hub.emit("prompt_done", json!({"id":id,"decision":decision}));
+                    }
                 }
             });
         }
@@ -693,6 +696,55 @@ mod tests {
         t.st.cfg.lock().unwrap().insert("stick_approvals".into(), json!(false));
         assert_eq!(ask_permission(&t.st, "Bash", "ls", "web", WAIT).await, None);
         assert!(sent_prompts(&t).is_empty());
+    }
+
+    #[tokio::test]
+    async fn permission_completion_includes_decision_for_every_destination() {
+        let t = agent("permission-done-decision", false).await;
+        t.st.devices.init(&t.st).unwrap();
+        let child = t.st.devices.add(&t.st, "SECOND", "Second").unwrap();
+        t.st.update_config(json!({"approval_devices":["primary",child.device_id]}).as_object().unwrap().clone())
+            .unwrap();
+        for decision in [Some("allow"), Some("deny"), None] {
+            let (_, mut owner_events) = t.st.hub.subscribe(0);
+            let (_, mut child_events) = child.hub.subscribe(0);
+            let st = t.st.clone();
+            let pending = tokio::spawn(async move {
+                ask_permission(&st, "Bash", "pwd", "terminal", Duration::from_millis(200)).await
+            });
+            let id = tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    let event = owner_events.recv().await.unwrap();
+                    if event["kind"] == "prompt" {
+                        break event["id"].as_str().unwrap().to_owned();
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            if let Some(decision) = decision {
+                assert!(t.st.approvals.decide(&id, decision, "dashboard"));
+            }
+            assert_eq!(pending.await.unwrap().as_deref(), decision);
+            for events in [&mut owner_events, &mut child_events] {
+                let done = tokio::time::timeout(Duration::from_secs(2), async {
+                    loop {
+                        let event = events.recv().await.unwrap();
+                        if event["kind"] == "prompt_done" {
+                            break event;
+                        }
+                    }
+                })
+                .await
+                .unwrap();
+                assert_eq!(done["id"], id);
+                assert_eq!(done.get("decision"), Some(&json!(decision)));
+            }
+            // The owner's completion must not be overwritten by a second, decision-less event.
+            let (recent, _) = t.st.hub.subscribe(300);
+            assert_eq!(recent.iter().filter(|event| event["kind"] == "prompt_done" && event["id"] == id).count(), 1);
+        }
+        t.st.devices.remove(&t.st, &child.device_id).unwrap();
     }
 }
 
