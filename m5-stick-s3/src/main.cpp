@@ -505,7 +505,8 @@ static void onMenu(menu::Action a) {
       powerOff();
       break;
     case menu::Action::VOLUME:  // takes effect (and plays a preview) right away
-      settings::saveSoundVolume(menu::draft().volume);
+      sound::setVolume(menu::draft().volume);
+      if (menu::draft().sound && !sound::on()) sound::setOn(true);  // Sounds ON in the draft: hear the level
       sound::play(sound::Cue::TEST);
       dirty = true;
       return;
@@ -545,8 +546,8 @@ static void onMenu(menu::Action a) {
       settings::saveLandscape(d.landscape);
       settings::saveClock24(d.clock24);
       settings::saveDevMode(d.devMode);
-      settings::saveSoundOn(d.sound);
-      settings::saveSoundVolume(d.volume);
+      sound::setOn(d.sound);
+      sound::setVolume(d.volume);
       settings::saveWirelessMic(d.wmic);
       if (!d.autoRotate) ui::setFlipped(settings::flipped());
       settings::saveStandbyMin(d.standbyMin);
@@ -584,7 +585,7 @@ static void openSettings() {
   menu::open({settings::combo(), hid::slot(), settings::standbyMin(), settings::brightnessPct(),
               settings::enterDelayMs(),
               settings::liftWakes(), settings::faceDownSleeps(), settings::shakeEscapes(),
-              settings::autoRotate(), settings::landscape(), settings::clock24(), settings::devMode(), settings::soundOn(), settings::soundVolume(),
+              settings::autoRotate(), settings::landscape(), settings::clock24(), settings::devMode(), sound::on(), sound::volume(),
               settings::wirelessMic()},
              hid::state() == hid::Bt::OFF);
   mode = Mode::MENU;
@@ -754,15 +755,15 @@ static void pollSerial() {
       else if (line.startsWith("sound")) {  // sound test | on | off | vol <0-255>
         String arg = line.substring(5);
         arg.trim();
-        if (arg == "on" || arg == "off") settings::saveSoundOn(arg == "on");
-        else if (arg.startsWith("vol")) settings::saveSoundVolume(constrain(arg.substring(3).toInt(), 0, 255));
+        if (arg == "on" || arg == "off") sound::setOn(arg == "on");
+        else if (arg.startsWith("vol")) sound::setVolume(constrain(arg.substring(3).toInt(), 0, 255));
         else if (arg.startsWith("play ")) {
           String name = arg.substring(5);
           name.trim();
           if (!sound::play(name)) Serial.printf("unknown sound '%s'\n", name.c_str());
-          else Serial.printf("playing %s\n", name.c_str());
+          else Serial.printf(sound::on() && sound::volume() ? "playing %s\n" : "%s: muted\n", name.c_str());
         } else sound::play(sound::Cue::TEST);
-        Serial.printf("Sounds %s, volume %u\n", settings::soundOn() ? "on" : "off", settings::soundVolume());
+        Serial.printf("Sounds %s, volume %u\n", sound::on() ? "on" : "off", sound::volume());
       }
       else protocol::serialLine(line);
       line = "";
@@ -1118,8 +1119,8 @@ void loop() {
       const events::Event& e = events::current();
       buddy::eventShown(e.id);
       ui::wake(e.level == events::Level::HEADSUP ? 61000 : 8000);
-      if (settings::soundOn())  // its own sound; one this firmware doesn't have: the level's default
-        event_sound::play(e.sound.c_str(), events::defaultSound(e.level),
+      // its own sound; one this firmware doesn't have: the level's default (silent with sound off)
+      event_sound::play(e.sound.c_str(), events::defaultSound(e.level),
                           [](const char* n) { return sound::play(String(n)); });
       Log.event(diagnostics::Event::Event);
       lastFrame = 0;

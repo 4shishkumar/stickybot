@@ -22,6 +22,10 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   asking for an approval. Name changes keep the existing pairing.
 
 ### Fixed
+- **Sound off, or volume 0, now mutes everything on the stick** (firmware): game effects, menu
+  sounds, the test sound, event and notification sounds and audio clips from the Mac, with no
+  speaker click. Muting stops a sound that is already playing, and volume changes apply at once,
+  also during a game.
 - Permission prompts survive stick reconnects; choosing no approval devices returns immediately.
   Removing a stick cleans its notification destinations, and a bad saved entry no longer stops
   other sticks from loading.
