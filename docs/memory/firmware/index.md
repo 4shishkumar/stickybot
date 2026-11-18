@@ -11,4 +11,4 @@ description: "The stick firmware: where logic lives, how it is tested, the flash
 
 | File | Description |
 |------|-------------|
-| [stick-firmware](stick-firmware.md) | The M5StickS3 firmware: hardware-free logic in src/logic with native Unity tests that must agree under gcc and clang, the 85 % flash limit, Bluetooth buffer limits, HID changes and the macOS GATT cache, FW_VERSION. |
+| [stick-firmware](stick-firmware.md) | S3 and Plus2 firmware: bounded authenticated host sessions and input picker, legacy pairing and write-only per-host passwords, safe diagnostics, hardware capabilities, native tests, flash/Bluetooth budgets and firmware versioning. |

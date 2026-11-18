@@ -15,6 +15,10 @@ use std::time::Duration;
 pub type OnChunk<'a> = &'a mut dyn FnMut(&str) -> Option<Vec<u8>>;
 
 pub trait System: Send + Sync {
+    /// Display name only; never used as host identity or authentication.
+    fn computer_name(&self) -> String {
+        "Mac".into()
+    }
     /// Runs a program, waits; -> (exit code, stdout + stderr). A missing program: `(None, why)`.
     fn run(&self, argv: &[String], timeout: Duration) -> (Option<i32>, String);
     /// Runs a program, handing its output (stdout and stderr) over as it comes. `cancel` stops it.
@@ -63,6 +67,11 @@ pub const BLACKHOLE_DRIVERS: &[&str] =
 pub struct MacSystem;
 
 impl System for MacSystem {
+    fn computer_name(&self) -> String {
+        let (code, name) =
+            self.run(&["/usr/sbin/scutil".into(), "--get".into(), "ComputerName".into()], Duration::from_secs(2));
+        if code == Some(0) && !name.trim().is_empty() { name.trim().into() } else { "Mac".into() }
+    }
     fn run(&self, argv: &[String], timeout: Duration) -> (Option<i32>, String) {
         let mut out = String::new();
         let cancel = AtomicBool::new(false);
@@ -257,6 +266,9 @@ impl FakeSystem {
 }
 
 impl System for FakeSystem {
+    fn computer_name(&self) -> String {
+        "Test Mac".into()
+    }
     fn run(&self, argv: &[String], _timeout: Duration) -> (Option<i32>, String) {
         let key = Self::key(argv);
         self.ran.lock().unwrap().push(argv.join(" "));

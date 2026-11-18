@@ -13,37 +13,39 @@ pub mod clips;
 pub mod commands;
 pub mod config;
 pub mod connections;
+pub mod devices;
 pub mod events;
+pub mod faces;
 pub mod feed;
 pub mod feedback;
-pub mod faces;
 pub mod firmware;
+pub mod flasher;
 pub mod github;
 pub mod home;
+pub mod hooks;
+pub mod hosts;
+pub mod hub;
 pub mod ir;
 pub mod keys;
-pub mod hub;
-pub mod mcp;
-pub mod flasher;
 pub mod login;
 pub mod logs;
+pub mod mcp;
 pub mod migrate;
 pub mod net;
 pub mod openrouter;
 pub mod pet;
 pub mod python_agent;
-pub mod switch;
-pub mod setup;
-pub mod sysrun;
-pub mod hooks;
-pub mod speak;
-pub mod speech;
-pub mod talk;
-pub mod weather;
 pub mod releases;
 pub mod selfupdate;
+pub mod setup;
+pub mod speak;
+pub mod speech;
+pub mod switch;
+pub mod sysrun;
+pub mod talk;
 pub mod updates;
 pub mod usb;
+pub mod weather;
 pub mod wmic;
 
 use serde_json::{Map, Value, json};
@@ -114,10 +116,10 @@ pub struct AppState {
     pub fake: bool,
     /// speech to text (the model download + its worker thread)
     pub speech: Arc<speech::Speech>,
-    pub commands: commands::Store,
-    pub apps: commands::Apps,
+    pub commands: Arc<commands::Store>,
+    pub apps: Arc<commands::Apps>,
     /// runs quick commands' `open` / shell (tests swap it)
-    runner: Mutex<commands::Runner>,
+    runner: Arc<Mutex<commands::Runner>>,
     brain: Mutex<Arc<dyn talk::Brain>>,
     /// what the agent is doing beyond the link: `(state, detail)` while it listens, transcribes,
     /// thinks or works; `None` = idle
@@ -134,22 +136,22 @@ pub struct AppState {
     /// firmware update jobs (Bluetooth)
     pub jobs: firmware::Jobs,
     /// Claude Code permission prompts waiting on the stick
-    pub approvals: approvals::Approvals,
+    pub approvals: Arc<approvals::Approvals>,
     /// how long a firmware update waits for things (tests shorten it)
     pub ota_timings: Mutex<firmware::UpdateTimings>,
     /// the wireless Wispr mic (the "<stick>-bt-mic" device and the stick's audio played into it)
     pub wmic: wmic::WirelessMic,
     /// the home card, weather, feed, events, GitHub watcher, pet (home.rs)
-    pub home: home::Home,
+    pub home: Arc<home::Home>,
     /// the IR remote (firmware 2.5.0; `ir.rs`)
     pub ir: ir::Ir,
     /// release checks + firmware downloads (`updates.rs`)
-    pub updates: updates::Updates,
+    pub updates: Arc<updates::Updates>,
     /// the stick on USB: `@…` lines, the list with versions, flashing (`usb.rs`, `flasher.rs`).
     /// With the fake stick there's no USB at all (tests never open a real port).
-    pub usb: usb::UsbSticks,
+    pub usb: Arc<usb::UsbSticks>,
     /// runs esptool for USB flashing (tests swap it: they never run the real one)
-    esptool: Mutex<Arc<dyn flasher::Esptool>>,
+    esptool: Arc<Mutex<Arc<dyn flasher::Esptool>>>,
     /// how long a USB flash waits for the bootloader (tests shorten it)
     pub flash_timings: Mutex<flasher::FlashTimings>,
     /// the Python app's folder (read-only; see `migrate.rs`)
@@ -159,36 +161,54 @@ pub struct AppState {
     /// the stick tools (MCP): rate limit, calls
     pub mcp: mcp::McpState,
     /// runs `claude mcp …` for terminal sessions (tests swap it)
-    pub claude_runner: Mutex<mcp::ClaudeRunner>,
+    pub claude_runner: Arc<Mutex<mcp::ClaudeRunner>>,
     /// when a button was last pressed on the stick (`hub::now()` seconds)
     last_input: Mutex<Option<f64>>,
     /// the stick's sound settings as it last reported them (`{"on", "volume", …}`; the menu bar)
     sounds: Mutex<Option<Value>>,
     /// start at login (the menu bar app sets the real one)
-    pub login_item: Mutex<Arc<dyn login::LoginItem>>,
+    pub login_item: Arc<Mutex<Arc<dyn login::LoginItem>>>,
     /// API keys (the Keychain; in memory with the fake stick: tests never reach the Keychain)
-    pub keys: keys::Keys,
+    pub keys: Arc<keys::Keys>,
     /// face packages: the catalog, installs (`faces.rs`)
-    pub faces: faces::Faces,
+    pub faces: Arc<faces::Faces>,
     openrouter: OnceLock<openrouter::OpenRouterBrain>,
     /// the setup page, the components, restart / window (`setup.rs`); with the fake stick a
     /// pretend Mac (`sysrun::FakeSystem`: tests never run gh / claude or touch ~/.claude)
-    pub setup: setup::Setup,
+    pub setup: Arc<setup::Setup>,
     /// "Report an issue": the rate limit and the form poster (`feedback.rs`; fake: never posts)
-    pub feedback: feedback::Feedback,
+    pub feedback: Arc<feedback::Feedback>,
     /// the Mac's Calendar, read-only (`connections/calendar.rs`); with the fake stick a made-up day:
     /// the real Calendar is never touched there
-    pub calendar: connections::calendar::Calendar,
+    pub calendar: Arc<connections::calendar::Calendar>,
     me: OnceLock<Weak<AppState>>,
+    pub device_id: String,
+    pub devices: Arc<devices::DeviceManager>,
+    pub host: Arc<hosts::HostIdentity>,
+    pub host_state: Mutex<Value>,
+    backend: Backend,
+    owner: Weak<AppState>,
+    pub audio_owner: Arc<Mutex<Option<String>>>,
+    workers: Mutex<Vec<tokio::task::AbortHandle>>,
 }
 
 impl AppState {
     pub fn new(opts: &Options, backend: Backend) -> Result<Arc<Self>, String> {
+        Self::new_session(opts, backend, None, "primary".into(), None)
+    }
+
+    fn new_session(
+        opts: &Options,
+        backend: Backend,
+        parent: Option<&Arc<Self>>,
+        device_id: String,
+        session_cfg: Option<Map<String, Value>>,
+    ) -> Result<Arc<Self>, String> {
         let paths = config::Paths::new(&opts.home)?;
         paths.ensure().map_err(|e| format!("{}: {e}", paths.home.display()))?;
         let token = paths.token_value().map_err(|e| format!("token: {e}"))?;
         let paths_home = paths.home.clone();
-        let cfg = config::load(&paths);
+        let cfg = session_cfg.unwrap_or_else(|| config::load(&paths));
         let fake = backend.is_fake();
         let commands = commands::Store::new(paths.commands());
         if let Err(e) = commands.ensure() {
@@ -211,8 +231,14 @@ impl AppState {
                 Arc::new(home::claude_sessions),
             )
         };
+        let host = if let Some(parent) = parent {
+            parent.host.clone()
+        } else {
+            Arc::new(hosts::HostIdentity::load(&paths, fake)?)
+        };
+        let initial_state = cfg.get("device_states").and_then(|s| s.get(&device_id)).cloned().unwrap_or(Value::Null);
         let st = Arc::new(Self {
-            link: Link::new(backend),
+            link: Link::new(backend.clone()),
             cfg: Mutex::new(cfg),
             paths,
             token,
@@ -220,10 +246,10 @@ impl AppState {
             port: opts.port,
             started,
             fake,
-            speech: Arc::new(speech::Speech::default()),
-            commands,
-            apps: commands::Apps::system(),
-            runner: Mutex::new(commands::system_runner()),
+            speech: parent.map(|p| p.speech.clone()).unwrap_or_else(|| Arc::new(speech::Speech::default())),
+            commands: parent.map(|p| p.commands.clone()).unwrap_or_else(|| Arc::new(commands)),
+            apps: parent.map(|p| p.apps.clone()).unwrap_or_else(|| Arc::new(commands::Apps::system())),
+            runner: parent.map(|p| p.runner.clone()).unwrap_or_else(|| Arc::new(Mutex::new(commands::system_runner()))),
             brain: Mutex::new(Arc::new(talk::NoBrain)),
             activity: Mutex::new(None),
             stats: Mutex::new(
@@ -237,53 +263,84 @@ impl AppState {
             reply_id: std::sync::atomic::AtomicU64::new(0),
             rt: OnceLock::new(),
             jobs: firmware::Jobs::default(),
-            approvals: approvals::Approvals::default(),
+            approvals: parent.map(|p| p.approvals.clone()).unwrap_or_else(|| Arc::new(approvals::Approvals::default())),
             ota_timings: Mutex::new(firmware::UpdateTimings::default()),
             wmic: wmic::WirelessMic::new(),
-            home,
+            home: parent.map(|p| Arc::new(p.home.for_device())).unwrap_or_else(|| Arc::new(home)),
             ir: ir::Ir::default(),
-            updates: updates::Updates::new(&paths_home),
-            usb: if fake {
-                usb::UsbSticks::new(Arc::new(usb::FakeUsb::default()))
-            } else {
-                usb::UsbSticks::default()
-            },
-            esptool: Mutex::new(Arc::new(flasher::SystemEsptool)),
+            updates: parent.map(|p| p.updates.clone()).unwrap_or_else(|| Arc::new(updates::Updates::new(&paths_home))),
+            usb: parent.map(|p| p.usb.clone()).unwrap_or_else(|| {
+                Arc::new(if fake {
+                    usb::UsbSticks::new(Arc::new(usb::FakeUsb::default()))
+                } else {
+                    usb::UsbSticks::default()
+                })
+            }),
+            esptool: parent
+                .map(|p| p.esptool.clone())
+                .unwrap_or_else(|| Arc::new(Mutex::new(Arc::new(flasher::SystemEsptool)))),
             flash_timings: Mutex::new(flasher::FlashTimings::default()),
-            import_from: opts.import_from.clone(),
+            import_from: parent.map(|p| p.import_from.clone()).unwrap_or_else(|| opts.import_from.clone()),
             speaker: speak::Speaker::default(),
             mcp: mcp::McpState::default(),
-            claude_runner: Mutex::new(mcp::system_claude_runner()),
+            claude_runner: parent
+                .map(|p| p.claude_runner.clone())
+                .unwrap_or_else(|| Arc::new(Mutex::new(mcp::system_claude_runner()))),
             last_input: Mutex::new(None),
             sounds: Mutex::new(None),
-            login_item: Mutex::new(Arc::new(login::NoLoginItem)),
-            keys: if fake { keys::Keys::new(Arc::new(keys::MemoryStore::default())) } else { keys::Keys::system() },
-            faces: faces::Faces::new(fake),
-            openrouter: OnceLock::new(),
-            setup: setup::Setup::new(if fake {
-                Arc::new(sysrun::FakeSystem::new(&paths_home))
-            } else {
-                Arc::new(sysrun::MacSystem)
+            login_item: parent
+                .map(|p| p.login_item.clone())
+                .unwrap_or_else(|| Arc::new(Mutex::new(Arc::new(login::NoLoginItem)))),
+            keys: parent.map(|p| p.keys.clone()).unwrap_or_else(|| {
+                Arc::new(if fake {
+                    keys::Keys::new(Arc::new(keys::MemoryStore::default()))
+                } else {
+                    keys::Keys::system()
+                })
             }),
-            feedback: feedback::Feedback::new(fake),
-            calendar: connections::calendar::Calendar::new(if fake {
-                Arc::new(macos_calendar::fake::FakeCalendar::sample(hub::now() as i64))
-            } else {
-                macos_calendar::system()
+            faces: Arc::new(faces::Faces::new(fake)),
+            openrouter: OnceLock::new(),
+            setup: parent.map(|p| p.setup.clone()).unwrap_or_else(|| {
+                Arc::new(setup::Setup::new(if fake {
+                    Arc::new(sysrun::FakeSystem::new(&paths_home))
+                } else {
+                    Arc::new(sysrun::MacSystem)
+                }))
+            }),
+            feedback: parent.map(|p| p.feedback.clone()).unwrap_or_else(|| Arc::new(feedback::Feedback::new(fake))),
+            calendar: parent.map(|p| p.calendar.clone()).unwrap_or_else(|| {
+                Arc::new(connections::calendar::Calendar::new(if fake {
+                    Arc::new(macos_calendar::fake::FakeCalendar::sample(hub::now() as i64))
+                } else {
+                    macos_calendar::system()
+                }))
             }),
             me: OnceLock::new(),
+            devices: parent.map(|p| p.devices.clone()).unwrap_or_default(),
+            host,
+            host_state: Mutex::new(initial_state),
+            backend,
+            owner: parent.map(Arc::downgrade).unwrap_or_default(),
+            device_id,
+            audio_owner: parent.map(|p| p.audio_owner.clone()).unwrap_or_default(),
+            workers: Mutex::new(Vec::new()),
         });
         let _ = st.me.set(Arc::downgrade(&st));
         if let Ok(h) = tokio::runtime::Handle::try_current() {
             let _ = st.rt.set(h);
         }
+        st.hub.set_device(&st.device_id);
+        let identity = st.host.clone();
+        st.link.set_host(move || identity.wire());
         wmic::init(&st);
         let weak = Arc::downgrade(&st);
-        st.speech.on_change(move |p| {
-            if let Some(st) = weak.upgrade() {
-                st.hub.emit("speech", p.to_json());
-            }
-        });
+        if parent.is_none() {
+            st.speech.on_change(move |p| {
+                if let Some(st) = weak.upgrade() {
+                    st.hub.emit("speech", p.to_json());
+                }
+            });
+        }
         Ok(st)
     }
 
@@ -344,6 +401,12 @@ impl AppState {
     /// One line in `history.jsonl` (the Activity page).
     pub fn history(&self, entry: &Value) {
         use std::io::Write;
+        let mut entry = entry.clone();
+        if let Some(object) = entry.as_object_mut() {
+            object.insert("device_id".into(), json!(self.device_id));
+        } else {
+            entry = json!({"device_id":self.device_id,"entry":entry});
+        }
         let r = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -416,6 +479,14 @@ impl AppState {
     /// Quit / Ctrl-C: nothing left behind (the wireless mic's device and tap outlive the process
     /// otherwise). Blocking; call it outside the runtime's worker threads.
     pub fn shutdown(&self) {
+        if self.owner.upgrade().is_none() {
+            for child in self.devices.all() {
+                if child.device_id != self.device_id {
+                    child.bye_blocking(std::time::Duration::from_millis(1500));
+                    wmic::shutdown(&child);
+                }
+            }
+        }
         self.bye_blocking(std::time::Duration::from_millis(1500));
         wmic::shutdown(self);
     }
@@ -456,8 +527,8 @@ impl AppState {
             "busy": busy,
             "mtu": self.link.mtu(),
             "stats": Value::Object(self.stats.lock().unwrap().clone()),
-            "prompts": self.approvals.list(),
-            "asks": self.approvals.asks(),
+            "prompts": self.approvals.list_for(&self.device_id),
+            "asks": self.approvals.asks_for(&self.device_id),
             "mcp": cfg.get("mcp_server").cloned().unwrap_or(json!(true)),
             "model": cfg.get("model").cloned().unwrap_or(Value::Null),
             "weather": self.home.weather.lock().unwrap().now.clone(),
@@ -520,7 +591,7 @@ impl AppState {
 
     /// Permission prompts waiting on the stick (the menu bar's "Waiting for approval (n)").
     pub fn prompts_waiting(&self) -> usize {
-        self.approvals.list().as_array().map_or(0, Vec::len)
+        self.approvals.list_for(&self.device_id).as_array().map_or(0, Vec::len)
     }
 
     /// "StickyBot" once this app has taken the Python app's place (port 8660), else
@@ -531,9 +602,14 @@ impl AppState {
 
     /// Takes over the Python app's settings (see `migrate.rs`) and applies them to the running app.
     pub fn import_python(&self, mode: migrate::Mode) -> Result<migrate::Report, String> {
+        if let Some(root) = self.owner.upgrade() {
+            return root.import_python(mode);
+        }
         let from = self.import_from.clone().ok_or("no StickyBot (Python) folder to import from")?;
         let sounds = clips::sounds_dir(&self.paths.home);
+        let config_guard = self.cfg.lock().unwrap();
         let r = migrate::import(&from, &self.paths, &sounds, mode);
+        drop(config_guard);
         match &r {
             Ok(r) => {
                 log::info!("imported from {}: {}", from.display(), r.imported.join("; "));
@@ -555,6 +631,9 @@ impl AppState {
 
     /// Settings changed (PUT /api/config): save, tell the pages, follow a new stick.
     pub fn update_config(&self, changes: Map<String, Value>) -> Result<Map<String, Value>, String> {
+        if let Some(root) = self.owner.upgrade() {
+            return self.devices.update_session(&root, self, changes);
+        }
         let stick_changed;
         let hints_changed;
         let changed_keys: Map<String, Value> = changes.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -583,6 +662,7 @@ impl AppState {
             home::config_changed(&st, &changed_keys);
             connections::config_changed(&st, &changed_keys);
         }
+        self.devices.refresh_children(&snapshot);
         self.hub.emit("config", json!({"config": snapshot}));
         Ok(snapshot)
     }
@@ -603,7 +683,11 @@ pub async fn bind(port: u16, wait: std::time::Duration) -> Result<tokio::net::Tc
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             }
             Err(e) => {
-                let who = if port == switch::PORT { " (is StickyBot (Python) running? see desktop/SWITCHOVER.md)" } else { "" };
+                let who = if port == switch::PORT {
+                    " (is StickyBot (Python) running? see desktop/SWITCHOVER.md)"
+                } else {
+                    ""
+                };
                 return Err(format!("can't listen on 127.0.0.1:{port}: {e}{who}"));
             }
         }
@@ -641,7 +725,7 @@ pub async fn start(opts: Options) -> Result<Running, String> {
         Arc::new(move || weak.upgrade().map(|s| s.cfg.lock().unwrap().clone()).unwrap_or_else(config::defaults));
     let claude = brain::ClaudeBrain::new(cfg, state.paths.home.join("workspace"));
     let (home, port, token) = (state.paths.home.clone(), addr.port(), state.token.clone());
-    claude.set_mcp(move || mcp::brain_config(&home, port, &token));
+    claude.set_mcp(move || mcp::brain_config_device(&home, port, &token, "primary"));
     let or = Arc::new(state.openrouter());
     state.set_brain(Arc::new(brains::Brains::new(Arc::new(claude), or, Arc::downgrade(&state))));
     let weak = Arc::downgrade(&state);
@@ -669,10 +753,17 @@ pub async fn start(opts: Options) -> Result<Running, String> {
         && std::env::var("STICKYBOT_RS_ALLOW_SHARED").as_deref() != Ok("1")
     {
         let port = python_port();
-        state.link.set_gate(Arc::new(move || Box::pin(python_agent::check(port))));
+        let weak = Arc::downgrade(&state);
+        state.link.set_gate(Arc::new(move || {
+            Box::pin(python_agent::check_target(port, weak.upgrade().and_then(|s| s.stick()).map(|s| s.address)))
+        }));
     }
     state.link.spawn();
     state.link.set_target(state.stick());
+    state.devices.init(&state)?;
+    if state.cfg.lock().unwrap().get("primary_paused") == Some(&json!(true)) {
+        state.link.pause(true);
+    }
     let app = api::router(state.clone());
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
@@ -683,13 +774,49 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     Ok(Running { state, addr })
 }
 
+/// Only device-owned workers. The root startup owns pollers, credentials and the speech model.
+fn start_device_session(state: Arc<AppState>) {
+    if !state.fake {
+        let weak = Arc::downgrade(&state);
+        let cfg: brain::Config =
+            Arc::new(move || weak.upgrade().map(|s| s.cfg.lock().unwrap().clone()).unwrap_or_default());
+        let claude = brain::ClaudeBrain::new(cfg, state.paths.home.join("workspaces").join(&state.device_id));
+        let (home, port, token, id) =
+            (state.paths.home.clone(), state.port, state.token.clone(), state.device_id.clone());
+        claude.set_mcp(move || mcp::brain_config_device(&home, port, &token, &id));
+        state.set_brain(Arc::new(brains::Brains::new(
+            Arc::new(claude),
+            Arc::new(state.openrouter()),
+            Arc::downgrade(&state),
+        )));
+    }
+    let mut workers = spawn_link_watcher(state.clone());
+    workers.push(ir::spawn(state.clone()).abort_handle());
+    workers.push(talk::spawn(state.clone()).abort_handle());
+    workers.push(wmic::spawn(state.clone()).abort_handle());
+    workers.push(home::spawn_observer(state.clone()).abort_handle());
+    if !state.fake
+        && !switch::switched(&state.paths.home)
+        && std::env::var("STICKYBOT_RS_ALLOW_SHARED").as_deref() != Ok("1")
+    {
+        let weak = Arc::downgrade(&state);
+        let port = python_port();
+        state.link.set_gate(Arc::new(move || {
+            Box::pin(python_agent::check_target(port, weak.upgrade().and_then(|s| s.stick()).map(|s| s.address)))
+        }));
+    }
+    workers.push(state.link.spawn().abort_handle());
+    *state.workers.lock().unwrap() = workers;
+    state.link.set_target(state.stick());
+}
+
 /// Link changes become `link` + `state` events (the pill, Overview), like core.py `_on_link`.
-fn spawn_link_watcher(state: Arc<AppState>) {
+fn spawn_link_watcher(state: Arc<AppState>) -> Vec<tokio::task::AbortHandle> {
     let mut w = state.link.watch_state();
     let mut why = state.link.watch_reason();
     let mut msgs = state.link.messages();
     let st = state.clone();
-    tokio::spawn(async move {
+    let first = tokio::spawn(async move {
         let mut last = None;
         loop {
             let s = *w.borrow_and_update();
@@ -710,15 +837,41 @@ fn spawn_link_watcher(state: Arc<AppState>) {
             }
         }
     });
-    tokio::spawn(async move {
+    let second = tokio::spawn(async move {
         loop {
             match msgs.recv().await {
-                Ok(m) => log::debug!("stick: {m}"),
+                Ok(m) => {
+                    if m["evt"] == "proto" && m["reply"]["board"].is_string() {
+                        let mut hosts = state.host_state.lock().unwrap();
+                        if !hosts.is_object() {
+                            *hosts = json!({});
+                        }
+                        for key in ["deviceId", "board", "multiHost", "maxHosts", "battery", "bat", "fw", "name"] {
+                            if !m["reply"][key].is_null() {
+                                hosts[key] = m["reply"][key].clone();
+                            }
+                        }
+                        drop(hosts);
+                        state.devices.note_identity(&state, &m["reply"]);
+                    }
+                    if m["evt"] == "hosts" {
+                        let mut hosts = state.host_state.lock().unwrap();
+                        let mut merged = hosts.as_object().cloned().unwrap_or_default();
+                        if let Some(incoming) = m.as_object() {
+                            merged.extend(incoming.clone());
+                        }
+                        *hosts = json!(merged);
+                        drop(hosts);
+                        state.devices.note_identity(&state, &m);
+                        state.hub.emit("hosts", m);
+                    }
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                 Err(_) => return,
             }
         }
     });
+    vec![first.abort_handle(), second.abort_handle()]
 }
 
 #[cfg(test)]
@@ -745,9 +898,10 @@ mod name_tests {
         let fresh = opts("fresh", false);
         assert_eq!(fresh.start_port(8660, |_| false), super::switch::PORT);
         assert!(super::switch::fresh(&fresh.home));
-        let st = super::AppState::new(&super::Options { port: 8660, ..fresh.clone() }, stick_link::Backend::Fake(
-            stick_link::fake::FakeStick::new(),
-        ))
+        let st = super::AppState::new(
+            &super::Options { port: 8660, ..fresh.clone() },
+            stick_link::Backend::Fake(stick_link::fake::FakeStick::new()),
+        )
         .unwrap();
         assert_eq!(st.app_name(), "StickyBot");
         assert!(!st.token.is_empty()); // its own token: there's no Python one

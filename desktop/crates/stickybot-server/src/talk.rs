@@ -143,6 +143,7 @@ impl StickStream {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = sent.clone();
+        let generation = st.link.bound_generation();
         tokio::spawn(async move {
             let mut pending: Option<String> = None;
             let mut shown: Option<String> = None;
@@ -151,7 +152,11 @@ impl StickStream {
                 let st = st.clone();
                 let heard = heard.clone();
                 count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                async move { tell_stick(&st, "working", &heard, &text).await }
+                async move {
+                    if st.link.generation() == generation {
+                        tell_stick(&st, "working", &heard, &text).await;
+                    }
+                }
             };
             loop {
                 let due = match (&pending, last) {
@@ -299,13 +304,28 @@ pub async fn tell_stick(st: &AppState, state: &str, heard: &str, text: &str) -> 
 /// Listens to the link for talks and cancels. Runs for the life of the app.
 pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     let mut rx = st.link.incoming();
+    let mut connection = st.link.watch_state();
     tokio::spawn(async move {
-        let mut rec: Option<Recording> = None;
+        let mut rec: Option<(Recording, u64)> = None;
         loop {
-            match rx.recv().await {
+            let message = tokio::select! {
+                result = rx.recv() => result,
+                result = connection.changed() => {
+                    if result.is_err() { return; }
+                    if !st.link.connected() {
+                        rec = None;
+                        st.brain().cancel();
+                        crate::speak::stop(&st);
+                        st.set_idle();
+                    }
+                    continue;
+                }
+            };
+            match message {
                 Ok(FromStick::Audio(frame)) => {
                     // a Wispr stream's frames are the wireless mic's (wmic.rs), not a talk's
-                    if let Some(r) = rec.as_mut()
+                    if let Some((r, generation)) = rec.as_mut()
+                        && *generation == st.link.generation()
                         && !st.wmic.streaming()
                     {
                         r.add(&frame);
@@ -319,7 +339,7 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     })
 }
 
-fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<Recording>) {
+fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<(Recording, u64)>) {
     let evt = msg.get("evt").and_then(Value::as_str);
     let from_agent = msg.get("src").and_then(Value::as_str) == Some("agent");
     if msg.get("cmd").and_then(Value::as_str) == Some("permission")
@@ -333,7 +353,7 @@ fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<Recording>) {
         // A / B on an approval prompt
         let (id, decision) = (msg.get("id").and_then(Value::as_str), msg.get("decision").and_then(Value::as_str));
         if let (Some(id), Some(d)) = (id, decision) {
-            st.approvals.decide(id, d, "stick");
+            st.approvals.decide_from_device(id, d, st);
         }
         return;
     }
@@ -343,12 +363,12 @@ fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<Recording>) {
     match (msg.get("evt").and_then(Value::as_str), msg.get("state").and_then(Value::as_str)) {
         (Some("talk"), Some("start")) => {
             crate::speak::stop(st); // talking again interrupts a reply being read out
-            *rec = Some(Recording::new());
+            *rec = Some((Recording::new(), st.link.generation()));
             st.set_activity("listening", "");
         }
         (Some("talk"), Some("stop")) => {
-            if let Some(r) = rec.take() {
-                tokio::spawn(handle_talk(st.clone(), r));
+            if let Some((r, generation)) = rec.take() {
+                tokio::spawn(handle_talk_at(st.clone(), r, generation));
             }
         }
         (Some("speak"), _) => {
@@ -372,7 +392,20 @@ fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<Recording>) {
 }
 
 /// Always ends by telling the stick something (it waits on "Thinking…").
-pub async fn handle_talk(st: Arc<AppState>, rec: Recording) {
+pub fn handle_talk(st: Arc<AppState>, rec: Recording) -> impl std::future::Future<Output = ()> + Send {
+    let generation = st.link.bound_generation();
+    handle_talk_at(st, rec, generation)
+}
+fn handle_talk_at(st: Arc<AppState>, rec: Recording, generation: u64) -> impl std::future::Future<Output = ()> + Send {
+    let link = st.link.clone();
+    async move {
+        if link.generation() != generation {
+            return;
+        }
+        link.with_generation(generation, handle_talk_scoped(st, rec)).await;
+    }
+}
+async fn handle_talk_scoped(st: Arc<AppState>, rec: Recording) {
     if let Err(e) = handle_talk_inner(&st, rec).await {
         log::error!("talk failed: {e:#}");
         tell_stick(&st, "error", "", &cut(&format!("Something went wrong: {e}"), 120)).await;
@@ -418,7 +451,22 @@ fn ms_since(t: Instant) -> u64 {
 }
 
 /// A request, spoken or typed (core.py `handle_text`).
-pub async fn handle_text(st: Arc<AppState>, text: String, source: &str) {
+pub fn handle_text(
+    st: Arc<AppState>,
+    text: String,
+    source: &str,
+) -> impl std::future::Future<Output = ()> + Send + use<> {
+    let link = st.link.clone();
+    let generation = link.bound_generation();
+    let source = source.to_owned();
+    async move {
+        if link.generation() != generation {
+            return;
+        }
+        link.with_generation(generation, handle_text_inner(st, text, &source)).await;
+    }
+}
+async fn handle_text_inner(st: Arc<AppState>, text: String, source: &str) {
     st.count("requests");
     let started = Instant::now();
     st.hub.emit("heard", json!({"text": text, "source": source}));
@@ -1019,12 +1067,19 @@ pub(crate) mod tests {
     const LONG: &str = "## Release notes\n\nHere's what changed this week:\n\n- **Login**: the redirect bug is fixed, the session cookie survives the round trip.\n- Dark mode landed behind the `theme` toggle.\n\n```sh\nnpm run build\n```\n\n";
 
     fn long() -> String {
-        format!("{LONG}{}It's 28°C — nice.", "Still open: the billing refactor needs a review, and the CI cache keeps missing. ".repeat(8))
+        format!(
+            "{LONG}{}It's 28°C — nice.",
+            "Still open: the billing refactor needs a review, and the CI cache keeps missing. ".repeat(8)
+        )
     }
 
     /// The JSON lines the fake stick got.
     pub fn lines(fake: &FakeStick) -> Vec<Value> {
-        String::from_utf8(fake.writes().concat()).unwrap().lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+        String::from_utf8(fake.writes().concat())
+            .unwrap()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect()
     }
 
     #[test]
@@ -1141,5 +1196,27 @@ pub(crate) mod tests {
         let t = agent("bye-quit", false).await;
         assert!(t.st.bye_blocking(Duration::from_secs(1))); // on the runtime: started, not waited for
         assert!(until(|| lines(&t.fake).contains(&json!({"src": "agent", "bye": true}))).await);
+    }
+}
+
+#[cfg(test)]
+mod session_generation_tests {
+    use super::*;
+    #[tokio::test]
+    async fn work_queued_before_disconnect_cannot_be_rebound_to_reconnected_session() {
+        let t = super::tests::agent("queued-generation", false).await;
+        let generation = t.st.link.generation();
+        let text = handle_text(t.st.clone(), "This request belongs to the old session".into(), "typed");
+        let recording = handle_talk_at(t.st.clone(), Recording::new(), generation);
+        t.st.link.pause(true);
+        let mut states = t.st.link.watch_state();
+        states.wait_for(|s| *s == stick_link::LinkState::Paused).await.unwrap();
+        t.st.link.pause(false);
+        states.wait_for(|s| *s == stick_link::LinkState::Connected).await.unwrap();
+        assert_ne!(t.st.link.generation(), generation);
+        text.await;
+        recording.await;
+        assert_eq!(t.st.status()["stats"]["requests"], 0);
+        assert!(!t.fake.screens().iter().any(|(_, heard, _)| heard.contains("old session")));
     }
 }

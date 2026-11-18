@@ -132,7 +132,7 @@ static Action quickChange() {
     default:
       return Action::SETTINGS;  // "Settings": the full menu
   }
-  Log.printf("Quick settings: %d changed\n", qsel);
+  Log.event(diagnostics::Event::Launcher);
   return Action::REDRAW;
 }
 
@@ -144,7 +144,7 @@ Action clickB() {
       const String id = faces::at(fsel).id();
       settings::saveFace(id);
       faces::select(id);
-      Log.printf("Face: %s (launcher)\n", id.c_str());
+      Log.event(diagnostics::Event::Launcher);
       return Action::HOME;
     }
     case Screen::GRID: break;
@@ -152,7 +152,7 @@ Action clickB() {
   if (!layout_.n) return Action::NONE;
   const Tile t = layout_.tiles[sel < layout_.n ? sel : 0];
   settings::saveLauncherLast(info(t).letter);
-  Log.printf("Launcher: %s\n", info(t).id);
+  Log.event(diagnostics::Event::Launcher);
   switch (t) {
     case Tile::GAMES: return Action::GAMES;
     case Tile::REMOTE: return Action::REMOTE;
@@ -209,7 +209,7 @@ protocol::Result command(const protocol::Args& arg) {
     letters(l, lt, sizeof lt);
     settings::saveLauncherTiles(l == defaults() ? String() : String(lt));
     if (sel >= layout_.n) sel = 0;
-    Log.printf("Launcher tiles: %s\n", lt);
+    Log.event(diagnostics::Event::Launcher);
   }
   char ids_[80];
   ids(layout_, ids_, sizeof ids_);

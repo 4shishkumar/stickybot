@@ -487,6 +487,13 @@ async fn ready(st: &AppState, hold_id: &Option<Value>, ok: bool) {
 
 /// A went down for Wispr: make the device, give Wispr the lead time, then say "ready".
 pub async fn prepare(st: Arc<AppState>, hold_id: Option<Value>) -> bool {
+    if !claim_audio(&st) {
+        st.link
+            .send(&json!({"src":"agent","wmic":{"state":"busy","id":hold_id,"reason":"Another stick is dictating"}}))
+            .await;
+        st.wmic.player.lock().unwrap().stop();
+        return false;
+    }
     let t0 = Instant::now();
     {
         let mut h = st.wmic.holds.lock().unwrap();
@@ -496,6 +503,7 @@ pub async fn prepare(st: Arc<AppState>, hold_id: Option<Value>) -> bool {
     let why = unavailable(&st);
     if !why.is_empty() {
         log::info!("stick mic: not made ({why})");
+        release_audio(&st);
         ready(&st, &hold_id, false).await;
         return false;
     }
@@ -544,6 +552,9 @@ pub async fn prepare(st: Arc<AppState>, hold_id: Option<Value>) -> bool {
         h.cur = Some(cur);
     }
     report(&st);
+    if !made.ok() {
+        release_audio(&st);
+    }
     made.ok()
 }
 
@@ -566,11 +577,16 @@ pub fn stop_hold(st: &AppState) {
 
 /// The device for `secs`, to rank it in Wispr once. -> "" or why not.
 pub async fn show(st: &Arc<AppState>, secs: Duration) -> String {
+    if !claim_audio(st) {
+        return "Another stick is dictating".into();
+    }
     let why = unavailable(st);
     if !why.is_empty() {
+        release_audio(st);
         return why;
     }
     if !st.wmic.dev.run(|d| d.ensure_present()).await.unwrap_or(Made::No).ok() {
+        release_audio(st);
         let e = st.wmic.dev.snap().error;
         return if e.is_empty() { "couldn't create it".into() } else { e };
     }
@@ -637,6 +653,7 @@ async fn lifetime(st: Arc<AppState>) {
             );
         }
         st.wmic.dev.run(|d| d.remove()).await;
+        release_audio(&st);
         st.wmic.player.lock().unwrap().release();
         let mut h = st.wmic.holds.lock().unwrap();
         if let Some(cur) = h.cur.as_mut()
@@ -672,10 +689,12 @@ pub async fn drop_device(st: Arc<AppState>, why: String) {
     // never touches Core Audio while the feature is off
     if !st.wmic.dev.snap().present {
         st.wmic.player.lock().unwrap().release();
+        release_audio(&st);
         return;
     }
     let n = st.wmic.dev.run(|d| d.remove()).await.unwrap_or(0);
     st.wmic.player.lock().unwrap().release();
+    release_audio(&st);
     if n > 0 {
         log::info!("stick mic: removed now ({why})");
         report(&st);
@@ -864,22 +883,13 @@ pub fn note_name(st: &Arc<AppState>, reply: &Value) {
     if reply.get("board").is_none_or(Value::is_null) {
         return;
     }
-    let snapshot = {
-        let mut cfg = st.cfg.lock().unwrap();
-        let Some(mut stick) = cfg.get("stick").and_then(Value::as_object).cloned() else { return };
-        if stick.get("name").and_then(Value::as_str) == Some(name) {
-            return;
-        }
-        let was = stick.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-        log::info!("the stick is now called {name:?} (was {was:?})");
-        stick.insert("name".into(), json!(name));
-        cfg.insert("stick".into(), Value::Object(stick));
-        if let Err(e) = crate::config::save(&st.paths, &cfg) {
-            log::warn!("couldn't save the stick's new name: {e}");
-        }
-        cfg.clone()
-    };
-    st.hub.emit("config", json!({"config": snapshot}));
+    if st.stick().is_none_or(|stick| stick.name == name) {
+        return;
+    }
+    if let Err(error) = st.devices.rename(st, name) {
+        log::warn!("couldn't save the stick's new name: {error}");
+        return;
+    }
     rename_mic(st, "the stick was renamed");
 }
 
@@ -903,7 +913,9 @@ pub fn on_message(st: &Arc<AppState>, msg: &Value) {
         }
         // 1.7.0: the key is already down, too late for the device
         (Some("wispr"), Some("start")) => {
-            st.wmic.player.lock().unwrap().start(rate);
+            if claim_audio(st) {
+                st.wmic.player.lock().unwrap().start(rate);
+            }
         }
         (Some("wispr"), Some("stop")) => {
             st.wmic.player.lock().unwrap().stop();
@@ -927,6 +939,9 @@ pub fn on_message(st: &Arc<AppState>, msg: &Value) {
 
 /// An audio frame: the Wispr stream's while one is on (else it's a talk's).
 pub fn on_audio(st: &AppState, frame: &[u8]) {
+    if st.audio_owner.lock().unwrap().as_deref() != Some(&st.device_id) {
+        return;
+    }
     let mut p = st.wmic.player.lock().unwrap();
     if p.active()
         && frame.len() > stick_link::adpcm::HEADER
@@ -988,6 +1003,22 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     })
 }
 
+/// A single aggregate microphone belongs to one originating stick through its tail.
+pub fn claim_audio(st: &AppState) -> bool {
+    let mut owner = st.audio_owner.lock().unwrap();
+    if owner.as_deref().is_some_and(|id| id != st.device_id) {
+        return false;
+    }
+    *owner = Some(st.device_id.clone());
+    true
+}
+pub fn release_audio(st: &AppState) {
+    let mut owner = st.audio_owner.lock().unwrap();
+    if owner.as_deref() == Some(&st.device_id) {
+        *owner = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! test_stick_mic_device.py, test_wispr_mic.py (the agent's side) and test_tap_mic.py (the agent
@@ -1041,7 +1072,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
         let fake = FakeStick::new();
         fake.set_name("StickyBot"); // as picked below (else the @state on connect renames it)
-        let st = AppState::new(&Options { port: 8670, home, fake_stick: true, import_from: None }, Backend::Fake(fake.clone())).unwrap();
+        let st = AppState::new(
+            &Options { port: 8670, home, fake_stick: true, import_from: None },
+            Backend::Fake(fake.clone()),
+        )
+        .unwrap();
         let ca = FakeCoreAudio::new();
         let out = FakeOutputs::new(outs);
         st.wmic.use_audio(Audio::fake(&ca, &out, tap));

@@ -1,4 +1,6 @@
 #include "menu.h"
+#include "buddy.h"
+#include "settings.h"
 
 namespace menu {
 
@@ -9,7 +11,7 @@ constexpr uint16_t ENTER_STEPS[]   = {0, 500, 1000, 1500, 2000, 3000};
 
 enum Item {
   MOD_FN, MOD_CTRL, MOD_OPTION, MOD_SHIFT, MOD_CMD, KEY, TEST, ENTER,
-  SLOT, BT, FORGET, STANDBY, SOUND, VOLUME, WMIC, M_LIFT, M_FACE, M_SHAKE, BRIGHT, CLOCK24, AUTOROT, LANDSCAPE, FLIP, WEB, DEV, POWER,
+  SLOT, HOST_DETAILS, BT, FORGET, STANDBY, SOUND, VOLUME, WMIC, M_LIFT, M_FACE, M_SHAKE, BRIGHT, CLOCK24, AUTOROT, LANDSCAPE, FLIP, WEB, DEV, POWER,
   // 2.5.1: Games, Remote (IR), the remote modes and the face picker moved to the Launcher (launcher_session.h)
   SAVE, CANCEL,
   COUNT
@@ -76,7 +78,10 @@ Action select() {
       draft_.enterDelayMs = ENTER_STEPS[(i + 1) % n];
       return Action::REDRAW;
     }
-    case SLOT:    draft_.slot = draft_.slot % 3 + 1; return Action::REDRAW;
+    case SLOT:
+      if (settings::sharedHosts()) return buddy::nextHost() ? Action::REDRAW : Action::HOST_BUSY;
+      draft_.slot = draft_.slot % 3 + 1; return Action::REDRAW;
+    case HOST_DETAILS: return Action::HOST_INFO;
     case BT:      btOff_ = !btOff_; return Action::BT_TOGGLE;
     case FORGET:
       if (forgetArmed) { forgetArmed = false; return Action::FORGET; }
@@ -127,9 +132,10 @@ ui::MenuView view() {
   v.lines[TEST]    = "Test combo";
   v.lines[ENTER]   = draft_.enterDelayMs ? String("Enter after: ") + String(draft_.enterDelayMs / 1000.0f, 1) + "s"
                                          : String("Enter after: off");
-  v.lines[SLOT]    = String("Mac slot: ") + draft_.slot + (draft_.slot != originalSlot ? " *" : "");
+  v.lines[SLOT] = settings::sharedHosts() ? "Input Mac: " + buddy::activeHostLabel() : String("Mac slot: ") + draft_.slot + (draft_.slot != originalSlot ? " *" : "");
+  v.lines[HOST_DETAILS] = settings::sharedHosts() ? "About input Mac" : "About Mac (shared mode)";
   v.lines[BT]      = btOff_ ? "Reconnect BT" : "Disconnect BT";
-  v.lines[FORGET]  = forgetArmed ? "B again: forget" : String("Forget Mac ") + originalSlot;
+  v.lines[FORGET]  = forgetArmed ? "B again: forget" : settings::sharedHosts() ? String("Forget saved Macs") : String("Forget Mac ") + originalSlot;
   v.lines[STANDBY] = draft_.standbyMin ? String("Standby: ") + draft_.standbyMin + " min" : "Standby: off";
   v.lines[M_LIFT]  = String("Lift wakes: ") + (draft_.lift ? "ON" : "off");
   v.lines[M_FACE]  = String("Face-down sleep: ") + (draft_.faceDown ? "ON" : "off");
@@ -151,6 +157,7 @@ ui::MenuView view() {
 
   if (sel == KEY) v.hint = "B next  hold=fast";
   else if (sel == ENTER) v.hint = "Enter after a hold";
+  else if (sel == SLOT && settings::sharedHosts()) v.hint = "B: next connected Mac";
   else if (sel == SLOT && draft_.slot != originalSlot) v.hint = "Save to switch Mac";
   else if (sel == DEV) v.hint = "USB: Wi-Fi on, OTA+logs";
   else if (sel == WMIC) v.hint = "A hold: Wispr mic by BT";

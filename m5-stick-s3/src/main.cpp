@@ -274,12 +274,13 @@ static void render() {
       break;
     }
   }
+  if (settings::sharedHosts() && mode == Mode::STATUS) ui::drawHostLabel(buddy::activeHostLabel());
 }
 
 // --- Standby -----------------------------------------------------------------
 
 static void standby() {
-  Log.println("Standby — press A to wake");
+  Log.event(diagnostics::Event::Power);
   Serial.flush();
   hid::up();
   ui::wake(2000);
@@ -296,7 +297,7 @@ static void standby() {
 }
 
 static void powerOff() {
-  Log.println("Power off — press the side power button to turn on");
+  Log.event(diagnostics::Event::Power);
   Serial.flush();
   hid::up();
   ui::wake(2000);
@@ -307,16 +308,17 @@ static void powerOff() {
 
 // Double-press B: wake the Mac's lock screen and type the saved password.
 static void unlockMac() {
-  String pass = settings::macPassword();
+  String pass = buddy::macPassword();
   if (pass.isEmpty()) { showMessage("No password", "Set it on the settings page", COLOR_WARN, 2500); return; }
   if (!hid::connected()) { showMessage("Not connected", nullptr, COLOR_WARN); return; }
   ui::wake(5000);
-  ui::drawMessage("Unlocking", "Mac", COLOR_OK);
+  String targetName = buddy::activeHostLabel();
+  ui::drawMessage("Unlocking", targetName.length() ? targetName.c_str() : "Mac", COLOR_OK);
   hid::tap(Combo{KEY_MOD_LSHIFT, 0});  // wake the display / lock screen
   delay(1200);
   hid::typeText(pass);
   hid::tapEnter();
-  Log.println("Unlock: password typed");  // never log the password itself
+  Log.event(diagnostics::Event::Input);  // never log the password itself
   sound::play(sound::Cue::UNLOCK);
   dirty = true;
 }
@@ -340,18 +342,10 @@ static uint32_t    keyUpAt = 0, releasedAt = 0;
 static wispr::Gate wisprGate;
 static uint16_t    holdId = 0;
 
-static const char* pathName(wispr::Path p) {
-  switch (p) {
-    case wispr::Path::USB:        return " (USB mic)";
-    case wispr::Path::BT_DIRECT:  return " (mic to Wispr by Bluetooth)";
-    case wispr::Path::BT_PREPARE: return " (mic to Wispr by Bluetooth, <stick>-bt-mic)";
-    default:                      return "";
-  }
-}
 
 static void comboKeyDown() {
   hid::down(settings::combo());
-  Log.printf("-> %s down%s\n", comboToString(settings::combo()).c_str(), pathName(aPath));
+  Log.event(diagnostics::Event::Input);
 }
 
 static void comboUp() {
@@ -359,7 +353,7 @@ static void comboUp() {
   hid::up();  // always release, even if pairing dropped mid-press
   if (wisprMic) mic::wisprEnd();
   wisprMic = false;
-  Log.printf("-> %s up\n", comboToString(settings::combo()).c_str());
+  Log.event(diagnostics::Event::Input);
   uint16_t delayMs = settings::enterDelayMs();
   if (delayMs && releasedAt - comboSince >= ENTER_MIN_HOLD_MS)
     enterAt = max((uint32_t)millis() + 1, releasedAt + delayMs);  // from the release, as without the tail
@@ -368,7 +362,7 @@ static void comboUp() {
 static void comboPress() {
   if (!hid::connected()) {
     if (ui::awake()) showMessage("Not connected", "Pair on the Mac first", COLOR_WARN);
-    Log.println("[button] not connected, ignored");
+    Log.event(diagnostics::Event::Settings);
     return;
   }
   if (keyUpAt) comboUp();  // pressed again during the tail: finish the last press first
@@ -376,6 +370,10 @@ static void comboPress() {
   aPath = wispr::choosePath({settings::wirelessMic(), buddy::agentWirelessMic(), buddy::agentPreparesMic(),
                              buddy::agentLinked(), mic::usbMounted(), mic::usbStreaming(),
                              mic::wisprStreaming() || agentTalking});
+  if (settings::sharedHosts() && settings::wirelessMic() && aPath != wispr::Path::BT_PREPARE) {
+    showMessage("Mac mic unavailable", "Open the app on the input Mac", COLOR_WARN);
+    return;
+  }
   bool prepare = aPath == wispr::Path::BT_PREPARE;
   if (wispr::streams(aPath) && !mic::wisprStart(prepare, ++holdId)) aPath = wispr::Path::NONE;  // mic busy
   wisprMic = wispr::streams(aPath);
@@ -385,7 +383,7 @@ static void comboPress() {
   dirty = true;
   if (aPath == wispr::Path::BT_PREPARE) {  // the stream runs already; the key waits for the agent's mic
     wisprGate.begin(millis(), holdId);
-    Log.printf("-> %s: waiting for the Bluetooth mic (hold %u)\n", comboToString(settings::combo()).c_str(), holdId);
+    Log.event(diagnostics::Event::Mic);
   } else {
     comboKeyDown();  // USB / no stick mic / older agent: the key never waits
   }
@@ -394,17 +392,28 @@ static void comboPress() {
 // The agent's "ready" (or the timeout) puts the key down for a waiting press.
 static void wisprGateLoop() {
   uint16_t id;
-  if (buddy::takeWisprReady(id) && !wisprGate.ready(id)) Log.printf("Agent: late ready (hold %u)\n", id);
+  if (buddy::takeWisprBusy(id) && id == holdId) {
+    wisprGate.release(); hid::up(); mic::wisprEnd();
+    wisprMic = comboDown = false; enterAt = keyUpAt = 0;
+    showMessage("Microphone busy", "Another stick is dictating", COLOR_WARN);
+    dirty = true; return;
+  }
+  if (buddy::takeWisprReady(id) && !wisprGate.ready(id)) Log.event(diagnostics::Event::Mic);
   if (wisprGate.poll(millis()) != wispr::Gate::Step::PRESS) return;
-  if (wisprGate.timedOut()) Log.printf("Agent: no ready in %lu ms, pressing anyway\n", (unsigned long)wisprGate.waitedMs());
-  else Log.printf("Agent: mic ready in %lu ms\n", (unsigned long)wisprGate.waitedMs());
+  if (wisprGate.timedOut() && settings::sharedHosts()) {
+    mic::wisprEnd(); wisprMic = comboDown = false; enterAt = keyUpAt = 0;
+    showMessage("Mic not ready", "Try again when the Mac is ready", COLOR_WARN);
+    dirty = true; return;
+  }
+  if (wisprGate.timedOut()) Log.event(diagnostics::Event::Mic);
+  else Log.event(diagnostics::Event::Mic);
   comboKeyDown();
 }
 
 static void sendEnter(const char* why) {
   if (!hid::connected()) return;
   hid::tapEnter();
-  Log.printf("-> Enter (%s)\n", why);
+  Log.event(diagnostics::Event::Input);
 }
 
 static void comboRelease() {
@@ -417,8 +426,7 @@ static void comboRelease() {
     if (wisprMic) mic::wisprEnd();
     wisprMic = false;
     enterAt = 0;
-    Log.printf("-> %s cancelled (released after %lu ms, before the mic was ready)\n",
-               comboToString(settings::combo()).c_str(), (unsigned long)(releasedAt - comboSince));
+    Log.event(diagnostics::Event::Mic);
     return;
   }
   uint32_t tail = wispr::keyUpDelayMs(wisprMic);
@@ -508,10 +516,23 @@ static void onMenu(menu::Action a) {
       if (hid::state() == hid::Bt::OFF) hid::reconnect();
       else hid::disconnect();
       break;
+    case menu::Action::HOST_INFO: {
+      String name = buddy::activeHostName(), label = buddy::activeHostLabel();
+      showMessage(label.length() ? label.c_str() : "Legacy mode", name.c_str(), COLOR_OK, 6000);
+      break;
+    }
+    case menu::Action::HOST_BUSY:
+      showMessage("Cannot switch Mac", buddy::hostBusy() ? "Finish the active task first" : "No other Mac connected", COLOR_WARN, 3000);
+      break;
     case menu::Action::FORGET:
-      hid::forget(hid::slot());
-      Log.printf("Forgot Mac %u, restarting\n", hid::slot());
-      ui::drawMessage("Forgotten", "Remove it on the Mac too", COLOR_WARN);
+      if (settings::sharedHosts()) {
+        if (!buddy::forgetHosts("all")) {
+          showMessage("Device is busy", "Finish the active task first", COLOR_WARN, 3000);
+          break;
+        }
+      } else hid::forget(hid::slot());
+      Log.event(diagnostics::Event::Settings);
+      ui::drawMessage("Forgotten", settings::sharedHosts() ? "Macs can enroll again" : "Remove it on the Mac too", COLOR_WARN);
       delay(2000);
       ESP.restart();
       break;
@@ -530,17 +551,17 @@ static void onMenu(menu::Action a) {
       if (!d.autoRotate) ui::setFlipped(settings::flipped());
       settings::saveStandbyMin(d.standbyMin);
       settings::saveBrightnessPct(d.brightnessPct);
-      Log.printf("Menu: combo %s, standby %u min\n", comboToString(d.combo).c_str(), d.standbyMin);
+      Log.event(diagnostics::Event::Power);
       if (d.slot != hid::slot()) settings::saveSlot(d.slot);
       if (hid::needsRestart(d.combo)) {  // Fn added or removed: new keyboard identity
-        Log.println("Keyboard identity changes for Fn, restarting");
+        Log.event(diagnostics::Event::Settings);
         ui::drawMessage("Restarting", "Fn: re-pair on the Mac", COLOR_OK);
         delay(2500);
         ESP.restart();
       }
       if (d.slot != hid::slot()) {
         settings::saveSlot(d.slot);
-        Log.printf("Mac %u, restarting\n", d.slot);
+        Log.event(diagnostics::Event::Settings);
         ui::drawMessage("Restarting", "Switching Mac", COLOR_OK);
         delay(1500);
         ESP.restart();
@@ -615,7 +636,7 @@ static void onLauncher(launcher::Action a, bool byHold) {
 // portrait first, then the landscape layouts (button A on the right, then on the left).
 // "screens landscape" shows only the landscape ones.
 static void screenDemo(bool portrait = true) {
-  Log.println("Screen demo: each screen for ~3 s");
+  Log.event(diagnostics::Event::Display);
   ui::wake(240000);
   ui::Dash d = readDash();
   auto hold = [](uint32_t ms, auto draw) {
@@ -700,7 +721,7 @@ static void screenDemo(bool portrait = true) {
   events();
   hold(4000, [] { ui::drawAgent("done", "what's the weather in Bangalore", "It's 28°C in Bangalore with patchy rain nearby and 54% humidity."); });
   ui::setOrientation(shownScreen.flipped, shownScreen.side);  // back to how the stick is held
-  Log.println("Screen demo done");
+  Log.event(diagnostics::Event::Display);
 }
 
 static void pollSerial() {
@@ -718,7 +739,7 @@ static void pollSerial() {
         events::Event ev;
         String lvl = sp < 0 ? rest : rest.substring(0, sp), body = sp < 0 ? "" : rest.substring(sp + 1);
         if (!events::parseLevel(lvl, ev.level)) {
-          Log.println("event celebrate|nice|headsup <title>|<sub>|<icon>");
+          Serial.println("event celebrate|nice|headsup <title>|<sub>|<icon>");
         } else {
           int p1 = body.indexOf('|'), p2 = p1 < 0 ? -1 : body.indexOf('|', p1 + 1);
           ev.title = p1 < 0 ? body : body.substring(0, p1);
@@ -738,10 +759,10 @@ static void pollSerial() {
         else if (arg.startsWith("play ")) {
           String name = arg.substring(5);
           name.trim();
-          if (!sound::play(name)) Log.printf("unknown sound '%s'\n", name.c_str());
-          else Log.printf("playing %s\n", name.c_str());
+          if (!sound::play(name)) Serial.printf("unknown sound '%s'\n", name.c_str());
+          else Serial.printf("playing %s\n", name.c_str());
         } else sound::play(sound::Cue::TEST);
-        Log.printf("Sounds %s, volume %u\n", settings::soundOn() ? "on" : "off", settings::soundVolume());
+        Serial.printf("Sounds %s, volume %u\n", settings::soundOn() ? "on" : "off", settings::soundVolume());
       }
       else protocol::serialLine(line);
       line = "";
@@ -785,8 +806,7 @@ void setup() {
   faces::pkg::install::setBusyCheck(otaBusy);
   ir::begin();
   ota::bootCheck();  // last: it may start the loop watchdog until a new firmware is confirmed
-  Log.printf("ready %s fw %s — combo %s%s. Type 'help' for commands.\n", hid::name().c_str(),
-                FW_VERSION, comboToString(settings::combo()).c_str(), fromStandby ? " (woke from standby)" : "");
+  Log.event(diagnostics::Event::Device);
 }
 
 void loop() {
@@ -812,7 +832,7 @@ void loop() {
     if (want != devActive) {
       devActive = want;
       web::setKeepAlive(want);
-      Log.printf("Developer mode %s\n", want ? "on: Wi-Fi stays up for OTA + logs" : "off");
+      Log.event(diagnostics::Event::Settings);
     }
   }
 
@@ -826,7 +846,7 @@ void loop() {
     mic::setUsbPower(onUsbPower);
     ui::Status s = readStatus();
     if (s.bt != status.bt) {
-      Log.println(s.bt == 0 ? "Mac connected" : "Mac disconnected");
+      Log.event(diagnostics::Event::Link);
       if (s.bt == 0 || status.bt == 0) sound::play(s.bt == 0 ? sound::Cue::CONNECTED : sound::Cue::DISCONNECTED);
     }
     if (s.charging && !status.charging && millis() > 15000) sound::play(sound::Cue::CHARGING);
@@ -920,8 +940,7 @@ void loop() {
 
   motion::Event mev = motion::poll();
   if (mev != motion::Event::NONE) {
-    static const char* NAMES[] = {"none", "lift", "face-down", "shake", "flick left", "flick right"};
-    Log.printf("motion: %s\n", NAMES[(int)mev]);
+    Log.event(diagnostics::Event::Settings);
   }
 
   // A remote mode (air mouse / presenter / media, air.h) owns the buttons, the motion and
@@ -975,7 +994,7 @@ void loop() {
     const bool busy = agentAct == actions::Do::CANCEL;
     if (busy) buddy::agentCancel();
     if (replyView && buddy::agentSpeaking()) buddy::agentSpeak(false);  // closing the reply stops reading it
-    Log.printf("Agent screen dismissed%s\n", busy ? " (request cancelled)" : "");
+    Log.event(diagnostics::Event::Display);
     agentShowUntil = 0;
     talkEndedAt = 0;
     page = ui::Page::HOME;
@@ -1032,7 +1051,7 @@ void loop() {
     if (!showingPairing) {
       showingPairing = true;
       ui::wake(35000);
-      Log.printf("Pairing code %06lu — press A on the stick to accept\n", (unsigned long)code);
+      Log.event(diagnostics::Event::PairingRequested);
     }
     ui::drawPairing(code);
     ui::keepAwake();
@@ -1050,19 +1069,18 @@ void loop() {
   static String shownPrompt;
   if (buddy::hasPrompt()) {
     const buddy::Prompt& p = buddy::prompt();
-    bool fresh = shownPrompt != p.id;
+    bool fresh = shownPrompt != p.from + ":" + p.id;
     if (fresh) {
-      shownPrompt = p.id;
+      shownPrompt = p.from + ":" + p.id;
       promptAt = millis();
       lastPing = 0;
       ui::wake(60000);
-      if (p.ask) Log.printf("Question (%s): %s — A %s, B %s\n", p.from.c_str(), p.q.c_str(), p.a.c_str(), p.b.c_str());
-      else Log.printf("Claude asks (%s): %s %s — A approve, B deny\n", p.from.length() ? p.from.c_str() : "desktop",
-                      p.tool.c_str(), p.hint.c_str());
+      Log.event(diagnostics::Event::Prompt);
     }
     if (fresh || turned) {  // turning the stick redraws it; its timers carry on
       if (p.ask) ui::drawAsk(p.q.length() ? p.q : p.hint, p.from, p.a, p.b);
       else ui::drawPrompt(p.tool, p.hint, p.from);
+      if (settings::sharedHosts()) ui::drawHostLabel(buddy::activeHostLabel());
     }
     ui::keepAwake();
     if (comboDown) comboRelease();
@@ -1075,11 +1093,11 @@ void loop() {
     bool shake = mev == motion::Event::SHAKE && settings::shakeEscapes() && millis() - promptAt >= PROMPT_GUARD_MS;
     if (aDown) {
       buddy::answer(prompt::decision(ask, prompt::Input::A));
-      Log.println(ask ? "Question: A" : "Claude: approved");
+      Log.event(diagnostics::Event::PromptAnswered);
       sound::play(sound::Cue::APPROVED);
     } else if (bDown || shake) {
       buddy::answer(prompt::decision(ask, bDown ? prompt::Input::B : prompt::Input::SHAKE));
-      Log.println(ask ? (bDown ? "Question: B" : "Question: dismissed") : "Claude: denied");
+      Log.event(diagnostics::Event::PromptAnswered);
       sound::play(sound::Cue::DENIED);
     }
     delay(20);
@@ -1103,7 +1121,7 @@ void loop() {
       if (settings::soundOn())  // its own sound; one this firmware doesn't have: the level's default
         event_sound::play(e.sound.c_str(), events::defaultSound(e.level),
                           [](const char* n) { return sound::play(String(n)); });
-      Log.printf("Showing event: %s\n", e.title.c_str());
+      Log.event(diagnostics::Event::Event);
       lastFrame = 0;
     }
     if (events::active()) {
@@ -1125,6 +1143,7 @@ void loop() {
         if (millis() - lastFrame >= 40) {
           lastFrame = millis();
           ui::drawEvent((uint8_t)e.level, e.title, e.sub, e.icon, events::elapsed());
+          if (settings::sharedHosts()) ui::drawHostLabel(buddy::activeHostLabel());
         }
         delay(10);
         return;
@@ -1198,7 +1217,7 @@ void loop() {
     };
     auto run = [&](actions::Do act) {
       if (act == actions::Do::NONE) return;
-      Log.printf("Reply: %s\n", actions::doName(act));
+      Log.event(diagnostics::Event::Reply);
       if (act == actions::Do::NEXT_PAGE) replyPager.next();
       else if (act == actions::Do::LISTEN) buddy::agentSpeak(true);
       else if (act == actions::Do::STOP_LISTEN) buddy::agentSpeak(false);
@@ -1235,13 +1254,13 @@ void loop() {
   if (mev == motion::Event::SHAKE && settings::shakeEscapes() && mode != Mode::MENU && mode != Mode::GAME &&
       mode != Mode::LAUNCHER && hid::connected()) {
     hid::tapEscape();
-    Log.println("-> Escape (shake)");
+    Log.event(diagnostics::Event::Input);
   }
   // Face-down = standby, also on USB and with developer-mode Wi-Fi in the
   // background; only skipped while a menu / settings screen / key is in use.
   if (mev == motion::Event::FACE_DOWN && settings::faceDownSleeps() && mode == Mode::STATUS && !comboDown &&
       !web::shown() && !ota::pendingVerify()) {
-    Log.println("Face-down: going to standby");
+    Log.event(diagnostics::Event::Power);
     standby();
   }
 
@@ -1262,7 +1281,7 @@ void loop() {
           sound::playListen();  // "speak now" (the mic pauses ~0.2 s for it)
         }
         else mic::agentEnd();
-        Log.printf("Agent: talk%s\n", buddy::agentLinked() ? "" : " (agent not running)");
+        Log.event(diagnostics::Event::Mic);
         ui::wake(B_SCREEN_MS);
         dirty = true;
       }
@@ -1345,7 +1364,7 @@ void loop() {
       docked = want;
       if (!docked) ui::dockEnd();
       else page = ui::Page::HOME;
-      Log.printf("Dock %s\n", docked ? "on" : "off");
+      Log.event(diagnostics::Event::Display);
       dirty = true;
     }
     if (docked) {

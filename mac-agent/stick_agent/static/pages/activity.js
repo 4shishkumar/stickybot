@@ -1,6 +1,6 @@
 // Activity: the conversation with the agent, live. Your words on the right,
 // the agent's replies on the left, what it's doing in between.
-import {h, clear, store, get, post, report, fmtTime, fmtDay, recall, remember, decide} from "../lib.js";
+import {h, clear, store, get, post, report, fmtTime, fmtDay, recall, remember, decide, deviceId} from "../lib.js";
 
 export const title = "Activity";
 export const subtitle = "What you asked and what the agent did. Typing here works like holding B and speaking.";
@@ -164,10 +164,12 @@ function refreshPrompts() {
 
 async function loadEarlier(e) {
   const btn = e.currentTarget;
+  const selected = deviceId(), view = chat;
   btn.disabled = true;
   histN += 60;
   const rows = await get("/api/history?n=" + histN);
   btn.disabled = false;
+  if (selected !== deviceId() || view !== chat || !chat) return;
   if (!Array.isArray(rows)) return report(rows);
   const before = oldestShown === null ? Infinity : oldestShown - 1;
   const older = rows.filter(r => r.t < before).reverse();  // oldest first

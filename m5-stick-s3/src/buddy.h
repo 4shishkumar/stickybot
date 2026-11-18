@@ -27,8 +27,19 @@ struct Prompt {
   String q, a, b;
 };
 
+String deviceId();
+bool forgetHosts(const String& id); // explicit recovery; caller restarts after acknowledgement
+String hostState();             // bounded JSON, no secrets
+String activeHostLabel();
+String activeHostName();
+String macPassword();           // only the focused host in shared mode
+bool setMacPassword(const String& password);
+bool hostBusy();
+bool nextHost();                // physical menu selection; refuses while busy
+void peerDisconnected(uint16_t handle);
 void attach();          // call after the keyboard has started, before advertising
 void loop();
+bool takeWisprBusy(uint16_t& id);
 bool linked();          // heard from the desktop app in the last 30 s
 int  running();
 int  waiting();

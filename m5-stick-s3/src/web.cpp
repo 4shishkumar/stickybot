@@ -51,7 +51,7 @@ static void handleUpdateDone() {
   server.send(ok ? 200 : 500, "application/json",
               ok ? "{\"ok\":true,\"restarting\":true}" : "{\"ok\":false,\"error\":\"Update failed\"}");
   if (ok) {
-    Log.println("OTA: update done, restarting");
+    Log.event(diagnostics::Event::OtaDone);
     delay(500);
     ESP.restart();
   }
@@ -62,17 +62,18 @@ static void handleUpload() {
   lastRequest = millis();
   if (up.status == UPLOAD_FILE_START) {
     if (!server.authenticate("admin", settings::password().c_str())) {
-      Log.println("OTA: wrong password");
+      Log.event(diagnostics::Event::OtaFailed);
       return;
     }
     updating = true;
-    Log.printf("OTA: receiving %s\n", up.filename.c_str());
+    Log.event(diagnostics::Event::OtaStarted);
     Update.begin(UPDATE_SIZE_UNKNOWN);
   } else if (up.status == UPLOAD_FILE_WRITE && updating) {
     Update.write(up.buf, up.currentSize);
   } else if (up.status == UPLOAD_FILE_END && updating) {
     Update.end(true);
-    Log.printf("OTA: %u bytes\n", up.totalSize);
+    Log.event(diagnostics::Event::Ota);
+    Log.count(diagnostics::Counter::FirmwareBytes, up.totalSize);
   } else if (up.status == UPLOAD_FILE_ABORTED) {
     Update.abort();
     updating = false;
@@ -105,8 +106,8 @@ static void beginServer() {
   ArduinoOTA.setHostname(HOSTNAME);
   ArduinoOTA.setPassword(settings::password().c_str());
   ArduinoOTA.setMdnsEnabled(false);  // already started above
-  ArduinoOTA.onStart([] { updating = true; Log.println("OTA: PlatformIO upload started"); });
-  ArduinoOTA.onEnd([] { Log.println("OTA: done, restarting"); });
+  ArduinoOTA.onStart([] { updating = true; Log.event(diagnostics::Event::OtaStarted); });
+  ArduinoOTA.onEnd([] { Log.event(diagnostics::Event::OtaDone); });
   ArduinoOTA.begin();
   lastRequest = millis();
 }
@@ -118,7 +119,7 @@ static void startHotspot() {
   radioForWifi(true);
   state = State::HOTSPOT;
   beginServer();
-  Log.printf("Web: hotspot %s -> http://%s\n", AP_SSID, WiFi.softAPIP().toString().c_str());
+  Log.event(diagnostics::Event::Network);
 }
 
 bool shown() { return state != State::OFF && shown_; }
@@ -138,7 +139,7 @@ void start(bool shown) {
   radioForWifi(true);
   state = State::JOINING;
   startedAt = millis();
-  Log.printf("Web: joining %s...\n", ssid.c_str());
+  Log.event(diagnostics::Event::Network);
 }
 
 void stop() {
@@ -152,7 +153,7 @@ void stop() {
   radioForWifi(false);
   state = State::OFF;
   shown_ = false;
-  Log.println("Web: off");
+  Log.event(diagnostics::Event::Network);
 }
 
 bool active() { return state != State::OFF; }
@@ -198,9 +199,9 @@ void loop() {
         state = State::HOME;
         WiFi.setSleep(!keepAlive);
         beginServer();
-        Log.printf("Web: http://%s.local  (http://%s)\n", HOSTNAME, WiFi.localIP().toString().c_str());
+        Log.event(diagnostics::Event::Network);
       } else if (millis() - startedAt > JOIN_MS) {
-        Log.println("Web: couldn't join Wi-Fi, starting hotspot");
+        Log.event(diagnostics::Event::NetworkFailed);
         startHotspot();
       }
       return;

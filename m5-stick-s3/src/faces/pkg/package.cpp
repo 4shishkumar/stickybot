@@ -61,7 +61,7 @@ static bool ensure(PackageFace& f) {
   uint8_t* buf = store::read(f.info.id, n);
   if (!buf) {
     markBroken(f, "can't read it");
-    Log.printf("Faces: %s invalid: can't read it\n", f.info.id);
+    Log.event(diagnostics::Event::FaceFailed);
     return false;
   }
   String why;
@@ -70,14 +70,15 @@ static bool ensure(PackageFace& f) {
   free(buf);
   if (e != LoadError::NONE) {
     markBroken(f, why);
-    Log.printf("Faces: %s invalid: %s\n", f.info.id, why.c_str());
+    Log.event(diagnostics::Event::FaceFailed);
     return false;
   }
   f.err = "";
   f.checked = true;
   loadFailed_ = false;
-  Log.printf("Faces: %s %s loaded (%u KB, %lu ms)\n", f.info.id, f.info.version, (unsigned)(engine_.memory() / 1024),
-             (unsigned long)(millis() - t0));
+  Log.event(diagnostics::Event::Face);
+  Log.count(diagnostics::Counter::FaceMemoryKb, engine_.memory() / 1024);
+  Log.count(diagnostics::Counter::FaceLoadMs, millis() - t0);
   return true;
 }
 
@@ -91,8 +92,10 @@ void PackageFace::draw(const ui::Dash& d, bool wide, uint32_t now) {
   engine_.setTilt(constrain(gx, -1.0f, 1.0f), constrain(gy - 1, -1.0f, 1.0f));
   const uint32_t t0 = micros();
   engine_.draw(d, faces::world(), wide, now);
-  if (engine_.frameTook(micros() - t0, now))
-    Log.printf("Faces: %s too slow, tier lowered (%d)\n", info.id, engine_.tier());
+  if (engine_.frameTook(micros() - t0, now)) {
+    Log.event(diagnostics::Event::Face);
+    Log.count(diagnostics::Counter::FaceTier, engine_.tier());
+  }
 }
 
 void PackageFace::kick(world::Kick k, uint32_t now) {
@@ -177,11 +180,11 @@ void begin() {
     crashed_ = face;
     guard_.putString("bad", face);
     guard_.putUChar("crash", 0);
-    Log.printf("Faces: %s crashed the stick %d times in a row: Classic until it's installed again\n", face.c_str(),
-               crashes);
+    Log.event(diagnostics::Event::FaceFailed);
   }
   rescan();
-  Log.printf("Faces: %d package face%s installed\n", n_, n_ == 1 ? "" : "s");
+  Log.event(diagnostics::Event::Face);
+  Log.count(diagnostics::Counter::FaceCount, n_);
 }
 
 void loop() {
@@ -267,7 +270,7 @@ int remove(const String& id) {
     settings::saveFace("classic");
     faces::select("classic");
   }
-  Log.printf("Faces: removed %s (%d)\n", id.c_str(), gone);
+  Log.event(diagnostics::Event::Face);
   return gone;
 }
 

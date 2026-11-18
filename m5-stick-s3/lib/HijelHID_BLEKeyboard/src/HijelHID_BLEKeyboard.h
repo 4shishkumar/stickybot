@@ -42,6 +42,7 @@
 #include <string>
 #include "BLEHIDKeys.h"
 #include "BLEHIDMediaKeys.h"
+#include "HeldReports.h"
 
 // ─── Report IDs ────────────────────────────────────────────────────────────
 #define HID_REPORT_ID_KEYBOARD  0x01
@@ -163,6 +164,7 @@ private:
 class KBLEDCallbacks : public NimBLECharacteristicCallbacks {
 public:
     KBLEDCallbacks(HijelHID_BLEKeyboard* parent) : _parent(parent) {}
+    void onRead(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) override;
     void onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) override;
 private:
     HijelHID_BLEKeyboard* _parent;
@@ -264,6 +266,11 @@ public:
      * full authentication to finish.
      */
     bool isPaired() const;
+    // Shared-host mode has one explicitly selected input peer. NONE suspends input.
+    void selectConnection(uint16_t handle);
+    void setSharedHosts(bool on) { _sharedHosts = on; }
+    void setDiagnosticSink(void (*sink)(bool verbose)) { _diagnosticSink = sink; }
+    uint16_t selectedConnection() const { return _connHandle; }
 
     /**
      * Returns the number of milliseconds since the last HID report was sent.
@@ -470,7 +477,7 @@ public:
      * Waits up to 500 ms for a buffer, like a key. `releaseAll()` releases them too.
      */
     bool mouseButtons(uint8_t buttons);
-    uint8_t heldMouseButtons() const { return _mouseButtons; }
+    uint8_t heldMouseButtons() const { return _held.mouse; }
     /** [stick-key change] The mouse input report's characteristic (after `begin()`), e.g. to
      *  see whether the host subscribed to it (it knows the mouse). */
     NimBLECharacteristic* mouseInput() const { return _pMouseInput; }
@@ -583,8 +590,8 @@ public:
 
     // ─── Internal Callbacks (do not call directly) ────────────────────────
     void        _onConnect(uint16_t connHandle);
-    void        _onDisconnect();
-    void        _onAuthComplete(bool success);
+    void        _onDisconnect(uint16_t handle);
+    void        _onAuthComplete(bool success, uint16_t handle);
     void        _onConfirmPassKey(uint32_t passkey);
     void        _onLEDWrite(uint8_t ledByte);
     static void _idleTimerCallback(TimerHandle_t xTimer);
@@ -648,8 +655,7 @@ private:
                                   // cleared on disconnect. Used by afterWake() as a
                                   // reliable "host is fully ready" signal.
     volatile uint8_t _ledState;   // LED bitmask from host (written from NimBLE task)
-    uint8_t  _keyReport[HID_KEYBOARD_REPORT_SIZE];  // [mod][fn][k0..k5]
-    bool     _consumerActive;      // true while a consumer/media key is held down
+    hidreports::Held _held;       // keyboard, consumer and mouse inputs owned by the selected host
     volatile bool _reportPrimingNeeded; // true when the next report must be preceded by a
                                         // zero-report to wake the host (Windows HID resume
                                         // handshake). Set on construction, disconnect, end(),
@@ -680,7 +686,10 @@ private:
     //                 This flag-based approach avoids calling NimBLE APIs from
     //                 the timer daemon task, keeping single-core boards safe.
     volatile _ConnState _connState;
+    bool _sharedHosts = false;
+    void (*_diagnosticSink)(bool verbose) = nullptr;
     volatile uint16_t   _connHandle;
+    volatile uint32_t   _connectionEpoch = 0;
     TimerHandle_t     _idleTimer;
     volatile bool     _pendingIdleTransition;
 
@@ -696,7 +705,6 @@ private:
     NimBLECharacteristic*      _pKeyboardOutput;  // Report ID 0x01 Output (LEDs ← host)
     NimBLECharacteristic*      _pConsumerInput;   // Report ID 0x02 Input  (media → host)
     NimBLECharacteristic*      _pMouseInput;      // Report ID 0x03 Input  (mouse → host) [stick-key change]
-    uint8_t                    _mouseButtons;     // held mouse buttons [stick-key change]
     HijelHID_Internal::KBServerCallbacks*   _pServerCb;  // Owned by us, passed to NimBLE
     HijelHID_Internal::KBLEDCallbacks*      _pLEDCb;      // Owned by us, passed to NimBLE
 

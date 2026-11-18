@@ -13,6 +13,7 @@
 #include "logic/wispr.h"
 #include "logic/mic_name.h"
 #include "config.h"
+#include "settings.h"
 
 namespace mic {
 
@@ -198,9 +199,10 @@ void loop() {
     if (sending) {
       if (forWispr) buddy::wisprEvent(false);
       else buddy::agentTalkEvent(false);
-      Log.printf("%s audio: %lu frames sent, %lu dropped, %lu busy retries, link %s\n", forWispr ? "Wispr" : "Agent",
-                 (unsigned long)statFrames, (unsigned long)statDropped, (unsigned long)statBusy,
-                 buddy::linkInfo().c_str());
+      Log.event(diagnostics::Event::Mic);
+      Log.count(diagnostics::Counter::AudioFrames, statFrames);
+      Log.count(diagnostics::Counter::AudioDropped, statDropped);
+      Log.count(diagnostics::Counter::AudioRetries, statBusy);
     }
     armed = sending = ending = drained = false;
     forWispr = false;
@@ -213,18 +215,19 @@ void loop() {
     M5.Speaker.end();
     micOn = M5.Mic.begin();
     runMic = micOn;
-    if (!micOn) Log.println("mic: failed to start");
+    if (!micOn) Log.event(diagnostics::Event::MicFailed);
   } else if (!want && micOn) {
     runMic = false;
     uint32_t t = millis();
     while (taskInMic && millis() - t < 100) delay(1);
     M5.Mic.end();
     micOn = false;
-    Log.printf("mic: off (last peak %d)\n", lastPeak);
+    Log.event(diagnostics::Event::Mic);
+    Log.count(diagnostics::Counter::AudioPeak, lastPeak);
   }
 }
 
-void usbTalk(bool on) { usbOn = on; }
+void usbTalk(bool on) { usbOn = on && !settings::sharedHosts(); }
 void suspend(bool on) { suspended = on; }
 
 void preRoll() {
@@ -271,12 +274,12 @@ void wisprEnd() {
 
 bool wisprStreaming() { return forWispr && armed; }
 
-bool usbStreaming() { return isStreaming; }
+bool usbStreaming() { return !settings::sharedHosts() && isStreaming; }
 
 static bool vbus = false;
 void setUsbPower(bool on) { vbus = on; }
 #if BOARD_HAS_USB_MIC
-bool usbMounted() { return wispr::usbMounted((bool)USB, vbus); }
+bool usbMounted() { return !settings::sharedHosts() && wispr::usbMounted((bool)USB, vbus); }
 #else
 bool usbMounted() { return false; }
 #endif

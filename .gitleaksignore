@@ -1,0 +1,3 @@
+# False positive in documentation prose: "bonds/legacy" after "passwords".
+# Scope is only this historical finding; no secret or broader rule is ignored.
+4b67c54cc9c11c404f925f8806beb6fe164b8805:docs/memory/link/mac-link.md:generic-api-key:65

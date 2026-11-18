@@ -62,12 +62,16 @@ impl Usb for SystemUsb {
             .into_iter()
             .filter(|p| p.port_name.starts_with("/dev/cu.") || !cfg!(target_os = "macos"))
             .filter_map(|p| match p.port_type {
-                serialport::SerialPortType::UsbPort(u) if u.vid == ESPRESSIF_VID => Some(PortInfo {
-                    port: p.port_name,
-                    serial: u.serial_number.unwrap_or_default(),
-                    product: u.product.unwrap_or_default(),
-                    pid: u.pid,
-                }),
+                serialport::SerialPortType::UsbPort(u)
+                    if u.vid == ESPRESSIF_VID || (u.vid == 0x1A86 && matches!(u.pid, 0x55D4 | 0x55D3)) =>
+                {
+                    Some(PortInfo {
+                        port: p.port_name,
+                        serial: u.serial_number.unwrap_or_default(),
+                        product: u.product.unwrap_or_default(),
+                        pid: u.pid,
+                    })
+                }
                 _ => None,
             })
             .collect()
@@ -176,13 +180,33 @@ impl UsbSticks {
                 1 => match usb.proto(&ports[0].port, &line, Duration::from_millis(2500)) {
                     Some(reply) => json!({"ok": reply.get("ok").and_then(Value::as_bool).unwrap_or(true), "via": "usb",
                                           "error": reply.get("error").cloned().unwrap_or(Value::Null), "reply": reply}),
-                    None => json!({"ok": false, "via": "usb", "reply": null, "error": "the stick on USB didn't answer"}),
+                    None => {
+                        json!({"ok": false, "via": "usb", "reply": null, "error": "the stick on USB didn't answer"})
+                    }
                 },
                 _ => json!({"ok": false, "via": null, "reply": null, "error": "several sticks on USB — connect one"}),
             }
         })
         .await
         .unwrap_or_else(|e| json!({"ok": false, "via": null, "reply": null, "error": e.to_string()}))
+    }
+
+    pub async fn run_device(&self, line: &str, device_id: &str) -> Value {
+        if self.is_flashing() {
+            return json!({"ok":false,"error":"the stick is being flashed"});
+        }
+        let usb = self.backend();
+        let line = line.to_owned();
+        let id = device_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let matches: Vec<_>=usb.sticks().into_iter().filter(|p| !p.in_bootloader())
+                .filter(|p|usb.proto(&p.port,"@state",Duration::from_millis(1500)).is_some_and(|state|state["deviceId"]==id)).collect();
+            if matches.len()!=1 { return json!({"ok":false,"via":null,"error":"Selected device is not uniquely identified on USB"}); }
+            match usb.proto(&matches[0].port,&line,Duration::from_millis(2500)) {
+                Some(reply)=>json!({"ok":reply.get("ok").and_then(Value::as_bool).unwrap_or(true),"via":"usb","error":reply["error"],"reply":reply}),
+                None=>json!({"ok":false,"via":"usb","error":"Selected USB device did not answer"}),
+            }
+        }).await.unwrap_or_else(|e|json!({"ok":false,"error":e.to_string()}))
     }
 
     /// Sticks on USB with their version (`GET /api/firmware` `usb`), cached for 10 s.
@@ -206,6 +230,9 @@ impl UsbSticks {
                     } else if let Some(st) = usb.proto(&p.port, "@state", Duration::from_millis(1500)) {
                         e["version"] = st.get("fw").cloned().unwrap_or(Value::Null);
                         e["board"] = st.get("board").cloned().unwrap_or(Value::Null);
+                        if let Some(id) = st.get("deviceId") {
+                            e["deviceId"] = id.clone();
+                        }
                     }
                     e
                 })
@@ -230,6 +257,8 @@ pub struct FakeUsb {
     pub touches: Mutex<Vec<String>>,
     /// after a touch the port comes back as the bootloader under this name (`None`: it doesn't)
     pub boot_port: Mutex<Option<String>>,
+    /// ROM USB descriptors may differ from the app descriptors.
+    pub boot_serial: Mutex<Option<String>>,
 }
 
 impl FakeUsb {
@@ -241,7 +270,10 @@ impl FakeUsb {
             product: "StickyBot".into(),
             pid: 0x1001,
         });
-        f.states.lock().unwrap().insert(port.into(), json!({"ok": true, "fw": fw, "board": "m5stick-s3", "name": "StickyBot"}));
+        f.states
+            .lock()
+            .unwrap()
+            .insert(port.into(), json!({"ok": true, "fw": fw, "board": "m5stick-s3", "name": "StickyBot"}));
         *f.boot_port.lock().unwrap() = Some(port.into());
         Arc::new(f)
     }
@@ -262,7 +294,12 @@ impl Usb for FakeUsb {
         let mut ports = self.ports.lock().unwrap();
         ports.retain(|p| p.port != port);
         if let Some(b) = boot {
-            ports.push(PortInfo { port: b, serial: "SN1".into(), product: "USB JTAG/serial debug unit".into(), pid: 0x1001 });
+            ports.push(PortInfo {
+                port: b,
+                serial: self.boot_serial.lock().unwrap().clone().unwrap_or_else(|| "SN1".into()),
+                product: "USB JTAG/serial debug unit".into(),
+                pid: 0x1001,
+            });
         }
         Ok(())
     }
@@ -274,7 +311,10 @@ mod tests {
 
     #[test]
     fn replies_are_found_among_log_lines() {
-        assert_eq!(find_reply(b"boot...\r\n@{\"ok\":true,\"fw\":\"2.3.0\"}\r\n"), Some(json!({"ok": true, "fw": "2.3.0"})));
+        assert_eq!(
+            find_reply(b"boot...\r\n@{\"ok\":true,\"fw\":\"2.3.0\"}\r\n"),
+            Some(json!({"ok": true, "fw": "2.3.0"}))
+        );
         assert_eq!(find_reply(b"@{\"ok\":tr"), None); // not complete yet
         assert_eq!(find_reply(b"@{nope}\n@{\"a\":1}\n"), Some(json!({"a": 1})));
     }
@@ -286,7 +326,10 @@ mod tests {
         let r = u.run("@brightness pct=60").await;
         assert_eq!((r["ok"].as_bool(), r["via"].as_str()), (Some(true), Some("usb")));
         let list = u.sticks().await;
-        assert_eq!(list, vec![json!({"port": "/dev/cu.usbmodem1", "serial": "SN1", "version": "2.2.0", "board": "m5stick-s3"})]);
+        assert_eq!(
+            list,
+            vec![json!({"port": "/dev/cu.usbmodem1", "serial": "SN1", "version": "2.2.0", "board": "m5stick-s3"})]
+        );
         // cached: the stick isn't asked again
         let n = fake.lines.lock().unwrap().len();
         u.sticks().await;
@@ -300,6 +343,32 @@ mod tests {
         // while flashing, no port is opened
         u.flashing.store(true, std::sync::atomic::Ordering::Relaxed);
         assert_eq!(u.run("@state").await["error"], "the stick is being flashed");
+    }
+
+    #[tokio::test]
+    async fn generic_wch_bridges_are_never_probed_by_discovery_or_fallbacks() {
+        let fake = FakeUsb::stick("/dev/cu.stick", "2.2.0");
+        fake.states.lock().unwrap().get_mut("/dev/cu.stick").unwrap()["deviceId"] = json!("test-stick");
+        for pid in [0x55D4, 0x55D3] {
+            let port = format!("/dev/cu.bridge-{pid}");
+            fake.ports.lock().unwrap().push(PortInfo {
+                port: port.clone(),
+                serial: "OTHER".into(),
+                product: "USB Serial".into(),
+                pid,
+            });
+            fake.states.lock().unwrap().insert(port, json!({"board":"m5-stickc-plus2","deviceId":"test-stick"}));
+        }
+        let u = UsbSticks::new(fake.clone());
+        for _ in 0..3 {
+            assert_eq!(fake.sticks().len(), 1);
+            u.forget();
+            assert_eq!(u.sticks().await.len(), 1);
+            u.run("@state").await;
+            u.run_device("@state", "test-stick").await;
+        }
+        assert!(fake.lines.lock().unwrap().iter().all(|(port, _)| port == "/dev/cu.stick"));
+        assert_eq!(fake.ports().len(), 3, "explicit recovery can enumerate candidates without probing them");
     }
 
     /// Another ESP32 board on the Mac (MicroPython: "Espressif Device", 303a:4001) is never "the
@@ -329,7 +398,10 @@ mod tests {
         let r = u.run("@state").await;
         assert_eq!((r["ok"].as_bool(), r["via"].as_str()), (Some(true), Some("usb")));
         let list = u.sticks().await;
-        assert_eq!(list.iter().map(|e| e["port"].as_str().unwrap()).collect::<Vec<_>>(), ["/dev/cu.usbmodemJ", "/dev/cu.usbmodemS"]);
+        assert_eq!(
+            list.iter().map(|e| e["port"].as_str().unwrap()).collect::<Vec<_>>(),
+            ["/dev/cu.usbmodemJ", "/dev/cu.usbmodemS"]
+        );
         assert!(fake.lines.lock().unwrap().iter().all(|(p, _)| p == "/dev/cu.usbmodemS"));
 
         // only the other board on USB: "no stick", and it's never opened

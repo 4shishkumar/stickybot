@@ -1,8 +1,8 @@
 // Firmware panel: the firmware on this Mac (a downloaded release, or a local build)
 // vs the stick's, "Update over Bluetooth" (stick 1.8.0+, connected; preferred), sticks on
-// USB and "Update via USB" (always works, also for recovery), any other registered updater,
+// USB updates and explicit port/model recovery, any other registered updater,
 // with live progress. Used by the Stick page and the setup wizard.
-import {h, clear, get, post, toast} from "./lib.js";
+import {h, clear, toast, deviceApi} from "./lib.js";
 import {streamJob} from "./updates.js";
 
 function sourceLabel(b) {
@@ -25,6 +25,7 @@ function builtDate(iso) {
 
 // firmwarePanel({onDone(ok), backupDefault}) -> element (refreshes itself)
 export function firmwarePanel(opts = {}) {
+  const {get, post, url} = deviceApi();
   const box = h("div", {style: "display:flex;flex-direction:column;gap:14px"});
   let fw = null, job = null, es = null, updaters = [], asking = false;
 
@@ -51,8 +52,8 @@ export function firmwarePanel(opts = {}) {
         refresh();
       }}, "Check for updates");
       box.appendChild(h("div", {class: "notice"}, h("div", {class: "grow"},
-        h("b", null, "No firmware on this Mac yet"),
-        h("span", {class: "dim"}, "The agent downloads the latest release's firmware when it checks for updates. Before the first release, build it from the repo: make -C m5-stick-s3 release.")),
+        h("b", null, fw.unavailable ? "Firmware update unavailable" : "No firmware on this Mac yet"),
+        h("span", {class: "dim"}, fw.unavailable || "The agent downloads the latest release's firmware when it checks for updates. Before the first release, build it from the repo: make -C m5-stick-s3 release.")),
         check));
     }
     const bleOk = !!(fw.connected && fw.connected.ota);
@@ -92,8 +93,27 @@ export function firmwarePanel(opts = {}) {
     const backup = h("input", {type: "checkbox", id: "fwBackup", checked: !!opts.backupDefault});
     for (const u of usb) {
       box.appendChild(h("div", {class: "list"}, h("div", {class: "item"},
-        h("div", {class: "what"}, h("b", null, u.board ? u.board : "M5StickS3"), h("span", {class: "sub mono"}, `${u.port}${u.version ? " · firmware " + u.version : ""}`)),
+        h("div", {class: "what"}, h("b", null, u.board ? u.board : "USB device"), h("span", {class: "sub mono"}, `${u.port}${u.version ? " · firmware " + u.version : ""}`)),
         h("button", {class: "btn primary", disabled: !bundled || !!job, onclick: () => flash(u.port, backup.checked)}, job ? "Updating…" : "Update via USB"))));
+    }
+    const recovery = fw.usb_recovery;
+    if (recovery && recovery.ports?.length) {
+      const port = h("select", {"aria-label": "USB recovery port"},
+        h("option", {value: ""}, "Choose the stick's USB port"),
+        ...recovery.ports.map(p => h("option", {value: p.port}, `${p.port} · ${p.product || "USB device"}`)));
+      const model = h("select", {"aria-label": "USB recovery model"},
+        h("option", {value: ""}, "Choose its physical model"),
+        ...(recovery.boards || []).map(b => h("option", {value: b}, b === "m5-sticks3" ? "M5StickS3" : "M5StickC Plus2")));
+      const recover = h("button", {class: "btn", disabled: true,
+        onclick: () => flash(port.value, backup.checked, model.value)}, "Recover selected USB device");
+      const update = () => { recover.disabled = !!job || !port.value || !model.value; };
+      port.addEventListener("change", update);
+      model.addEventListener("change", update);
+      box.appendChild(h("div", {class: "notice"}, h("div", {class: "grow"},
+        h("b", null, "USB recovery"),
+        h("span", {class: "dim"}, "For a stick that cannot start. Put it in download mode and choose its port and model. In download mode, that USB port determines the target; check it carefully. A running stick must match the selected device. The recovery chip is checked before writing."),
+        h("div", {class: "row", style: "margin-top:8px;gap:8px"}, port, model, recover),
+        !(recovery.boards || []).length ? h("span", {class: "dim"}, "Download a matching firmware bundle first.") : null)));
     }
     if (usb.length) box.appendChild(h("label", {class: "switch"}, backup, h("span", {class: "small"}, "Back up the stick's current firmware first (recommended for a brand-new stick)")));
     for (const u of updaters) {  // other ways (updates.register_firmware_updater), e.g. over Bluetooth
@@ -118,7 +138,7 @@ export function firmwarePanel(opts = {}) {
     const el = h("div", {style: "display:flex;flex-direction:column;gap:8px"});
     job = {id: r.job, el, done: false};
     paint();
-    streamJob("/api/update/jobs", r.job, el, ok => {
+    streamJob(url("/api/update/jobs"), r.job, el, ok => {
       job.done = true;
       toast(ok ? "Firmware updated" : "Firmware update failed", ok ? null : "err");
       if (opts.onDone) opts.onDone(ok);
@@ -126,8 +146,10 @@ export function firmwarePanel(opts = {}) {
     });
   }
 
-  async function flash(port, doBackup) {
-    const r = await post("/api/firmware/flash", {port, backup: doBackup});
+  async function flash(port, doBackup, recoveryBoard = "") {
+    const body = {port, backup: doBackup};
+    if (recoveryBoard) body.recovery_board = recoveryBoard;
+    const r = await post("/api/firmware/flash", body);
     if (r.error) { toast(r.error, "err"); return; }
     follow(r.job, "Updating — don't unplug the stick", "It restarts on its own when it's done (about a minute).", false);
   }
@@ -139,7 +161,7 @@ export function firmwarePanel(opts = {}) {
       "It shows the progress on its screen (B there cancels) and restarts on its own when it's done.", true);
   }
 
-  const STAGES = {reset: "Resetting into download mode", backup: "Backing up", flash: "Writing", verify: "Verifying",
+  const STAGES = {identify: "Checking the recovery chip", reset: "Resetting into download mode", backup: "Backing up", flash: "Writing", verify: "Verifying",
     reboot: "Restarting", send: "Sending over Bluetooth"};
 
   function follow(id, title, sub, cancellable) {
@@ -155,7 +177,7 @@ export function firmwarePanel(opts = {}) {
       h("div", {class: "notice warn"}, h("div", {class: "grow"}, h("b", null, title), h("span", {class: "dim"}, sub))),
       stage, bar, log, stop ? h("div", {class: "row"}, stop) : null), done: false};
     paint();
-    es = new EventSource(`/api/firmware/jobs/${encodeURIComponent(id)}`);
+    es = new EventSource(url(`/api/firmware/jobs/${encodeURIComponent(id)}`));
     es.onmessage = e => {
       let m;
       try { m = JSON.parse(e.data); } catch (err) { return; }

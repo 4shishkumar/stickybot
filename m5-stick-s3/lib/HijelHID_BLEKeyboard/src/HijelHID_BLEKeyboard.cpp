@@ -248,11 +248,11 @@ void HijelHID_Internal::KBServerCallbacks::onConnect(NimBLEServer* pServer, NimB
 
 void HijelHID_Internal::KBServerCallbacks::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
     (void)reason;
-    _parent->_onDisconnect();
+    _parent->_onDisconnect(connInfo.getConnHandle());
 }
 
 void HijelHID_Internal::KBServerCallbacks::onAuthenticationComplete(NimBLEConnInfo& connInfo) {
-    _parent->_onAuthComplete(connInfo.isEncrypted());
+    _parent->_onAuthComplete(connInfo.isEncrypted(), connInfo.getConnHandle());
 }
 
 void HijelHID_Internal::KBServerCallbacks::onConfirmPassKey(NimBLEConnInfo& connInfo, uint32_t pass_key) {
@@ -266,10 +266,17 @@ void HijelHID_Internal::KBServerCallbacks::onConfirmPassKey(NimBLEConnInfo& conn
 // ─── LED Callback Implementation ─────────────────────────────────────────────
 
 void HijelHID_Internal::KBLEDCallbacks::onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) {
+    if (connInfo.getConnHandle() != _parent->selectedConnection()) return;
     std::string val = pChar->getValue();
     if (val.length() >= 1) {
         _parent->_onLEDWrite((uint8_t)val[0]);
     }
+}
+
+void HijelHID_Internal::KBLEDCallbacks::onRead(NimBLECharacteristic* pChar, NimBLEConnInfo&) {
+    // The output attribute is shared by NimBLE; never expose another peer's last write.
+    uint8_t none = 0;
+    pChar->setValue(&none, 1);
 }
 
 // ─── Idle Timer Callback ──────────────────────────────────────────────────
@@ -293,12 +300,9 @@ void HijelHID_BLEKeyboard::_idleTimerCallback(TimerHandle_t xTimer) {
     // will send a silent zero-report to absorb the drop before the real report.
     self->_reportPrimingNeeded   = true;
 
-    // Serial.print() is safe from the FreeRTOS timer daemon task on ESP32 —
-    // it uses an internal UART mutex and does not touch the NimBLE stack.
-    // If Serial has not been initialised the bytes are silently dropped,
-    // consistent with all other logging in the library.
+    // The registered diagnostic sink receives only a fixed event, never key or peer data.
     if (self->_logLevel >= HIDLogLevel::Normal) {
-        Serial.println("[HijelHID] Radio idle (slave latency applied, ~1.6Hz effective).");
+        self->_logN(nullptr);
     }
 }
 
@@ -328,7 +332,6 @@ HijelHID_BLEKeyboard::HijelHID_BLEKeyboard(const char* deviceName,
       _connected(false),
       _authenticated(false),
       _ledState(0),
-      _consumerActive(false),
       _reportPrimingNeeded(true),
       _lastReportMs(0),
       _txPowerLevel(8),
@@ -349,11 +352,10 @@ HijelHID_BLEKeyboard::HijelHID_BLEKeyboard(const char* deviceName,
       _pKeyboardOutput(nullptr),
       _pConsumerInput(nullptr),
       _pMouseInput(nullptr),
-      _mouseButtons(0),
       _pServerCb(nullptr),
       _pLEDCb(nullptr)
 {
-    memset(_keyReport, 0, sizeof(_keyReport));
+    memset(_held.keyboard, 0, sizeof(_held.keyboard));
 
     // Device name — store in std::string, truncate if it exceeds the BLE
     // advertising packet limit of 29 bytes.
@@ -391,43 +393,14 @@ void HijelHID_BLEKeyboard::setDebugLevel(HIDLogLevel level) {
     _logLevel = level;
 }
 
-void HijelHID_BLEKeyboard::_logN(const char* msg) {
-    if (_logLevel >= HIDLogLevel::Normal) {
-        Serial.print("[HijelHID] ");
-        Serial.println(msg);
-    }
+void HijelHID_BLEKeyboard::_logN(const char*) {
+    if (_logLevel >= HIDLogLevel::Normal && _diagnosticSink) _diagnosticSink(false);
 }
-
-void HijelHID_BLEKeyboard::_logNf(const char* fmt, ...) {
-    if (_logLevel >= HIDLogLevel::Normal) {
-        char buf[256];
-        va_list args;
-        va_start(args, fmt);
-        vsnprintf(buf, sizeof(buf), fmt, args);
-        va_end(args);
-        Serial.print("[HijelHID] ");
-        Serial.println(buf);
-    }
+void HijelHID_BLEKeyboard::_logNf(const char*, ...) { _logN(nullptr); }
+void HijelHID_BLEKeyboard::_logV(const char*) {
+    if (_logLevel >= HIDLogLevel::Verbose && _diagnosticSink) _diagnosticSink(true);
 }
-
-void HijelHID_BLEKeyboard::_logV(const char* msg) {
-    if (_logLevel >= HIDLogLevel::Verbose) {
-        Serial.print("[HijelHID VERBOSE] ");
-        Serial.println(msg);
-    }
-}
-
-void HijelHID_BLEKeyboard::_logVf(const char* fmt, ...) {
-    if (_logLevel >= HIDLogLevel::Verbose) {
-        char buf[256];
-        va_list args;
-        va_start(args, fmt);
-        vsnprintf(buf, sizeof(buf), fmt, args);
-        va_end(args);
-        Serial.print("[HijelHID VERBOSE] ");
-        Serial.println(buf);
-    }
-}
+void HijelHID_BLEKeyboard::_logVf(const char*, ...) { _logV(nullptr); }
 
 // ─── begin() ──────────────────────────────────────────────────────────────
 
@@ -443,19 +416,7 @@ void HijelHID_BLEKeyboard::begin() {
         return;
     }
 
-    // Print any deferred constructor warnings now that Serial is running
-    if (_nameTruncated) {
-        Serial.printf("[HijelHID] WARNING: Device name too long, truncated to %d chars: \"%s\"\n",
-                      HID_MAX_DEVICE_NAME_LEN, _deviceName.c_str());
-    }
-    if (_mfrTruncated) {
-        Serial.printf("[HijelHID] WARNING: Manufacturer string too long, truncated to %d chars.\n",
-                      HID_MAX_MANUFACTURER_LEN);
-    }
-    if (_batClamped) {
-        Serial.printf("[HijelHID] WARNING: Battery level out of range (1-100), clamped to %d%%.\n",
-                      _batteryLevel);
-    }
+    if ((_nameTruncated || _mfrTruncated || _batClamped) && _diagnosticSink) _diagnosticSink(false);
 
     // ── Restart path: stack is already initialised (after end()) ──────
     if (NimBLEDevice::isInitialized()) {
@@ -635,9 +596,8 @@ void HijelHID_BLEKeyboard::end() {
     // Reset internal state
     _connected = false;
     _authenticated = false;
-    memset(_keyReport, 0, sizeof(_keyReport));
+    _held.release(false);
     _ledState = 0;
-    _consumerActive = false;
     _reportPrimingNeeded = true;
 
     _logN("Stopped. Call begin() to restart.");
@@ -888,12 +848,12 @@ void HijelHID_BLEKeyboard::press(uint8_t keycode, uint8_t modifiers) {
     }
 
     if (_isModifier(keycode)) {
-        _keyReport[0] |= _keycodeToModBit(keycode);
+        _held.keyboard[0] |= _keycodeToModBit(keycode);
     } else {
         _addKeycode(keycode);
     }
-    _keyReport[0] |= modifiers;
-    _logVf("press(0x%02X, mod=0x%02X)", keycode, _keyReport[0]);
+    _held.keyboard[0] |= modifiers;
+    _logVf("press(0x%02X, mod=0x%02X)", keycode, _held.keyboard[0]);
     _sendKeyReport();
 }
 
@@ -908,7 +868,7 @@ void HijelHID_BLEKeyboard::release(uint8_t keycode) {
     }
 
     if (_isModifier(keycode)) {
-        _keyReport[0] &= ~_keycodeToModBit(keycode);
+        _held.keyboard[0] &= ~_keycodeToModBit(keycode);
     } else {
         _removeKeycode(keycode);
     }
@@ -931,7 +891,7 @@ void HijelHID_BLEKeyboard::press(uint16_t usageId) {
     }
 
     _logVf("press(consumer 0x%04X)", usageId);
-    _consumerActive = true;
+    _held.consumer = true;
     _sendConsumerReport(usageId);
 }
 
@@ -946,14 +906,15 @@ void HijelHID_BLEKeyboard::release(uint16_t usageId) {
     }
 
     _logV("release(consumer)");
-    _consumerActive = false;
+    _held.consumer = false;
     _sendConsumerReport(0x0000);
 }
 
 // ─── Release All ──────────────────────────────────────────────────────────
 
 void HijelHID_BLEKeyboard::releaseAll() {
-    if (!_connected) return;
+    const auto releases = _held.release(_connected && _authenticated);
+    if (!releases.keyboard) return;
 
     if (_pendingIdleTransition) {
         _transitionToActive();
@@ -961,21 +922,11 @@ void HijelHID_BLEKeyboard::releaseAll() {
         _startIdleTimer();
     }
 
-    memset(_keyReport, 0, sizeof(_keyReport));
     _logV("releaseAll()");
     _sendKeyReport();
-    // Only send the consumer zero-report if a consumer key is actually held.
-    // Sending an unnecessary consumer notify after every keyboard tap adds a
-    // spurious notify() call that can interfere with the next keyboard report.
-    if (_consumerActive) {
-        _consumerActive = false;
-        _sendConsumerReport(0x0000);
-    }
-    // [stick-key change] mouse buttons too, only when one is held (no extra notify otherwise)
-    if (_mouseButtons) {
-        _mouseButtons = 0;
-        _sendMouseReport(0, 0, 0, 0, true);
-    }
+    // Extra zero reports are needed only for inputs the previous host held.
+    if (releases.consumer) _sendConsumerReport(0x0000);
+    if (releases.mouse) _sendMouseReport(0, 0, 0, 0, true);
 }
 
 // ─── Mouse [stick-key change] ─────────────────────────────────────────────
@@ -997,7 +948,7 @@ bool HijelHID_BLEKeyboard::mouseButtons(uint8_t buttons) {
     } else if (_connState == _ConnState::Active) {
         _startIdleTimer();
     }
-    _mouseButtons = buttons & 0x1F;
+    _held.mouse = buttons & 0x1F;
     return _sendMouseReport(0, 0, 0, 0, true);
 }
 
@@ -1005,14 +956,17 @@ bool HijelHID_BLEKeyboard::mouseButtons(uint8_t buttons) {
 // dropped at once (the caller keeps the motion for the next one) instead of blocking
 // the loop. A button change must arrive, so it waits up to 500 ms like a key.
 bool HijelHID_BLEKeyboard::_sendMouseReport(int8_t x, int8_t y, int8_t wheel, int8_t pan, bool wait) {
+    const uint16_t target = _connHandle;
+    const uint32_t epoch = _connectionEpoch;
+    if (target == BLE_HS_CONN_HANDLE_NONE || !_authenticated) return false;
     if (_pMouseInput == nullptr || !_connected) return false;
-    uint8_t report[HID_MOUSE_REPORT_SIZE] = {_mouseButtons, (uint8_t)x, (uint8_t)y, (uint8_t)wheel, (uint8_t)pan};
-    _pMouseInput->setValue(report, HID_MOUSE_REPORT_SIZE);
-    bool ok = _pMouseInput->notify();
+    const auto report = _held.mouseReport(x, y, wheel, pan);
+
+    bool ok = _pMouseInput->notify(report.data(), report.size(), target);
     const uint32_t start = millis();
-    while (!ok && wait && _connected && millis() - start < 500) {
+    while (!ok && wait && _connected && epoch == _connectionEpoch && millis() - start < 500) {
         vTaskDelay(2);
-        ok = _pMouseInput->notify();
+        ok = _pMouseInput->notify(report.data(), report.size(), target);
     }
     if (ok) _lastReportMs = millis();
     return ok;
@@ -1034,8 +988,8 @@ void HijelHID_BLEKeyboard::setFn(bool held) {
     } else if (_connState == _ConnState::Active) {
         _startIdleTimer();
     }
-    if (held) _keyReport[1] |= 0x01;
-    else      _keyReport[1] &= ~0x01;
+    if (held) _held.keyboard[1] |= 0x01;
+    else      _held.keyboard[1] &= ~0x01;
     _logVf("setFn(%d)", held ? 1 : 0);
     _sendKeyReport();
 }
@@ -1052,21 +1006,21 @@ void HijelHID_BLEKeyboard::tap(uint8_t keycode, uint8_t modifiers,
     // After releasing the key we restore this baseline so that externally held
     // modifiers (e.g. a prior press(KEY_LSHIFT)) are preserved, while any
     // modifiers added by this tap are cleaned up.
-    uint8_t savedMods = _keyReport[0];
+    uint8_t savedMods = _held.keyboard[0];
 
     press(keycode, modifiers);
     delay(delayMs);
 
     // Release only the keycode this tap pressed (not everything held)
     if (_isModifier(keycode)) {
-        _keyReport[0] &= ~_keycodeToModBit(keycode);
+        _held.keyboard[0] &= ~_keycodeToModBit(keycode);
     } else {
         _removeKeycode(keycode);
     }
 
     // Restore the modifier baseline — undoes the tap's `modifiers` parameter
     // without affecting modifiers the caller is holding via press().
-    _keyReport[0] = savedMods;
+    _held.keyboard[0] = savedMods;
     _sendKeyReport();
 
     delay(keyGap);
@@ -1218,23 +1172,26 @@ void HijelHID_BLEKeyboard::afterWake() {
 }
 
 void HijelHID_BLEKeyboard::_onConnect(uint16_t connHandle) {
+    if (_sharedHosts) { NimBLEDevice::startAdvertising(); return; }
+    if (_connected && _connHandle != connHandle) { _pServer->disconnect(connHandle); return; }
     _connected  = true;
     _connHandle = connHandle;
     _connState  = _ConnState::Connecting;
     _logNf("Host connected (handle=0x%04X).", connHandle);
 }
 
-void HijelHID_BLEKeyboard::_onDisconnect() {
+void HijelHID_BLEKeyboard::_onDisconnect(uint16_t handle) {
+    if (handle != _connHandle) { NimBLEDevice::startAdvertising(); return; }
     _stopIdleTimer();
     _pendingIdleTransition = false;
     _connState  = _ConnState::Disconnected;
+    ++_connectionEpoch;
     _connHandle = BLE_HS_CONN_HANDLE_NONE;
 
     _connected = false;
     _authenticated = false;
-    memset(_keyReport, 0, sizeof(_keyReport));
+    _held.release(false);
     _ledState = 0;
-    _consumerActive = false;
     _reportPrimingNeeded = true;
     _lastReportMs = 0;
 
@@ -1246,7 +1203,22 @@ void HijelHID_BLEKeyboard::_onDisconnect() {
     }
 }
 
-void HijelHID_BLEKeyboard::_onAuthComplete(bool success) {
+void HijelHID_BLEKeyboard::selectConnection(uint16_t handle) {
+    if (handle == _connHandle) return;
+    releaseAll();  // clear local holds even when the former host already disconnected
+    if (_connHandle != BLE_HS_CONN_HANDLE_NONE) _onDisconnect(_connHandle);
+    if (handle == BLE_HS_CONN_HANDLE_NONE || !_pServer) return;
+    // Remember a pending selection too. The authentication callback completes it;
+    // the main loop must not reset HID/advertising again while encryption is pending.
+    _connHandle = handle;
+    _connected = true;
+    _connState = _ConnState::Connecting;
+    NimBLEConnInfo info = _pServer->getPeerInfoByHandle(handle);
+    if (info.isEncrypted()) _onAuthComplete(true, handle);
+}
+
+void HijelHID_BLEKeyboard::_onAuthComplete(bool success, uint16_t handle) {
+    if (handle != _connHandle) { if (_cbPairingComplete) _cbPairingComplete(success); return; }
     if (success) {
         _authenticated = true;
         _connState     = _ConnState::Active;
@@ -1290,11 +1262,14 @@ void HijelHID_BLEKeyboard::_onLEDWrite(uint8_t ledByte) {
 // ─── Internal Helpers ─────────────────────────────────────────────────────
 
 void HijelHID_BLEKeyboard::_sendKeyReport() {
+    const uint16_t target = _connHandle;
+    const uint32_t epoch = _connectionEpoch;
+    if (target == BLE_HS_CONN_HANDLE_NONE || !_authenticated) return;
     if (_pKeyboardInput == nullptr || !_connected) return;
     _logVf("keyReport: mod=0x%02X fn=%d [0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X]",
-           _keyReport[0], _keyReport[1] & 0x01,
-           _keyReport[2], _keyReport[3], _keyReport[4],
-           _keyReport[5], _keyReport[6], _keyReport[7]);
+           _held.keyboard[0], _held.keyboard[1] & 0x01,
+           _held.keyboard[2], _held.keyboard[3], _held.keyboard[4],
+           _held.keyboard[5], _held.keyboard[6], _held.keyboard[7]);
 
     // Windows selectively suspends idle BLE HID devices after ~800ms of
     // inactivity at the application layer. When suspended, the first notify()
@@ -1315,29 +1290,32 @@ void HijelHID_BLEKeyboard::_sendKeyReport() {
     if (needsPrime) {
         bool reportEmpty = true;
         for (int i = 0; i < HID_KEYBOARD_REPORT_SIZE; i++) {
-            if (_keyReport[i] != 0) { reportEmpty = false; break; }
+            if (_held.keyboard[i] != 0) { reportEmpty = false; break; }
         }
         if (!reportEmpty) {
             uint8_t empty[HID_KEYBOARD_REPORT_SIZE] = {};
-            _pKeyboardInput->setValue(empty, HID_KEYBOARD_REPORT_SIZE);
-            _pKeyboardInput->notify();
+
+            _pKeyboardInput->notify(empty, HID_KEYBOARD_REPORT_SIZE, target);
             delay(50);
         }
         _reportPrimingNeeded = false;
     }
 
-    _pKeyboardInput->setValue(_keyReport, HID_KEYBOARD_REPORT_SIZE);
+
     // [stick-key change] wait up to 500 ms for a free Bluetooth buffer (was ~20 ms). A dropped
     // report is a missing or stuck key: a typed password came out wrong while other
     // traffic (a long reply to the Mac app) had the buffers.
     const uint32_t start = millis();
-    while (!_pKeyboardInput->notify() && _connected && millis() - start < 500) {
+    while (_connected && epoch == _connectionEpoch && !_pKeyboardInput->notify(_held.keyboard, HID_KEYBOARD_REPORT_SIZE, target) && millis() - start < 500) {
         vTaskDelay(2);
     }
     _lastReportMs = millis();
 }
 
 void HijelHID_BLEKeyboard::_sendConsumerReport(uint16_t usageId) {
+    const uint16_t target = _connHandle;
+    const uint32_t epoch = _connectionEpoch;
+    if (target == BLE_HS_CONN_HANDLE_NONE || !_authenticated) return;
     if (_pConsumerInput == nullptr || !_connected) return;
     uint8_t report[HID_CONSUMER_REPORT_SIZE];
     report[0] = (uint8_t)(usageId & 0xFF);
@@ -1350,15 +1328,15 @@ void HijelHID_BLEKeyboard::_sendConsumerReport(uint16_t usageId) {
                       ((millis() - _lastReportMs) >= HID_WINDOWS_PRIME_MS);
     if (needsPrime && usageId != 0x0000) {
         uint8_t empty[HID_CONSUMER_REPORT_SIZE] = {};
-        _pConsumerInput->setValue(empty, HID_CONSUMER_REPORT_SIZE);
-        _pConsumerInput->notify();
+
+        _pConsumerInput->notify(empty, HID_CONSUMER_REPORT_SIZE, target);
         delay(50);
         _reportPrimingNeeded = false;
     }
 
-    _pConsumerInput->setValue(report, HID_CONSUMER_REPORT_SIZE);
+
     int retries = 0;
-    while (!_pConsumerInput->notify() && _connected && retries++ < 20) {
+    while (_connected && epoch == _connectionEpoch && !_pConsumerInput->notify(report, HID_CONSUMER_REPORT_SIZE, target) && retries++ < 20) {
         vTaskDelay(1);
     }
     _lastReportMs = millis();
@@ -1367,12 +1345,12 @@ void HijelHID_BLEKeyboard::_sendConsumerReport(uint16_t usageId) {
 bool HijelHID_BLEKeyboard::_addKeycode(uint8_t keycode) {
     // If already held, do nothing (prevents duplicate entries)
     for (int i = 2; i < 8; i++) {
-        if (_keyReport[i] == keycode) return true;
+        if (_held.keyboard[i] == keycode) return true;
     }
     // Find a free slot in the 6-key rollover array
     for (int i = 2; i < 8; i++) {
-        if (_keyReport[i] == 0) {
-            _keyReport[i] = keycode;
+        if (_held.keyboard[i] == 0) {
+            _held.keyboard[i] = keycode;
             return true;
         }
     }
@@ -1382,8 +1360,8 @@ bool HijelHID_BLEKeyboard::_addKeycode(uint8_t keycode) {
 
 bool HijelHID_BLEKeyboard::_removeKeycode(uint8_t keycode) {
     for (int i = 2; i < 8; i++) {
-        if (_keyReport[i] == keycode) {
-            _keyReport[i] = 0;
+        if (_held.keyboard[i] == keycode) {
+            _held.keyboard[i] = 0;
             return true;
         }
     }

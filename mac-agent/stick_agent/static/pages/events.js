@@ -1,6 +1,6 @@
 // Events: what the stick tells you about (GitHub, Claude Code), how loudly,
 // quiet hours, and what happened recently.
-import {h, clear, card, field, toggle, get, put, post, report, fmtTime, fmtDay, fmtAgo, store} from "../lib.js";
+import {h, clear, card, field, toggle, get, put, post, report, fmtTime, fmtDay, fmtAgo, store, deviceId, deviceApi} from "../lib.js";
 import {soundOptions, testBody, audition, serial} from "./events_sounds.js";
 
 export const title = "Events";
@@ -19,10 +19,11 @@ export function actions() {
 }
 
 export async function render(el) {
+  const selected = deviceId();
   root = el;
   clear(root).appendChild(h("div", {class: "empty"}, "Loading…"));
   const [k, c, hist] = await Promise.all([get("/api/events/kinds"), get("/api/config"), get("/api/events/history?n=40")]);
-  if (!root) return;
+  if (!root || root !== el || selected !== deviceId()) return;
   clear(root);
   if (k.error || c.error) { root.appendChild(h("div", {class: "notice err"}, k.error || c.error)); return; }
   kinds = k;
@@ -55,6 +56,7 @@ export function leave() { root = null; }
 // One event kind: its level and sound (each saved at once, nothing redrawn) and ▶ (a sample with
 // the level and sound shown, saved or not).
 function ruleRow(kind) {
+  const {post} = deviceApi();
   const label = LABELS[kind] || kind;
   const level = h("select", {"data-kind": kind, "data-saved": kinds.rules[kind], class: "ev-level", id: "ev-" + kind, "aria-label": `${label}: level`},
     (kinds.levels || []).map(l => h("option", {value: l, selected: kinds.rules[kind] === l}, LEVEL[l] || l)));

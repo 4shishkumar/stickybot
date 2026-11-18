@@ -145,7 +145,7 @@ static void report() {
     bests_[i] = final_;
     prefs.putLong(info(cur_).id, final_);
   }
-  Log.printf("games: %s %ld%s (best %ld)\n", info(cur_).id, final_, newBest_ ? " NEW BEST" : "", bests_[i]);
+  Log.event(diagnostics::Event::Game);
   if (buddy::agentLinked())
     buddy::sendLine(String("{\"src\":\"agent\",\"evt\":\"game\",\"id\":\"") + info(cur_).id + "\",\"score\":" + final_ +
                     ",\"best\":" + bests_[i] + ",\"new_best\":" + (newBest_ ? "true" : "false") + "}");
@@ -221,7 +221,7 @@ void open(bool flipped, int side) {
   setCpuFrequencyMhz(GAME_CPU_MHZ);
   sound::keepOn(true);
   go(Scr::PICKER);
-  Log.println("games: open");
+  Log.event(diagnostics::Event::Game);
 }
 
 void close() {
@@ -232,7 +232,7 @@ void close() {
   duo::end();
   sound::keepOn(false);
   setCpuFrequencyMhz(cpuWas_);
-  Log.println("games: closed");
+  Log.event(diagnostics::Event::Game);
 }
 
 bool active() { return open_; }
@@ -376,9 +376,11 @@ bool loop(const Input& raw) {
     perfUs_ += micros() - t0;
     perfFrames_++;
     if (now - perfAt_ > 10000) {
-      if (perfAt_ && perfFrames_)
-        Log.printf("games: %s %lu fps, %lu us a frame\n", info(cur_).id,
-                   (unsigned long)(perfFrames_ * 1000 / (now - perfAt_)), (unsigned long)(perfUs_ / perfFrames_));
+      if (perfAt_ && perfFrames_) {
+        Log.event(diagnostics::Event::Game);
+        Log.count(diagnostics::Counter::FrameRate, perfFrames_ * 1000 / (now - perfAt_));
+        Log.count(diagnostics::Counter::FrameMicros, perfUs_ / perfFrames_);
+      }
       perfAt_ = now;
       perfFrames_ = perfUs_ = 0;
     }

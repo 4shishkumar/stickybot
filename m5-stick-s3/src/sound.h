@@ -28,6 +28,7 @@ bool play(const String& name);                   // an event ("answer") or a tun
 bool setTune(const String& event, const String& tune);  // tune "off" = silent; saved
 void describe(JsonObject out);                   // {tunes:[...], map:{event: tune}, on, volume}
 bool busy();
+void cancelClip();  // discard remote audio when its authenticated owner goes away
 void playListen();  // the "speak now" cue: pauses the mic, plays, resumes it
 
 // Games (2.5.0): short effects ("g-flap", "g-score", "g-perfect", "g-hit", "g-over", "g-best",

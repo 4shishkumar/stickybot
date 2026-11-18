@@ -84,6 +84,15 @@ void   saveDevMode(bool on);
 bool   wirelessMic();
 void   saveWirelessMic(bool on);
 
+bool sharedHosts();
+void saveSharedHosts(bool on);
+String hostRecord(uint8_t index);
+void saveHostRecord(uint8_t index, const String& json);
+String activeHost();
+void saveActiveHost(const String& id);
+String hostPassword(uint8_t index);
+void saveHostPassword(uint8_t index, const String& password);
+
 bool   needsBondReset();             // first boot after upgrading to slots
 void   bondResetDone();
 

@@ -414,16 +414,16 @@ key. Use a regular combo for Wispr Flow (e.g. ⌥⌘, the default).
 
 ## Serial log
 
-`pio device monitor` also shows what's happening:
+`pio device monitor` shows fixed diagnostic events, including `ready` and connection/update
+status. It does not echo Mac names, questions, approval hints, notification text, network names,
+package labels, typed keys or pairing codes. Those details stay on the intended screen or in an
+explicit response to the requester. Unexpected raw diagnostic text is replaced with an omitted
+payload marker.
 
-```
-ready StickyBot fw 1.9.0 — combo Option+Cmd. Type 'help' for commands.
-Mac connected
--> Option+Cmd down
--> Option+Cmd up
-Web: hotspot stickybot-setup -> http://192.168.4.1
-Web: combo set to Ctrl+Space
-```
+With Wi-Fi enabled, TCP viewers on port 23 receive the same safe diagnostic events. Commands
+such as `show` and `@state` reply only to the connection that sent them: USB responses are not
+copied to TCP viewers, and TCP responses are not copied to USB or other clients. Machine replies
+retain their `@` followed by JSON line format.
 
 Quit with **Ctrl+C**. Opening the monitor may restart the stick.
 

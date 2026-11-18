@@ -57,6 +57,8 @@ impl Default for Options {
     }
 }
 
+tokio::task_local! { static ORIGIN: (usize,u64); }
+
 type HelloExtra = Box<dyn Fn() -> Map<String, Value> + Send + Sync>;
 
 /// Asked before every connect: `Some(why)` = not now (e.g. another app holds the stick).
@@ -114,6 +116,9 @@ struct Inner<C: Connector> {
     next_id: AtomicU64,
     mtu: AtomicUsize,
     hello_extra: Mutex<Option<HelloExtra>>,
+    host: Mutex<Option<Box<dyn Fn() -> Value + Send + Sync>>>,
+    session: Mutex<Option<String>>,
+    generation: AtomicU64,
     gate: Mutex<Option<Gate>>,
     held_back: Mutex<Option<String>>,
     /// why the link is searching and not connected, for the status line (the gate's answer or
@@ -164,6 +169,9 @@ impl<C: Connector> Link<C> {
                 next_id: AtomicU64::new(1),
                 mtu: AtomicUsize::new(0),
                 hello_extra: Mutex::new(None),
+                host: Mutex::new(None),
+                session: Mutex::new(None),
+                generation: AtomicU64::new(0),
                 gate: Mutex::new(None),
                 held_back: Mutex::new(None),
                 reason: watch::channel(None).0,
@@ -200,6 +208,48 @@ impl<C: Connector> Link<C> {
     }
 
     /// Merged into every hello (later: the home card, weather, `wmic`...).
+    pub fn set_host(&self, f: impl Fn() -> Value + Send + Sync + 'static) {
+        *self.inner.host.lock().unwrap() = Some(Box::new(f));
+    }
+
+    pub async fn with_generation<F: Future>(&self, generation: u64, future: F) -> F::Output {
+        ORIGIN.scope((Arc::as_ptr(&self.inner) as usize, generation), future).await
+    }
+
+    pub fn bound_generation(&self) -> u64 {
+        ORIGIN
+            .try_with(
+                |(id, generation)| {
+                    if *id == Arc::as_ptr(&self.inner) as usize { *generation } else { self.generation() }
+                },
+            )
+            .unwrap_or_else(|_| self.generation())
+    }
+    fn origin_current(&self) -> bool {
+        ORIGIN
+            .try_with(|(id, generation)| *id != Arc::as_ptr(&self.inner) as usize || *generation == self.generation())
+            .unwrap_or(true)
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.inner.generation.load(Ordering::Acquire)
+    }
+
+    pub fn multi_host(&self) -> bool {
+        self.inner.session.lock().unwrap().is_some()
+    }
+
+    pub async fn refresh_hello(&self) -> bool {
+        let mut extra = self.inner.hello_extra.lock().unwrap().as_ref().map(|f| f()).unwrap_or_default();
+        if let Some(session) = self.inner.session.lock().unwrap().clone()
+            && let Some(mut host) = self.inner.host.lock().unwrap().as_ref().map(|f| f())
+        {
+            host["session"] = Value::String(session);
+            extra.insert("host".into(), host);
+        }
+        self.send(&proto::hello(chrono::Utc::now().timestamp(), proto::local_tz_offset(), Some(&extra))).await
+    }
+
     pub fn set_hello_extra(&self, f: impl Fn() -> Map<String, Value> + Send + Sync + 'static) {
         *self.inner.hello_extra.lock().unwrap() = Some(Box::new(f));
     }
@@ -271,11 +321,24 @@ impl<C: Connector> Link<C> {
 
     /// Sends one message (link.py `send`): false if not connected or the write failed.
     pub async fn send(&self, msg: &Value) -> bool {
+        if !self.origin_current() {
+            return false;
+        }
         let Some(conn) = self.inner.current.lock().unwrap().clone() else {
             return false;
         };
-        let data = proto::encode(msg);
+        let generation = self.generation();
+        let mut scoped = msg.clone();
+        if let Some(session) = self.inner.session.lock().unwrap().clone()
+            && let Some(obj) = scoped.as_object_mut()
+        {
+            obj.insert("hs".into(), Value::String(session));
+        }
+        let data = proto::encode(&scoped);
         let _guard = self.inner.write_lock.lock().await;
+        if self.generation() != generation {
+            return false;
+        }
         for part in proto::chunks(&data) {
             if let Err(e) = write_chunk(&*conn, part).await {
                 let first = msg.as_object().and_then(|o| o.keys().next().cloned()).unwrap_or_else(|| "?".into());
@@ -310,6 +373,9 @@ impl<C: Connector> Link<C> {
 
     /// [`Link::send_audio`], with where the time went (`None`: not sent).
     pub async fn send_audio_timed(&self, pkts: &[Vec<u8>]) -> Option<SendTimes> {
+        if !self.origin_current() {
+            return None;
+        }
         let conn = self.inner.current.lock().unwrap().clone()?;
         let t0 = tokio::time::Instant::now();
         let _guard = self.inner.write_lock.lock().await;
@@ -342,6 +408,9 @@ impl<C: Connector> Link<C> {
     /// One firmware packet on OTA_DATA, without response, after waiting for room (link.py
     /// `ota_write`). False if the link is down.
     pub async fn ota_write(&self, pkt: Vec<u8>) -> bool {
+        if !self.origin_current() {
+            return false;
+        }
         let Some(conn) = self.inner.current.lock().unwrap().clone() else {
             return false;
         };
@@ -482,6 +551,8 @@ impl<C: Connector> Link<C> {
         target: &Target,
         ctl: &mut watch::Receiver<Control>,
     ) {
+        self.inner.generation.fetch_add(1, Ordering::AcqRel);
+        *self.inner.session.lock().unwrap() = None;
         self.inner.mtu.store(conn.mtu(), Ordering::Relaxed);
         *self.inner.current.lock().unwrap() = Some(conn.clone());
         self.set_state(LinkState::Connected);
@@ -492,11 +563,25 @@ impl<C: Connector> Link<C> {
         let hello = self.inner.opts.hello_every.map(|every| {
             let me = self.clone();
             tokio::spawn(async move {
+                let has_host = me.inner.host.lock().unwrap().is_some();
+                let mut negotiated = !has_host;
+                let mut retry = Duration::from_secs(1);
                 loop {
-                    let extra = me.inner.hello_extra.lock().unwrap().as_ref().map(|f| f());
-                    let msg = proto::hello(chrono::Utc::now().timestamp(), proto::local_tz_offset(), extra.as_ref());
-                    me.send(&msg).await;
-                    tokio::time::sleep(every).await;
+                    if !negotiated && let Some(state) = me.request_timeout("@state", Duration::from_secs(2)).await {
+                        negotiated = true; // a real legacy reply is definitive; silence isn't
+                        if state["multiHost"] == 1 || state["multiHost"] == true {
+                            let mut bytes = [0u8; 16];
+                            if getrandom::fill(&mut bytes).is_ok() {
+                                let nonce = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+                                *me.inner.session.lock().unwrap() = Some(nonce);
+                            } else {
+                                negotiated = false;
+                            }
+                        }
+                    }
+                    me.refresh_hello().await;
+                    tokio::time::sleep(if negotiated { every } else { retry }).await;
+                    retry = (retry * 2).min(Duration::from_secs(30));
                 }
             })
         });
@@ -542,6 +627,8 @@ impl<C: Connector> Link<C> {
         if leaving && !self.bye().await {
             log::info!("the stick didn't take the bye; disconnecting anyway");
         }
+        self.inner.generation.fetch_add(1, Ordering::AcqRel);
+        *self.inner.session.lock().unwrap() = None;
         *self.inner.current.lock().unwrap() = None;
         self.inner.pending.lock().unwrap().clear(); // waiting requests get None now
         self.inner.mtu.store(0, Ordering::Relaxed);
@@ -978,5 +1065,98 @@ mod tests {
         wait_for(&link, LinkState::Connected).await;
         assert_eq!(fake.connects(), 2);
         assert_eq!(fake.last_target().unwrap().address, "OTHER");
+    }
+}
+
+#[cfg(test)]
+mod multi_host_tests {
+    use super::*;
+    use crate::fake::FakeStick;
+    use serde_json::json;
+
+    async fn hello(fake: &FakeStick, predicate: impl Fn(&Value) -> bool) -> Value {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Some(h) = fake.last_hello()
+                    && predicate(&h)
+                {
+                    return h;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+    #[tokio::test]
+    async fn negotiated_sessions_stamp_all_json_and_reject_stale_reply_work() {
+        let fake = FakeStick::new();
+        fake.set_stick("multiHost", json!(1));
+        let link = Link::new(fake.clone());
+        link.set_host(|| json!({"id":"installation-a","name":"Office Mac","label":"Desk"}));
+        let task = link.spawn();
+        link.set_target(Some(Target { address: "A".into(), name: "Stick".into() }));
+        let first = hello(&fake, |v| v["host"]["session"].is_string()).await;
+        let nonce = first["host"]["session"].clone();
+        assert_eq!(first["hs"], nonce);
+        assert_eq!(first["host"]["name"], "Office Mac");
+        let generation = link.generation();
+        assert!(link.send(&json!({"src":"cli","prompt":{"id":"prompt-a"}})).await);
+        let messages: Vec<Value> = String::from_utf8(fake.writes().concat())
+            .unwrap()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        assert_eq!(messages.iter().find(|m| m["prompt"]["id"] == "prompt-a").unwrap()["hs"], nonce);
+        link.pause(true);
+        let mut watch = link.watch_state();
+        watch.wait_for(|s| *s == LinkState::Paused).await.unwrap();
+        link.pause(false);
+        let second = hello(&fake, |v| v["host"]["session"].is_string() && v["host"]["session"] != nonce).await;
+        assert_ne!(second["hs"], nonce);
+        assert!(
+            !link.with_generation(generation, link.send(&json!({"src":"agent","text":"stale private reply"}))).await
+        );
+        assert!(link.bye().await);
+        let messages: Vec<Value> = String::from_utf8(fake.writes().concat())
+            .unwrap()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        assert_eq!(messages.last().unwrap()["hs"], second["hs"]);
+        assert!(!messages.iter().any(|m| m["text"] == "stale private reply"));
+        task.abort();
+    }
+    #[tokio::test]
+    async fn a_lost_first_state_reply_retries_without_reconnecting() {
+        let fake = FakeStick::new();
+        fake.set_stick("multiHost", json!(1));
+        fake.set_silent(true);
+        let link = Link::new(fake.clone());
+        link.set_host(|| json!({"id":"test-host","name":"Test Mac","label":"Test"}));
+        let task = link.spawn();
+        link.set_target(Some(Target { address: "A".into(), name: "Stick".into() }));
+        let first = hello(&fake, |_| true).await; // first probe timed out, legacy hello still goes out
+        assert!(first.get("host").is_none());
+        let generation = link.generation();
+        fake.set_silent(false);
+        let recovered = hello(&fake, |v| v["host"]["session"].is_string()).await;
+        assert_eq!(generation, link.generation());
+        assert_eq!(recovered["hs"], recovered["host"]["session"]);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn legacy_firmware_never_receives_host_metadata_or_session_fields() {
+        let fake = FakeStick::new();
+        let link = Link::new(fake.clone());
+        link.set_host(|| json!({"id":"private-host","name":"Private Mac","label":"Desk"}));
+        let task = link.spawn();
+        link.set_target(Some(Target { address: "A".into(), name: "Legacy".into() }));
+        let h = hello(&fake, |_| true).await;
+        assert!(h.get("host").is_none());
+        assert!(h.get("hs").is_none());
+        assert!(!link.multi_host());
+        task.abort();
     }
 }

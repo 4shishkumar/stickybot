@@ -55,7 +55,7 @@ bool load(const char* id, irdoc::Device& d) {
   if (f.read((uint8_t*)&text[0], text.size()) != text.size()) return false;
   const char* why = nullptr;
   if (!irdoc::read(text.data(), text.size(), d, why) || d.id != id) {
-    Log.printf("IR: /ir/%s.json unreadable (%s)\n", id, why ? why : "dev");
+    Log.event(diagnostics::Event::IrFailed);
     return false;
   }
   return true;

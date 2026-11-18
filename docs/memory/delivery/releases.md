@@ -80,8 +80,12 @@ public key compiled into it, replaces itself and relaunches (see [Mac apps](/app
 Without a `latest.json` on the release, or where the app cannot replace itself, it shows "Update
 available" and opens the release page. A release that is not newer is never installed. The
 channel picks the feed: stable reads `releases/latest/download/latest.json`, beta the picked
-prerelease's own `releases/download/<tag>/latest.json`. New stick firmware is downloaded and
-offered on the Stick page, over Bluetooth or USB.
+prerelease's own `releases/download/<tag>/latest.json`. Rust offers stick firmware on the selected
+device's Stick page only when the bundle matches its recognized board, chip and flash layout, over Bluetooth or USB. Missing compatible firmware is
+unavailable. `make_release.py --board m5-sticks3|m5-stickc-plus2` builds separate board-specific
+bundles after checking app/bootloader silicon; local version folders may contain board-ID
+subfolders. This packaging support does not imply every published release contains both boards.
+See [firmware update](/link/firmware-update.md).
 
 ## Design Decisions
 

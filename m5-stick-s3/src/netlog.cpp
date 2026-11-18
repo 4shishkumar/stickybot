@@ -65,7 +65,7 @@ void loop() {
     while (c && c.connected() && c.available()) {
       char ch = c.read();
       if (ch == '\n' || ch == '\r') {
-        if (inbox[i].length()) protocol::serialLine(inbox[i]);
+        if (inbox[i].length()) protocol::serialLine(inbox[i], c);
         inbox[i] = "";
       } else if (ch >= 0x20 && inbox[i].length() < 300) {
         inbox[i] += ch;
@@ -76,10 +76,31 @@ void loop() {
 
 }  // namespace netlog
 
+void TeeLog::event(diagnostics::Event code) {
+  const char* message = diagnostics::message(code);
+  const size_t len = strlen(message);
+  Serial.write((const uint8_t*)message, len);
+  Serial.write((const uint8_t*)"\r\n", 2);
+  netlog::send((const uint8_t*)message, len);
+  netlog::send((const uint8_t*)"\r\n", 2);
+}
+
+void TeeLog::count(diagnostics::Counter counter, uint32_t value) {
+  char line[96];
+  int n = snprintf(line, sizeof line, "%s: %lu\r\n", diagnostics::name(counter), (unsigned long)value);
+  if (n <= 0 || (size_t)n >= sizeof line) return;
+  Serial.write((const uint8_t*)line, (size_t)n);
+  netlog::send((const uint8_t*)line, (size_t)n);
+}
+
 size_t TeeLog::write(uint8_t c) { return write(&c, 1); }
 
 size_t TeeLog::write(const uint8_t* buf, size_t len) {
-  Serial.write(buf, len);
-  netlog::send(buf, len);
+  // Print::printf/println may accidentally receive a private payload in future
+  // code. Do not let an unstructured byte reach either diagnostic sink.
+  for (size_t i = 0; i < len; ++i) {
+    if (!omittedLine_) event(diagnostics::Event::Suppressed);
+    omittedLine_ = buf[i] != '\n';
+  }
   return len;
 }

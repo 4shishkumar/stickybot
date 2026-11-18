@@ -1,0 +1,21 @@
+{"action":"enter","driver":"fab-new","event":"stage-transition","stage":"intake","ts":"2026-11-15T08:34:39Z"}
+{"args":"Implement approved simultaneous multi-Mac and multi-device architecture, with detected Mac names and editable short labels on dashboard and stick; complete fab-ff through reviewed draft PR.","cmd":"fab-new","event":"command","ts":"2026-11-15T08:34:39Z"}
+{"delta":"+5.0","event":"confidence","score":5,"trigger":"calc-score","ts":"2026-11-15T08:36:11Z"}
+{"cmd":"fab-ff","event":"command","ts":"2026-11-15T08:36:21Z"}
+{"action":"enter","driver":"fab-ff","event":"stage-transition","stage":"apply","ts":"2026-11-15T08:36:21Z"}
+{"action":"enter","driver":"fab-ff","event":"stage-transition","stage":"review","ts":"2026-11-15T09:15:07Z"}
+{"event":"review","result":"failed","ts":"2026-11-15T09:25:45Z"}
+{"action":"re-entry","driver":"fab-ff","event":"stage-transition","stage":"apply","ts":"2026-11-15T09:25:45Z"}
+{"action":"re-entry","driver":"fab-ff","event":"stage-transition","stage":"review","ts":"2026-11-15T09:37:02Z"}
+{"event":"review","result":"failed","ts":"2026-11-15T09:42:14Z"}
+{"action":"re-entry","driver":"fab-ff","event":"stage-transition","stage":"apply","ts":"2026-11-15T09:42:14Z"}
+{"action":"re-entry","driver":"fab-ff","event":"stage-transition","stage":"review","ts":"2026-11-15T09:57:19Z"}
+{"action":"enter","driver":"fab-ff","event":"stage-transition","stage":"hydrate","ts":"2026-11-15T10:01:11Z"}
+{"event":"review","result":"passed","ts":"2026-11-15T10:01:11Z"}
+{"action":"re-entry","driver":"fab-ff","event":"stage-transition","stage":"apply","ts":"2026-11-15T10:09:03Z"}
+{"action":"re-entry","driver":"fab-ff","event":"stage-transition","stage":"review","ts":"2026-11-15T10:15:33Z"}
+{"action":"re-entry","driver":"fab-ff","event":"stage-transition","stage":"hydrate","ts":"2026-11-15T10:18:35Z"}
+{"event":"review","result":"passed","ts":"2026-11-15T10:18:35Z"}
+{"action":"enter","driver":"fab-ff","event":"stage-transition","stage":"ship","ts":"2026-11-15T10:21:54Z"}
+{"action":"enter","driver":"git-pr-review","event":"stage-transition","stage":"review-pr","ts":"2026-11-16T04:59:43Z"}
+{"event":"review","result":"passed","ts":"2026-11-16T05:21:51Z"}

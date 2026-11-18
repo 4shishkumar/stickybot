@@ -31,12 +31,14 @@ bool begin() {
   // formatOnFail: the first time (or a partition that was never LittleFS) takes ~1-2 s, once
   mounted_ = LittleFS.begin(true, "/fs", 4, "spiffs");
   if (!mounted_) {
-    Log.println("Faces: storage didn't mount (no package faces)");
+    Log.event(diagnostics::Event::StorageFailed);
     return false;
   }
   if (!LittleFS.exists(DIR_)) LittleFS.mkdir(DIR_);
-  Log.printf("Faces: storage %u KB, %u KB used (%lu ms)\n", (unsigned)(LittleFS.totalBytes() / 1024),
-             (unsigned)(LittleFS.usedBytes() / 1024), (unsigned long)(millis() - t0));
+  Log.event(diagnostics::Event::Storage);
+  Log.count(diagnostics::Counter::StorageTotalKb, LittleFS.totalBytes() / 1024);
+  Log.count(diagnostics::Counter::StorageUsedKb, LittleFS.usedBytes() / 1024);
+  Log.count(diagnostics::Counter::StorageMountMs, millis() - t0);
   return true;
 }
 

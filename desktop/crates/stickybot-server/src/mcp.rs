@@ -92,7 +92,7 @@ fn text(maxlen: u64, desc: &str) -> Value {
 pub fn tools() -> &'static [Value] {
     static TOOLS: OnceLock<Vec<Value>> = OnceLock::new();
     TOOLS.get_or_init(|| {
-        vec![
+        let mut tools = vec![
             json!({"name": "notify", "title": "Notify on the stick",
                 "description": "Show a short message on the user's stick (a toast, with a sound). Use it when a long task finishes, fails, or needs the user's attention — e.g. 'Tests passed', 'Build failed: 3 errors'. level: info (quiet toast), nice (toast + chime), celebrate (full-screen confetti), heads_up (orange, stays until a button press). At most one per second. Returns 'shown' or why not.",
                 "inputSchema": {"type": "object", "additionalProperties": false, "required": ["text"], "properties": {
@@ -175,7 +175,9 @@ pub fn tools() -> &'static [Value] {
                 "description": "Open the video-call link (Google Meet, Zoom, Microsoft Teams or Webex) of the meeting that is on now, else of the next one today that has a link, in the user's browser or app. Needs the user's approval. Returns what it opened, or 'No meeting link found.'",
                 "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}},
                 "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true}}),
-        ]
+        ];
+        for tool in &mut tools { tool["inputSchema"]["properties"]["device_id"] = text(128,"Optional configured device ID; omitted uses the saved default."); }
+        tools
     })
 }
 
@@ -441,6 +443,25 @@ pub type Outcome = (String, bool, Option<Value>);
 
 /// Runs a tool (mcp_server.py `StickTools.call`).
 pub async fn call(st: &Arc<AppState>, name: &str, args: &Value, who: &str) -> Outcome {
+    if args.get("device_id").is_some_and(|id| !id.is_string()) {
+        return ("device_id must be a string".into(), true, None);
+    }
+    let explicit_target = args.get("device_id").is_some() || crate::events::device_targeted();
+    let selected;
+    let st = if let Some(id) = args.get("device_id").and_then(Value::as_str) {
+        selected = match st.devices.resolve(id) {
+            Some(device) => device,
+            None => return ("Unknown device".into(), true, None),
+        };
+        &selected
+    } else {
+        st
+    };
+    let mut args = args.clone();
+    if let Some(obj) = args.as_object_mut() {
+        obj.remove("device_id");
+    }
+    let args = &args;
     let started = Instant::now();
     let out = match tool(name) {
         None => Err(format!("unknown tool: {name}")),
@@ -449,7 +470,13 @@ pub async fn call(st: &Arc<AppState>, name: &str, args: &Value, who: &str) -> Ou
             Ok(_) if name != "stick_status" && !CALENDAR_TOOLS.contains(&name) && !st.link.connected() => {
                 Err(NOT_CONNECTED.to_string())
             }
-            Ok(a) => run_tool(st, name, &a, who).await,
+            Ok(a) => {
+                if explicit_target {
+                    crate::events::for_device(run_tool(st, name, &a, who)).await
+                } else {
+                    run_tool(st, name, &a, who).await
+                }
+            }
         },
     };
     let (text, err, structured) = match out {
@@ -684,9 +711,10 @@ async fn event(st: &Arc<AppState>, level: &str, text: &str, who: &str, sound: bo
     }
     let (title, rest) = split_title(&stick_text(text), 40);
     let sub = if rest.is_empty() { format!("from {who}") } else { rest };
-    let ev = crate::events::notify(st, "claude_tool", &title, &sub, Some("claude"), Some(level), (!sound).then_some("off"))
-        .await
-        .ok_or_else(|| NOT_CONNECTED.to_string())?;
+    let ev =
+        crate::events::notify(st, "claude_tool", &title, &sub, Some("claude"), Some(level), (!sound).then_some("off"))
+            .await
+            .ok_or_else(|| NOT_CONNECTED.to_string())?;
     let quiet = ev["sound"] == "off" && sound;
     Ok(format!("shown{}", if quiet { " (quiet hours: no sound)" } else { "" }))
 }
@@ -763,9 +791,9 @@ async fn stick_status(st: &Arc<AppState>) -> (String, Option<Value>) {
     let ago_s = st.last_input().map(|t| (crate::hub::now() - t).max(0.0) as u64);
     info["last_button_press_s_ago"] = json!(ago_s);
     let state = st.agent_state();
-    let screen = if st.approvals.pending() {
+    let screen = if st.approvals.pending_for(&st.device_id) {
         "an approval prompt".to_string()
-    } else if st.approvals.asking() {
+    } else if st.approvals.asking_for(&st.device_id) {
         "a question".to_string()
     } else if matches!(state.as_str(), "listening" | "transcribing" | "thinking" | "working") {
         format!("the agent ({state})")
@@ -1010,7 +1038,14 @@ pub async fn post(st: Arc<AppState>, headers: HeaderMap, body: &[u8]) -> Respons
             );
             let st2 = st.clone();
             let who2 = who.clone();
-            let task = tokio::spawn(async move { call(&st2, &name, &args, &who2).await });
+            let explicit_target = crate::events::device_targeted();
+            let task = tokio::spawn(async move {
+                if explicit_target {
+                    crate::events::for_device(call(&st2, &name, &args, &who2)).await
+                } else {
+                    call(&st2, &name, &args, &who2).await
+                }
+            });
             st.mcp.inflight.lock().unwrap().insert(key.clone(), task.abort_handle());
             if params.get("name").and_then(Value::as_str) == Some("ask") && accept.contains("text/event-stream") {
                 return streamed(st.clone(), task, key, reply).into_response();
@@ -1066,8 +1101,16 @@ fn streamed(
 
 /// The `--mcp-config` file for this app's own voice session (holds the token: 0600).
 pub fn brain_config(home: &std::path::Path, port: u16, token: &str) -> Option<std::path::PathBuf> {
-    let path = home.join("mcp-voice.json");
-    let cfg = json!({"mcpServers": {SERVER_NAME: {"type": "http", "url": url(port),
+    brain_config_url(home, "mcp-voice.json", &url(port), token)
+}
+
+pub fn brain_config_device(home: &std::path::Path, port: u16, token: &str, id: &str) -> Option<std::path::PathBuf> {
+    brain_config_url(home, &format!("mcp-{id}.json"), &format!("http://127.0.0.1:{port}/api/devices/{id}/mcp"), token)
+}
+
+fn brain_config_url(home: &std::path::Path, filename: &str, url: &str, token: &str) -> Option<std::path::PathBuf> {
+    let path = home.join(filename);
+    let cfg = json!({"mcpServers": {SERVER_NAME: {"type": "http", "url": url,
         "headers": {"Authorization": format!("Bearer {token}"), "X-Stick-Client": "voice"}}}});
     let text = serde_json::to_string_pretty(&cfg).ok()?;
     if std::fs::read_to_string(&path).ok().as_deref() == Some(text.as_str()) {
@@ -1412,7 +1455,8 @@ mod tests {
         c.t.st.calendar.set_source(Arc::new(cal));
         c.t.st.calendar.set_clock(1_800_000_180, 0);
         let (_, v) = c.rpc("tools/list", json!({}), &[], false).await;
-        let listed: Vec<&str> = v["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        let listed: Vec<&str> =
+            v["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
         for tool in ["calendar_next", "calendar_today", "calendar_join"] {
             assert!(listed.contains(&tool), "{tool}");
         }
@@ -1424,7 +1468,10 @@ mod tests {
         assert_eq!((text.as_str(), err), ("Standup in 12 min, at 08:15.", false), "{r}");
         let (text, err, _) = c.call("calendar_join", json!({}), &[]).await;
         assert_eq!((text.as_str(), err), ("Opened Google Meet for Standup.", false));
-        assert_eq!(*c.t.ran.lock().unwrap(), vec![crate::commands::Action::Open(vec!["https://meet.google.com/abc-defg-hij".into()])]);
+        assert_eq!(
+            *c.t.ran.lock().unwrap(),
+            vec![crate::commands::Action::Open(vec!["https://meet.google.com/abc-defg-hij".into()])]
+        );
         // the activity feed and the log keep that it was asked, not the answer
         assert_eq!(c.t.st.mcp.last_call.lock().unwrap()["tool"], "calendar_join");
     }
@@ -1542,8 +1589,9 @@ mod tests {
     async fn progress_and_pin_on_the_home_card() {
         let mut c = C::new("mcp-card").await;
         let homes = |c: &C| c.sent().into_iter().filter_map(|m| m.get("home").cloned()).collect::<Vec<_>>();
-        let (_, err, _) =
-            c.call("progress", json!({"text": "Running tests", "done": 40, "total": 120}), &[("x-stick-cwd", "/x/web")]).await;
+        let (_, err, _) = c
+            .call("progress", json!({"text": "Running tests", "done": 40, "total": 120}), &[("x-stick-cwd", "/x/web")])
+            .await;
         assert!(!err);
         assert_eq!(homes(&c).last().unwrap(), &json!({"k": "claude", "a": "web: 40/120 (33%)", "b": "Running tests"}));
         let (text, err, _) = c.call("progress", json!({"text": "x", "done": 5, "total": 2}), &[]).await;

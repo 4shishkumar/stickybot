@@ -19,12 +19,21 @@ using Args = std::function<String(const char* name)>;
 Result run(const String& action, const Args& arg);
 
 // One line from USB serial: "@action k=v&..." (machine) or human commands.
-void serialLine(String line);
+void serialLine(String line, Print& reply = Serial);
+
+// The legacy machine frame, shared with native output-boundary tests.
+inline void machineReply(Print& reply, const String& json) {
+  reply.print('@');
+  reply.println(json);
+}
+inline void humanReply(Print& reply, const String& json) { reply.println(json); }
 
 // A machine line ("@state", "@combo text=Option+Cmd") run without printing:
 // used by the Mac agent over Bluetooth. If the result asks for a restart, call
 // finish() once the reply has been sent.
-Result runLine(const String& line);
+// Every caller states its transport; Bluetooth cannot erase shared host records.
+enum class Source { Serial, Bluetooth };
+Result runLine(const String& line, Source source);
 void   finish(const Result& r);
 
 }  // namespace protocol

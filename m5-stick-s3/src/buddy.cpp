@@ -16,6 +16,11 @@
 #include "faces/pkg/install.h"
 #include "ir/ir.h"
 #include "logic/reader.h"
+#include "logic/hosts.h"
+#include "mic.h"
+#include "config.h"
+#include <mutex>
+#include <atomic>
 
 namespace buddy {
 
@@ -35,9 +40,47 @@ static NimBLECharacteristic* tx = nullptr;
 static NimBLECharacteristic* audio = nullptr;
 static Agent        agent_, lastAnswer_;
 static uint32_t     agentSeen = 0, agentAt = 0;
-static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
-static std::string  inbox;  // filled by the BLE task, drained in loop()
-static String       line;
+struct Inbox { uint16_t handle = hosts::NONE; std::string bytes; hosts::Lines lines; bool overflow = false; uint32_t epoch = 0; };
+static Inbox inboxes[hosts::CAPACITY];
+static std::recursive_mutex peersMutex;
+static hosts::Registry peers;
+static hosts::Transfer bulk;
+static hosts::Lease speakerOwner, micOwner, irOwner;
+static uint32_t speakerSeen = 0;
+static uint16_t requestPeer = hosts::NONE;
+static bool shared = false;
+static std::string bondKey(const NimBLEConnInfo& info) {
+  auto address = info.getIdAddress();
+  return address.toString() + "/" + std::to_string(address.getType());
+}
+static bool hostsChanged = false;
+struct HostPrompts { Prompt cli, desktop; bool hasCli = false, hasDesktop = false; uint32_t seen = 0; String answered; };
+static HostPrompts hostPrompts[hosts::CAPACITY];
+static String focusRequested;
+static hosts::Lease focusRequester;
+static uint32_t focusRequestedAt = 0;
+static Prompt focusPrompt;
+static std::atomic<bool> cancelOwned{false};
+static uint32_t inboxEpoch = 0;
+struct EventRoute { String local, original; hosts::Lease owner; };
+static EventRoute eventRoutes[8];
+static uint32_t eventSerial = 0;
+static uint16_t targetHandle() { return requestPeer != hosts::NONE ? requestPeer : hid::selectedHost(); }
+static bool peerOwns(hosts::Lease owner, uint16_t handle) {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  return peers.owns(owner, handle);
+}
+static bool occupied() {
+  return mic::live() || speakerOwner.handle != hosts::NONE || sound::busy() || ota::active() || faces::pkg::install::receiving() || ir::learning() || ir::sending() ||
+      agent_.state == "thinking" || agent_.state == "working" || agent_.state == "listening";
+}
+bool hostBusy() {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  return occupied();
+}
+static void clearActiveView();
+static void cancelResources();
+static void publishHosts();
 static uint32_t     lastHeard = 0, lastAdvCheck = 0;
 static int          running_ = 0, waiting_ = 0, total_ = 0;
 static long         tokensToday_ = 0;
@@ -50,17 +93,28 @@ static uint32_t     cliSeen = 0;
 static String       answeredId;
 
 class AudioInCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo&) override {
+  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& info) override {
+    if (!info.isEncrypted()) return;
     std::string v = c->getValue();
+    if (v.empty()) return;
+    std::lock_guard<std::recursive_mutex> lock(peersMutex);
+    if (shared) {
+      uint16_t h = info.getConnHandle();
+      if (h != peers.selected() || peers.byHandle(h) < 0 || !peers.valid(h, peers.peers[peers.byHandle(h)].session)) return;
+      if ((uint8_t)v[0] == 0) {
+        if ((speakerOwner.handle != hosts::NONE && !peers.owns(speakerOwner,h)) || mic::live() || ota::active()) return;
+        speakerOwner = peers.lease(h);
+      } else if (!peers.owns(speakerOwner,h)) return;
+    }
+    speakerSeen = millis();
     sound::clipPacket((const uint8_t*)v.data(), v.size());
   }
 };
 
-// Firmware image or face package packets (whichever transfer is open owns the characteristic:
-// only one runs at a time); WRITE_ENC already needs the encrypted (paired) link
 class OtaCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& info) override {
-    if (!info.isEncrypted()) return;
+    std::lock_guard<std::recursive_mutex> lock(peersMutex);
+    if (!info.isEncrypted() || (shared && !peerOwns(bulk.owner,info.getConnHandle()))) return;
     std::string v = c->getValue();
     if (faces::pkg::install::receiving()) faces::pkg::install::onPacket((const uint8_t*)v.data(), v.size());
     else ota::onPacket((const uint8_t*)v.data(), v.size());
@@ -68,25 +122,45 @@ class OtaCallbacks : public NimBLECharacteristicCallbacks {
 };
 
 class RxCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo&) override {
+  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& info) override {
+    if (!info.isEncrypted()) return;
     std::string v = c->getValue();
-    portENTER_CRITICAL(&mux);
-    if (inbox.size() < MAX_LINE * 2) inbox += v;
-    portEXIT_CRITICAL(&mux);
+    std::lock_guard<std::recursive_mutex> lock(peersMutex);
+    Inbox* in = nullptr;
+    for (auto& i : inboxes) if (i.handle == info.getConnHandle()) { in = &i; break; }
+    if (!in) for (auto& i : inboxes) if (i.handle == hosts::NONE) { i.handle = info.getConnHandle(); i.epoch = ++inboxEpoch; in = &i; break; }
+    if (!in) return;
+    if (in->bytes.size() + v.size() <= MAX_LINE * 2) in->bytes += v;
+    else { in->bytes.clear(); in->overflow = true; }
   }
 };
 
 static void send(const String& json, bool log = true) {
-  if (!tx) return;
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  uint16_t handle = targetHandle();
+  if (!tx || handle == hosts::NONE) return;
+  NimBLEServer* server = NimBLEDevice::getServer();
+  if (!server || !server->getPeerInfoByHandle(handle).isEncrypted()) return;
   String s = json + "\n";
   for (size_t i = 0; i < s.length(); i += CHUNK) {
     String part = s.substring(i, min(s.length(), i + CHUNK));
     // A burst of notifications can run out of Bluetooth buffers: retry (up to 300 ms; a
     // dropped part would garble the line). Spaced, so a long reply leaves buffers for keys.
-    for (int tries = 0; tries < 75 && !tx->notify((const uint8_t*)part.c_str(), part.length()); tries++) delay(4);
+    for (int tries = 0; tries < 75 && !tx->notify((const uint8_t*)part.c_str(), part.length(), handle); tries++) delay(4);
     if (s.length() > CHUNK) delay(2);
   }
-  if (log) Log.printf("buddy> %s\n", json.c_str());
+  if (log && !shared) Log.event(diagnostics::Event::Link);
+}
+
+static void hostError(const char* code, const char* message) {
+  JsonDocument d;
+  d["src"] = "agent"; d["evt"] = "host_error"; d["error"] = code; d["message"] = message;
+  String out; serializeJson(d,out); send(out,false);
+}
+static void protoReply(JsonVariantConst id, const String& result) {
+  JsonDocument out; out["src"] = "agent"; out["evt"] = "proto"; out["id"] = id;
+  JsonDocument reply; deserializeJson(reply,result); out["reply"] = reply.as<JsonVariant>();
+  String line; serializeJson(out,line); send(line,false);
 }
 
 static void ack(const char* what, bool ok = true) {
@@ -94,13 +168,23 @@ static void ack(const char* what, bool ok = true) {
 }
 
 void attach() {
+  shared = settings::sharedHosts();
+  peers.active = settings::activeHost().c_str();
+  for (size_t i = 0; i < hosts::CAPACITY; ++i) {
+    JsonDocument d;
+    if (!deserializeJson(d, settings::hostRecord(i))) {
+      auto& p = peers.peers[i];
+      p.address = d["address"] | ""; p.id = d["id"] | "";
+      p.name = d["name"] | ""; p.label = d["label"] | "";
+    }
+  }
   NimBLEServer* server = NimBLEDevice::getServer();
   NimBLEDevice::stopAdvertising();
   NimBLEService* svc = server->createService(NUS_SVC);
   NimBLECharacteristic* rx = svc->createCharacteristic(
       NUS_RX, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_ENC);
-  tx = svc->createCharacteristic(NUS_TX, NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_ENC);
-  audio = svc->createCharacteristic(AUDIO, NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_ENC);
+  tx = svc->createCharacteristic(NUS_TX, NIMBLE_PROPERTY::NOTIFY);
+  audio = svc->createCharacteristic(AUDIO, NIMBLE_PROPERTY::NOTIFY);
   NimBLECharacteristic* audioIn = svc->createCharacteristic(
       AUDIO_IN, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_ENC);
   static AudioInCallbacks audioInCb;
@@ -129,7 +213,7 @@ void attach() {
   NimBLEAdvertisementData scan;
   scan.setName(hid::name().c_str());
   adv->setScanResponseData(scan);
-  Log.printf("Mac link ready, advertising as \"%s\"\n", hid::name().c_str());
+  Log.event(diagnostics::Event::Link);
 }
 
 static void handleStatus() {
@@ -179,6 +263,8 @@ static void handleSound(JsonObject s) {
 static bool wmic_ = false;    // the agent's wireless Wispr mic is on and has its output device
 static bool wready_ = false;  // ... and it answers "prepare" with "ready" (makes the stick-mic-bluetooth device)
 static volatile bool readyPending_ = false;
+static bool busyPending_ = false;
+static uint16_t busyId_ = 0;
 static uint16_t readyId_ = 0;
 
 // Plugged into a computer by USB: the agent must not make the Bluetooth mic then.
@@ -188,6 +274,7 @@ static uint32_t usbSentAt_ = 0;
 static bool usbSent_ = false;
 
 static void sendUsb() {
+  if (shared) usbMounted_ = false;
   send(String("{\"src\":\"agent\",\"evt\":\"usb\",\"mounted\":") + (usbMounted_ ? "true" : "false") + "}");
   usbSent_ = true;
   usbSentAt_ = millis();
@@ -199,11 +286,125 @@ static bool     speaking_ = false;
 static uint32_t speakAskedAt_ = 0;        // asked on the stick, the agent hasn't said "on" yet
 static uint32_t viewChanges_ = 0;
 
+static void clearActiveView() {
+  agentSeen = agentAt = lastHeard = 0;
+  wmic_ = wready_ = speaks_ = speaking_ = false;
+  readyPending_ = false;
+  agent_ = {}; lastAnswer_ = {}; home_ = {}; wx_ = {};
+  reply_.begin(0, 0);
+  running_ = waiting_ = total_ = 0; tokensToday_ = 0; lastMsg_ = "";
+  usbSent_ = false; ++viewChanges_;
+}
+
+String deviceId() {
+  // The eFuse identity is independent of the slot-specific advertising address.
+  uint64_t id = ESP.getEfuseMac();
+  char out[24];
+  snprintf(out, sizeof(out), "stick-%012llx", (unsigned long long)(id & 0xffffffffffffULL));
+  return out;
+}
+String hostState() {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  JsonDocument d;
+  d["src"] = "agent"; d["evt"] = "hosts"; d["shared"] = shared;
+  d["active"] = peers.active; d["deviceId"] = deviceId(); d["board"] = STICK_BOARD;
+  d["multiHost"] = 1; d["maxHosts"] = hosts::CAPACITY;
+  JsonArray a = d["hosts"].to<JsonArray>();
+  for (size_t i = 0; i < hosts::CAPACITY; ++i) {
+    const auto& p = peers.peers[i]; if (p.id.empty()) continue;
+    JsonObject h = a.add<JsonObject>();
+    h["id"] = p.id; h["name"] = p.name; h["label"] = p.label;
+    h["display"] = peers.display(i);
+    h["online"] = p.handle != hosts::NONE; h["app"] = peers.online(i, millis());
+    h["active"] = peers.active == p.id;
+  }
+  String out; serializeJson(d, out); return out;
+}
+static void publishHosts() {
+  String out = hostState(); uint16_t old = requestPeer;
+  for (auto& p : peers.peers) if (p.handle != hosts::NONE && !p.session.empty()) {
+    requestPeer = p.handle; send(out, false);
+  }
+  requestPeer = old;
+}
+String activeHostLabel() {
+  if (!shared) return "";
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  int i = peers.byId(peers.active);
+  return String(peers.display(i).c_str()) + (i >= 0 && peers.peers[i].handle == hosts::NONE ? " (off)" : "");
+}
+String activeHostName() {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  int i = peers.byId(peers.active);
+  return i < 0 ? String("No Mac has introduced itself yet") : String(peers.peers[i].name.c_str());
+}
+String macPassword() {
+  if (!shared) return settings::macPassword();
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  int i = peers.byId(peers.active);
+  return i < 0 ? String() : settings::hostPassword(i);
+}
+bool setMacPassword(const String& value) {
+  if (!shared) { settings::saveMacPassword(value); return true; }
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  int i = peers.byId(peers.active);
+  if (i < 0 || (requestPeer != hosts::NONE && requestPeer != peers.selected())) return false;
+  settings::saveHostPassword(i, value); return true;
+}
+static bool selectHost(const String& id) {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  if (!peers.select(id.c_str(), occupied())) return false;
+  // The keyboard driver releases every held report on the old handle first.
+  hid::selectHost(peers.selected());
+  settings::saveActiveHost(id);
+  clearActiveView(); hostsChanged = true;
+  return true;
+}
+bool nextHost() {
+  if (!shared) return false;
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  int at = peers.byId(peers.active);
+  for (int n = 1; n <= (int)hosts::CAPACITY; ++n) {
+    int i = (at + n) % hosts::CAPACITY;
+    if (peers.peers[i].handle != hosts::NONE && selectHost(peers.peers[i].id.c_str())) return true;
+  }
+  return false;
+}
+void peerDisconnected(uint16_t handle) {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  if (shared && (handle == peers.selected() || handle == bulk.owner.handle ||
+      handle == speakerOwner.handle || handle == micOwner.handle)) cancelOwned = true;
+  peers.disconnect(handle);
+  for (auto& in : inboxes) if (in.handle == handle) in = {};
+  hostsChanged = true;
+}
+bool forgetHosts(const String& id) {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  if (occupied() || (id != "all" && peers.byId(id.c_str()) < 0)) return false;
+  for (size_t i = 0; i < hosts::CAPACITY; ++i) {
+    if (id != "all" && peers.peers[i].id != id.c_str()) continue;
+    peers.forget(peers.peers[i].id);
+    settings::saveHostRecord(i, "");
+    settings::saveHostPassword(i, "");
+    hostPrompts[i] = {};
+  }
+  settings::saveActiveHost(peers.active.c_str());
+  // The caller restarts after acknowledging: release input before reconnecting the bonds.
+  hid::selectHost(hosts::NONE);
+  clearActiveView();
+  return true;
+}
+static void persistPeer(int i) {
+  const auto& p = peers.peers[i]; JsonDocument d;
+  d["address"] = p.address; d["id"] = p.id; d["name"] = p.name; d["label"] = p.label;
+  String out; serializeJson(d, out); settings::saveHostRecord(i, out);
+}
+
 static void handleAgent(JsonDocument& d) {
   // Paused or quitting on the Mac (2.6.0): the Bluetooth link stays up for the keyboard, so
   // without this the stick would only notice when the hellos stop (AGENT_TIMEOUT_MS).
   if (d["bye"] == true) {
-    if (agentSeen) Log.println("Agent: bye (paused or quit on the Mac)");
+    if (agentSeen) Log.event(diagnostics::Event::Link);
     agentSeen = 0;
     wmic_ = wready_ = false;
     speaking_ = false;
@@ -211,17 +412,20 @@ static void handleAgent(JsonDocument& d) {
     viewChanges_++;
     return;
   }
-  bool fresh = !agentLinked();  // a new agent (or it was gone): tell it where we are
-  agentSeen = millis();
+  bool foreground = !shared || requestPeer == peers.selected();
+  bool fresh = foreground && !agentLinked();  // a new agent (or it was gone): tell it where we are
+  if (foreground) agentSeen = millis();
   if (fresh) viewChanges_++;  // back (Resume): the screens show it at once
   if (d["reply"].is<JsonObject>()) {  // a part of the full reply (after "done")
     JsonObject r = d["reply"];
     reader::Assembly::Step st = reply_.add(r["rid"] | 0u, r["i"] | -1, r["t"] | "");
     if (st == reader::Assembly::Step::COMPLETE) {
-      Log.printf("Agent: full reply, %u bytes\n", (unsigned)reply_.text().size());
+      Log.event(diagnostics::Event::Reply);
+      Log.count(diagnostics::Counter::ReplyBytes, reply_.text().size());
       viewChanges_++;
     } else if (st == reader::Assembly::Step::BROKEN) {
-      Log.println("Agent: a part of the full reply was lost, the short one stays");
+      Log.event(diagnostics::Event::Reply);
+      Log.count(diagnostics::Counter::ReplyBytes, reply_.text().size());
     }
     return;
   }
@@ -232,27 +436,39 @@ static void handleAgent(JsonDocument& d) {
     speakAskedAt_ = 0;
     return;
   }
+  if (d["wmic"]["state"] == "busy") {
+    busyId_ = d["wmic"]["id"] | 0; busyPending_ = true; return;
+  }
   if (d["wispr"] == "ready") {  // the mic device is there: the key can go down
     readyId_ = d["id"] | 0;
     readyPending_ = true;
     return;
   }
-  if (d["ota"].is<JsonObject>()) {  // firmware update over this link (ota.cpp)
+  if (d["ota"].is<JsonObject>()) {
+    if (shared && !bulk.claim(peers, requestPeer, d["ota"]["begin"].is<JsonObject>(), ota::active())) {
+      hostError("transfer_owner", "Reconnect the Mac that started this update and begin it again to resume");
+      return;
+    }
     ota::control(d["ota"].as<JsonObjectConst>());
     return;
   }
-  if (d["faces"].is<JsonObject>()) {  // a face package: install, remove (faces/pkg/install.cpp)
+  if (d["faces"].is<JsonObject>()) {
+    if (shared && !bulk.claim(peers, requestPeer, d["faces"]["put"].is<JsonObject>(), faces::pkg::install::receiving())) {
+      hostError("transfer_owner", "Reconnect the Mac that started this install and begin it again to resume");
+      return;
+    }
     faces::pkg::install::control(d["faces"].as<JsonObjectConst>());
     return;
   }
   if (d["ir"].is<JsonObject>()) {  // the IR remote: learn, send, cancel... (ir/ir.cpp)
+    if (shared) irOwner = peers.lease(requestPeer);
     ir::control(d["ir"].as<JsonObjectConst>());
     return;
   }
-  if (fresh || !usbSent_ || millis() - usbSentAt_ > 20000) sendUsb();
+  if (foreground && (fresh || !usbSent_ || millis() - usbSentAt_ > 20000)) sendUsb();
   if (d["wmic"].is<bool>()) {  // in every hello, and on its own when changed in the dashboard
     bool on = d["wmic"].as<bool>();
-    if (on != wmic_) Log.printf("Agent: wireless Wispr mic %s\n", on ? "on" : "off");
+    if (on != wmic_) Log.event(diagnostics::Event::Mic);
     wmic_ = on;
   }
   if (d["hello"].is<int>()) {
@@ -262,7 +478,8 @@ static void handleAgent(JsonDocument& d) {
   if (d["proto"].is<const char*>()) {  // a settings command, same as "@..." over USB
     String line = d["proto"].as<String>();
     line.trim();
-    protocol::Result r = protocol::runLine(line);
+    if (shared && line.startsWith("@ir")) irOwner = peers.lease(requestPeer);
+    protocol::Result r = protocol::runLine(line, protocol::Source::Bluetooth);
     String id = d["id"] | "";
     String esc;
     for (char c : id) if (c != '"' && c != '\\') esc += c;  // ids are short tokens
@@ -281,12 +498,19 @@ static void handleAgent(JsonDocument& d) {
     if (!events::parseLevel(e["level"] | "", ev.level)) return;
     ev.id = e["id"] | "";
     ev.title = e["title"] | "";
+    if (shared) {
+      int i = peers.byHandle(requestPeer);
+      String local = "h" + String(++eventSerial);
+      eventRoutes[eventSerial % 8] = {local, ev.id, peers.lease(requestPeer)};
+      ev.id = local;
+      ev.title = String(peers.display(i).c_str()) + ": " + ev.title;
+    }
     ev.sub = e["sub"] | "";
     ev.icon = e["icon"] | "star";
     ev.sound = e["sound"] | "";
     events::push(ev);
     faces::onEventKind(e["kind"] | "");  // the faces react too (agents since faces send the kind)
-    Log.printf("event (%s): %s\n", e["level"] | "", ev.title.c_str());
+    if (!shared) Log.event(diagnostics::Event::Event);
     return;
   }
   if (d["world"].is<JsonObject>()) faces::onWorld(d["world"].as<JsonObjectConst>());  // the faces' data
@@ -330,14 +554,104 @@ static void handleAgent(JsonDocument& d) {
 }
 
 static void handle(const String& l) {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
   JsonDocument d;
   if (deserializeJson(d, l)) return;
+  NimBLEServer* server = NimBLEDevice::getServer();
+  if (!server || requestPeer == hosts::NONE) return;
+  NimBLEConnInfo info = server->getPeerInfoByHandle(requestPeer);
+  if (!info.isEncrypted()) return;
+  int index = peers.byHandle(requestPeer);
+  bool hello = d["src"] == "agent" && d["hello"].is<int>() && d["host"].is<JsonObject>();
+  if (hello && shared) {
+    JsonObject h = d["host"];
+    std::lock_guard<std::recursive_mutex> lock(peersMutex);
+    auto old = peers.lease(requestPeer);
+    index = peers.hello(requestPeer, bondKey(info), info.isBonded(),
+        h["id"] | "", h["name"] | "", h["label"] | "", h["session"] | "", millis());
+    if (index < 0) { hostError("identity_or_capacity", "Mac identity is invalid, already paired elsewhere, or all three hosts are saved"); return; }
+    if (old.generation != peers.lease(requestPeer).generation || old.handle != requestPeer) {
+      hostPrompts[index] = {};
+      if (shared && (bulk.owner.handle == requestPeer || micOwner.handle == requestPeer || speakerOwner.handle == requestPeer || irOwner.handle == requestPeer)) { cancelOwned = true; cancelResources(); }
+      if (shared && peers.active == peers.peers[index].id) clearActiveView();
+    }
+    persistPeer(index);
+    if (shared) for (Prompt* prompt : {&hostPrompts[index].cli, &hostPrompts[index].desktop}) {
+      if (!prompt->id.length()) continue;
+      int sep = prompt->from.indexOf(" / ");
+      prompt->from = String(peers.display(index).c_str()) + (sep < 0 ? String() : prompt->from.substring(sep));
+    }
+    if (peers.active.empty()) { peers.active = peers.peers[index].id; settings::saveActiveHost(peers.active.c_str()); }
+    if (shared) hid::selectHost(peers.selected());
+    hostsChanged = true; ++viewChanges_;
+    send(hostState(), false);
+    if (shared) {
+      JsonDocument clean; clean["src"] = "agent";
+      for (const char* key : {"hello", "wmic", "wready", "speak", "t", "tz", "wx", "home", "world"})
+        if (!d[key].isNull()) clean[key] = d[key];
+      d = clean;
+    }
+  }
+  if (shared) {
+    String proto = d["proto"] | ""; proto.trim();
+    bool discovery = d["src"] == "agent" && (proto == "@state" || proto == "@hosts" || proto == "@keys");
+    if (discovery && !hello) {
+      protocol::Result r = protocol::runLine(proto, protocol::Source::Bluetooth);
+      protoReply(d["id"],r.json); return;
+    }
+    if (!hello && !peers.valid(requestPeer, d["hs"] | "")) {
+      send("{\"src\":\"agent\",\"evt\":\"host_error\",\"error\":\"session_required\",\"message\":\"Update the Mac app or use legacy mode\"}",false);
+      return;
+    }
+    if (index >= 0) {
+      peers.peers[index].seen = millis();
+      if (d["bye"] == true) {
+        peers.retire(requestPeer);
+        hostPrompts[index] = {}; hostsChanged = true;
+        if (requestPeer == peers.selected()) { clearActiveView(); cancelOwned = true; }
+        return;
+      }
+    }
+    if (d["hosts"]["select"].is<const char*>()) {
+      String wanted = d["hosts"]["select"].as<String>();
+      if (focusRequested.length() || peers.byId(wanted.c_str()) < 0 || occupied()) {
+        hostError("busy_or_unknown", "Finish the current task or pending confirmation before choosing a connected Mac"); return;
+      }
+      focusRequested = wanted; focusRequester = peers.lease(requestPeer); focusRequestedAt = millis();
+      focusPrompt = {"host-focus-" + wanted, "Switch input Mac?", String("Use ") + peers.display(peers.byId(wanted.c_str())).c_str(),
+          String("From ") + peers.display(index).c_str()};
+      send("{\"src\":\"agent\",\"evt\":\"host_focus\",\"state\":\"confirm_on_stick\"}"); return;
+    }
+    if (d["src"] == "agent" && requestPeer != peers.selected()) {
+      // Read-only settings and bounded notifications are independent of input focus.
+      if (d["event"].is<JsonObject>()) {
+        JsonDocument isolated; isolated["event"] = d["event"];
+        handleAgent(isolated);
+      } else if (d["proto"].is<const char*>()) {
+        protoReply(d["id"], "{\"ok\":false,\"error\":\"Select this Mac on the stick before changing settings\"}");
+      } else if (d["ota"].is<JsonObject>() || d["faces"].is<JsonObject>() ||
+                 d["ir"].is<JsonObject>() || d["sound"].is<JsonObject>()) {
+        hostError("not_active", "Select this Mac on the stick before starting this operation");
+      }
+      return;
+    }
+    if (d["src"] == "agent" && (d["ota"].is<JsonObject>() || d["faces"].is<JsonObject>())) {
+      if ((d["ota"].is<JsonObject>() && faces::pkg::install::receiving()) ||
+          (d["faces"].is<JsonObject>() && ota::active())) {
+        hostError("busy", "Another transfer is using the stick"); return;
+      }
+      if (mic::live() || sound::busy()) {
+        hostError("busy", "Finish recording or playback before starting a transfer"); return;
+      }
+    }
+    if (d["src"] != "agent" && index < 0) return;
+  }
   if (d["src"] == "agent") {
-    if (d["state"].is<const char*>()) Log.printf("agent< %s\n", l.c_str());
+    if (!shared && d["state"].is<const char*>()) Log.event(diagnostics::Event::Link);
     handleAgent(d);
     return;
   }
-  Log.printf("buddy< %s\n", l.c_str());
+  if (!shared) Log.event(diagnostics::Event::Link);
   lastHeard = millis();
 
   if (d["cmd"].is<const char*>()) {
@@ -351,10 +665,17 @@ static void handle(const String& l) {
 
   JsonObject p = d["prompt"];
   bool fromCli = d["src"] == "cli";
-  Prompt& slot = fromCli ? cli : desktop;
-  bool& has = fromCli ? hasCli : hasDesktop;
+  HostPrompts* hp = shared ? &hostPrompts[index] : nullptr;
+  Prompt& slot = hp ? (fromCli ? hp->cli : hp->desktop) : (fromCli ? cli : desktop);
+  bool& has = hp ? (fromCli ? hp->hasCli : hp->hasDesktop) : (fromCli ? hasCli : hasDesktop);
+  String& answered = hp ? hp->answered : answeredId;
+  if (hp) hp->seen = millis();
+  if (d["clear"].is<const char*>()) {
+    if (slot.id == d["clear"].as<String>()) has = false;
+    return;
+  }
 
-  if (!fromCli) {  // desktop heartbeat snapshot
+  if (!fromCli && (!shared || requestPeer == peers.selected())) {  // desktop heartbeat snapshot
     running_ = d["running"] | 0;
     waiting_ = d["waiting"] | 0;
     total_ = d["total"] | 0;
@@ -363,9 +684,10 @@ static void handle(const String& l) {
   } else {
     cliSeen = millis();
   }
-  if (!p.isNull() && p["id"].as<String>() != answeredId) {
+  if (!p.isNull() && p["id"].as<String>() != answered) {
     slot = {p["id"].as<String>(), p["tool"].as<String>(), p["hint"].as<String>(),
             fromCli ? (p["from"] | "terminal") : ""};
+    if (shared) slot.from = String(peers.display(index).c_str()) + (slot.from.length() ? " / " + slot.from : "");
     slot.ask = fromCli && p["kind"] == "ask";
     if (slot.ask) {
       slot.q = p["q"] | "";
@@ -378,18 +700,60 @@ static void handle(const String& l) {
   }
 }
 
+static void cancelResources() {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  if (cancelOwned.exchange(false)) {
+    mic::agentEnd(); mic::wisprEnd(); sound::cancelClip();
+    if (ir::learning()) ir::cancelLearn("disconnected");
+    // Keep the transfer receiver and its verified offset for the existing three-minute
+    // reconnect window. A matching bonded host must send a new begin to renew its lease.
+    bulk.revoke();
+    speakerOwner = micOwner = irOwner = {};
+    clearActiveView();
+  }
+}
 void loop() {
-  std::string chunk;
-  portENTER_CRITICAL(&mux);
-  chunk.swap(inbox);
-  portEXIT_CRITICAL(&mux);
-  for (char c : chunk) {
-    if (c == '\n') {
-      if (line.length()) handle(line);
-      line = "";
-    } else if (line.length() < MAX_LINE) {
-      line += c;
+  cancelResources();
+  for (auto& in : inboxes) {
+    std::string chunk;
+    uint16_t handle; uint32_t epoch;
+    {
+      std::lock_guard<std::recursive_mutex> lock(peersMutex);
+      handle = in.handle; epoch = in.epoch;
+      chunk.swap(in.bytes);
+      if (in.overflow) { in.lines.partial.clear(); in.lines.dropping = true; in.overflow = false; }
     }
+    if (handle == hosts::NONE) continue;
+    for (char c : chunk) {
+      std::lock_guard<std::recursive_mutex> lock(peersMutex);
+      if (in.handle != handle || in.epoch != epoch) break;
+      std::string complete;
+      if (in.lines.push(c, complete)) {
+        requestPeer = handle;
+        if (handle == in.handle) buddy::handle(String(complete.c_str()));
+        requestPeer = hosts::NONE;
+      }
+    }
+  }
+  cancelResources();
+  if (shared) {
+    std::lock_guard<std::recursive_mutex> lock(peersMutex);
+    auto* server = NimBLEDevice::getServer();
+    if (server) for (auto h : server->getPeerDevices()) {
+      auto info = server->getPeerInfoByHandle(h);
+      if (info.isEncrypted() && info.isBonded()) peers.reconnect(h, bondKey(info));
+    }
+    hid::selectHost(peers.selected());
+    int active = peers.byId(peers.active);
+    if (agentSeen && !peers.online(active,millis())) {
+      cancelOwned = true; cancelResources(); hostsChanged = true;
+    }
+    if (speakerOwner.handle != hosts::NONE && !sound::busy() && millis() - speakerSeen > 3000) {
+      sound::cancelClip(); speakerOwner = {};
+    }
+    if (!ir::learning() && !ir::sending()) irOwner = {};
+    if (hostsChanged) { hostsChanged = false; publishHosts(); }
+    if (focusRequested.length() && (millis() - focusRequestedAt > 30000 || !peers.owns(focusRequester,focusRequester.handle))) focusRequested = "";
   }
 
   // Keep advertising while connected as a keyboard, so the desktop app (and
@@ -407,20 +771,50 @@ int  waiting() { return waiting_; }
 int  total()   { return total_; }
 long tokensToday() { return tokensToday_; }
 String lastMessage() { return lastMsg_; }
+static int promptHost() {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  for (size_t i = 0; i < hosts::CAPACITY; ++i) {
+    auto& p = hostPrompts[i];
+    if (!peers.online(i,millis()) || millis() - p.seen > CLI_PROMPT_TTL_MS) { p.hasCli = p.hasDesktop = false; }
+    if (p.hasCli || p.hasDesktop) return (int)i;
+  }
+  return -1;
+}
 bool hasPrompt() {
-  if (hasCli && millis() - cliSeen > CLI_PROMPT_TTL_MS) hasCli = false;  // hook gone
+  if (shared) return focusRequested.length() || promptHost() >= 0;
+  if (hasCli && millis() - cliSeen > CLI_PROMPT_TTL_MS) hasCli = false;
   return hasCli || hasDesktop;
 }
-
-// Terminal prompts first: the desktop app also shows its own on screen.
-const Prompt& prompt() { return hasCli ? cli : desktop; }
-
+const Prompt& prompt() {
+  if (shared) {
+    if (focusRequested.length()) return focusPrompt;
+    int i = promptHost();
+    if (i >= 0) return hostPrompts[i].hasCli ? hostPrompts[i].cli : hostPrompts[i].desktop;
+  }
+  return hasCli ? cli : desktop;
+}
 void answer(const char* decision) {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
   if (!hasPrompt()) return;
-  Prompt& p = hasCli ? cli : desktop;
-  send("{\"cmd\":\"permission\",\"id\":\"" + p.id + "\",\"decision\":\"" + decision + "\"}");
-  answeredId = p.id;
-  (hasCli ? hasCli : hasDesktop) = false;
+  if (shared && focusRequested.length()) {
+    bool ok = String(decision) != "deny" && selectHost(focusRequested);
+    uint16_t old = requestPeer;
+    if (peers.owns(focusRequester,focusRequester.handle)) {
+      requestPeer = focusRequester.handle;
+      send(String("{\"src\":\"agent\",\"evt\":\"host_focus\",\"state\":\"") + (ok ? "selected" : "denied") + "\"}");
+    }
+    requestPeer = old; focusRequested = ""; return;
+  }
+  int i = shared ? promptHost() : -1;
+  HostPrompts* hp = i >= 0 ? &hostPrompts[i] : nullptr;
+  Prompt& p = hp ? (hp->hasCli ? hp->cli : hp->desktop) : (hasCli ? cli : desktop);
+  uint16_t old = requestPeer;
+  if (hp) requestPeer = peers.peers[i].handle;
+  JsonDocument d; d["cmd"] = "permission"; d["id"] = p.id; d["decision"] = decision;
+  String out; serializeJson(d, out); send(out);
+  requestPeer = old;
+  if (hp) { hp->answered = p.id; (hp->hasCli ? hp->hasCli : hp->hasDesktop) = false; }
+  else { answeredId = p.id; (hasCli ? hasCli : hasDesktop) = false; }
 }
 
 void decide(bool approve) { answer(approve ? "once" : "deny"); }
@@ -479,17 +873,27 @@ uint32_t agentUpdated() { return agentAt; }
 static uint16_t connHandle() {
   NimBLEServer* server = NimBLEDevice::getServer();
   if (!server || server->getConnectedCount() == 0) return BLE_HS_CONN_HANDLE_NONE;
-  return server->getPeerInfo(0).getConnHandle();
+  return targetHandle();
 }
 
 void eventShown(const String& id) {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  uint16_t old = requestPeer;
+  String original = id;
+  if (shared) {
+    EventRoute* route = nullptr;
+    for (auto& e : eventRoutes) if (e.local == id) { route = &e; break; }
+    if (!route || !peers.owns(route->owner,route->owner.handle)) return;
+    requestPeer = route->owner.handle; original = route->original; *route = {};
+  }
   JsonDocument d;
   d["src"] = "agent";
   d["evt"] = "event_shown";
-  d["id"] = id;
+  d["id"] = original;
   String out;
   serializeJson(d, out);
   send(out);
+  requestPeer = old;
 }
 
 void fastLink() {
@@ -499,7 +903,20 @@ void fastLink() {
   if (h != BLE_HS_CONN_HANDLE_NONE) NimBLEDevice::getServer()->updateConnParams(h, 12, 24, 0, 400);
 }
 
-void sendLine(const String& json, bool log) { send(json, log); }
+void sendLine(const String& json, bool log) {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  uint16_t old = requestPeer;
+  if (shared && requestPeer == hosts::NONE) {
+    JsonDocument d;
+    if (deserializeJson(d,json)) return;
+    String evt = d["evt"] | "";
+    hosts::Lease owner = (evt == "ota" || evt == "faces") ? bulk.owner :
+        evt == "ir" ? irOwner : peers.lease(hid::selectedHost());
+    if (!peers.owns(owner,owner.handle)) return;
+    requestPeer = owner.handle;
+  }
+  send(json, log); requestPeer = old;
+}
 
 void fastData() {
   fastLink();
@@ -546,7 +963,9 @@ uint32_t viewChanges() {
 }
 
 void agentTalkEvent(bool start) {
-  if (start) fastLink();
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  if (shared && !start && !peers.owns(micOwner,micOwner.handle)) return;
+  if (start) { if (shared) micOwner = peers.lease(hid::selectedHost()); fastLink(); }
   send(start ? "{\"src\":\"agent\",\"evt\":\"talk\",\"state\":\"start\",\"rate\":16000,\"codec\":\"ima-adpcm\"}"
              : "{\"src\":\"agent\",\"evt\":\"talk\",\"state\":\"stop\"}");
 }
@@ -555,18 +974,26 @@ bool agentWirelessMic() { return wmic_ && agentLinked(); }
 bool agentPreparesMic() { return wready_ && agentWirelessMic(); }
 
 void wisprEvent(bool start) {
-  if (start) fastLink();
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  if (shared && !start && !peers.owns(micOwner,micOwner.handle)) return;
+  if (start) { if (shared) micOwner = peers.lease(hid::selectedHost()); fastLink(); }
   send(start ? "{\"src\":\"agent\",\"evt\":\"wispr\",\"state\":\"start\",\"rate\":16000,\"codec\":\"ima-adpcm\"}"
              : "{\"src\":\"agent\",\"evt\":\"wispr\",\"state\":\"stop\"}");
 }
 
 void wisprPrepare(uint16_t id) {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  if (shared) micOwner = peers.lease(hid::selectedHost());
   fastLink();
   readyPending_ = false;
   send(String("{\"src\":\"agent\",\"evt\":\"wispr\",\"state\":\"prepare\",\"id\":") + id +
        ",\"rate\":16000,\"codec\":\"ima-adpcm\"}");
 }
 
+bool takeWisprBusy(uint16_t& id) {
+  if (!busyPending_) return false;
+  busyPending_ = false; id = busyId_; return true;
+}
 bool takeWisprReady(uint16_t& id) {
   if (!readyPending_) return false;
   readyPending_ = false;
@@ -575,15 +1002,16 @@ bool takeWisprReady(uint16_t& id) {
 }
 
 void setUsbMounted(bool on) {
+  if (shared) on = false;
   if (on == usbMounted_) return;
   usbMounted_ = on;
-  Log.printf("USB host %s\n", on ? "connected" : "gone");
+  Log.event(diagnostics::Event::Link);
   if (agentLinked()) sendUsb();
   else usbSent_ = false;
 }
 
 size_t audioPayloadMax() {
-  uint16_t h = connHandle();
+  uint16_t h = shared ? micOwner.handle : connHandle();
   if (h == BLE_HS_CONN_HANDLE_NONE) return 20;
   uint16_t mtu = NimBLEDevice::getServer()->getPeerMTU(h);
   return mtu > 3 ? mtu - 3 : 20;
@@ -592,13 +1020,16 @@ size_t audioPayloadMax() {
 String linkInfo() {
   uint16_t h = connHandle();
   if (h == BLE_HS_CONN_HANDLE_NONE) return "down";
-  NimBLEConnInfo info = NimBLEDevice::getServer()->getPeerInfo(0);
+  NimBLEConnInfo info = NimBLEDevice::getServer()->getPeerInfoByHandle(h);
   return "MTU " + String(info.getMTU()) + ", " + String(info.getConnInterval() * 1.25f, 1) + " ms";
 }
 
 bool sendAudio(const uint8_t* data, size_t len) {
-  if (!audio || connHandle() == BLE_HS_CONN_HANDLE_NONE) return true;  // nobody to send to: drop
-  return audio->notify(data, len);  // its own buffer: no shared value between frames
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  if (!audio) return true;  // nobody to send to: drop
+  uint16_t h = shared ? micOwner.handle : connHandle();
+  if (h == hosts::NONE || (shared && !peerOwns(micOwner,h))) return true;
+  return audio->notify(data, len, h);  // its own buffer: no shared value between frames
 }
 
 }  // namespace buddy

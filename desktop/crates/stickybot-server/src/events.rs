@@ -23,6 +23,16 @@ use std::io::Write;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+tokio::task_local! { static DEVICE_TARGETED: bool; }
+
+/// Explicit API/tool targets take precedence over background notification delivery policy.
+pub async fn for_device<F: std::future::Future>(future: F) -> F::Output {
+    DEVICE_TARGETED.scope(true, future).await
+}
+pub fn device_targeted() -> bool {
+    DEVICE_TARGETED.try_with(|targeted| *targeted).unwrap_or(false)
+}
+
 pub const LEVELS: &[&str] = &["celebrate", "nice", "headsup", "off"];
 
 /// kind -> (default level, icon, sample title, sample sub); the samples are for the Test buttons.
@@ -48,12 +58,14 @@ pub const KINDS: &[(&str, &str, &str, &str, &str)] = &[
 const PRIVATE_KINDS: &[&str] = &["meeting_soon"];
 
 /// kind -> its own sound (the rest: `""` = the level's default, chosen on the stick).
-pub const DEFAULT_SOUNDS: &[(&str, &str)] = &[("pr_merged", "applause"), ("release", "party_horn"), ("ci_fixed", "cheer")];
+pub const DEFAULT_SOUNDS: &[(&str, &str)] =
+    &[("pr_merged", "applause"), ("release", "party_horn"), ("ci_fixed", "cheer")];
 /// The stick's sound per level (events.cpp `defaultSound`).
 pub const LEVEL_SOUNDS: &[(&str, &str)] =
     &[("celebrate", "jingle_win"), ("nice", "confirmation_002"), ("headsup", "question_001")];
 /// Firmware 2.7.0's celebration clips: offered while the stick hasn't told us its list.
-pub const CELEBRATION_SOUNDS: &[&str] = &["applause", "clap", "cheer", "party_horn", "tada", "drumroll", "level_up", "coins"];
+pub const CELEBRATION_SOUNDS: &[&str] =
+    &["applause", "clap", "cheer", "party_horn", "tada", "drumroll", "level_up", "coins"];
 
 fn sound_ok(v: &str) -> bool {
     v.is_empty()
@@ -166,6 +178,46 @@ fn cut(s: &str, n: usize) -> String {
     stick_text(s).chars().take(n).collect()
 }
 
+/// Resolve delivery policy in one place for both availability checks and sends.
+fn destinations(st: &AppState, cfg: &Map<String, Value>) -> Vec<(String, stick_link::Link<stick_link::Backend>)> {
+    if device_targeted() {
+        return vec![(st.device_id.clone(), st.link.clone())];
+    }
+    if let Some(ids) = cfg.get("notification_devices").and_then(Value::as_array) {
+        let mut seen = HashSet::new();
+        return ids
+            .iter()
+            .filter_map(|id| st.devices.resolve(id.as_str()?))
+            .filter(|device| seen.insert(device.device_id.clone()))
+            .map(|device| (device.device_id.clone(), device.link.clone()))
+            .collect();
+    }
+    if st.device_id == "primary"
+        && let Some(device) = st.devices.default_session()
+    {
+        return vec![(device.device_id.clone(), device.link.clone())];
+    }
+    vec![(st.device_id.clone(), st.link.clone())]
+}
+
+/// A scheduled reminder is consumed only after a successful send or intentional suppression.
+/// Offline destinations leave it pending without filling event history on every tick. A scoped
+/// Calendar refresh still follows background notification policy, not the API request's target.
+pub async fn notify_reminder(st: &AppState, kind: &str, title: &str, sub: &str) -> bool {
+    DEVICE_TARGETED
+        .scope(false, async {
+            let cfg = st.cfg.lock().unwrap().clone();
+            if cfg.get("notification_devices").and_then(Value::as_array).is_some_and(Vec::is_empty) {
+                return true;
+            }
+            if !destinations(st, &cfg).iter().any(|(_, link)| link.connected()) {
+                return false;
+            }
+            notify_with_delivery(st, kind, title, sub, None, None, None).await.is_none_or(|(_, sent)| sent)
+        })
+        .await
+}
+
 /// Fires an event of `kind` (its level and sound from the settings unless given; sound `""` = the
 /// level's default, `"off"` = silent). `None` if this kind is off.
 pub async fn notify(
@@ -177,6 +229,18 @@ pub async fn notify(
     level: Option<&str>,
     sound: Option<&str>,
 ) -> Option<Value> {
+    notify_with_delivery(st, kind_, title, sub, icon, level, sound).await.map(|(event, _)| event)
+}
+
+async fn notify_with_delivery(
+    st: &AppState,
+    kind_: &str,
+    title: &str,
+    sub: &str,
+    icon: Option<&str>,
+    level: Option<&str>,
+    sound: Option<&str>,
+) -> Option<(Value, bool)> {
     let cfg = st.cfg.lock().unwrap().clone();
     let rule = rules(&cfg).get(kind_).and_then(Value::as_str).unwrap_or("nice").to_string();
     let level = level.map(str::to_string).unwrap_or(rule);
@@ -200,8 +264,15 @@ pub async fn notify(
     let icon = icon.map(str::to_string).unwrap_or_else(|| kind(kind_).map(|k| k.2).unwrap_or("bell").to_string());
     let ev = json!({"id": id, "level": level, "title": cut(title, 40), "sub": cut(sub, 90), "icon": icon,
                     "sound": if quiet { "off" } else { &sound }, "kind": kind_});
-    let sent = st.link.send(&json!({"src": "agent", "event": ev})).await;
+    let mut sent = false;
+    let mut destination_ids = Vec::new();
+    for (id, link) in destinations(st, &cfg) {
+        destination_ids.push(id);
+        sent |= link.send(&json!({"src":"agent","event":ev})).await;
+    }
     let mut entry = Map::new();
+    entry.insert("device_id".into(), json!(st.device_id));
+    entry.insert("device_ids".into(), json!(destination_ids));
     entry.insert("t".into(), json!(crate::hub::now()));
     entry.insert("kind".into(), json!(kind_));
     for (k, v) in ev.as_object().expect("object") {
@@ -225,7 +296,7 @@ pub async fn notify(
     } else {
         log::info!("event {kind_} -> {level}: {shown_title} / {shown_sub}{not_connected}");
     }
-    Some(ev)
+    Some((ev, sent))
 }
 
 /// The dashboard's ▶: the kind's sample, with the level / sound picked on the page if given (saved
@@ -241,8 +312,15 @@ pub async fn test(st: &AppState, k: &str, level: Option<&str>, sound: Option<&st
 /// The last `n` events, newest first.
 pub fn history(st: &AppState, n: usize) -> Vec<Value> {
     let text = std::fs::read_to_string(st.paths.home.join("events.jsonl")).unwrap_or_default();
-    let lines: Vec<&str> = text.lines().collect();
-    lines[lines.len().saturating_sub(n)..].iter().rev().filter_map(|l| serde_json::from_str(l).ok()).collect()
+    text.lines()
+        .rev()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| {
+            row["device_id"].as_str().unwrap_or("primary") == st.device_id
+                || row["device_ids"].as_array().is_some_and(|ids| ids.iter().any(|id| id == &st.device_id))
+        })
+        .take(n)
+        .collect()
 }
 
 /// `GET /api/events/kinds`; `stick_sounds` is the stick's last sound report.
@@ -292,7 +370,10 @@ mod tests {
     #[test]
     fn sounds_have_defaults_and_take_valid_user_ones() {
         let s = sounds(&cfg(json!({})));
-        assert_eq!((&s["pr_merged"], &s["release"], &s["ci_fixed"]), (&json!("applause"), &json!("party_horn"), &json!("cheer")));
+        assert_eq!(
+            (&s["pr_merged"], &s["release"], &s["ci_fixed"]),
+            (&json!("applause"), &json!("party_horn"), &json!("cheer"))
+        );
         assert_eq!((&s["ci_failed"], &s["claude_done"]), (&json!(""), &json!("")));
         assert_eq!(s.len(), KINDS.len());
         let s = sounds(&cfg(json!({"event_sounds": {"pr_merged": "off", "ci_failed": "tada", "release": "",
@@ -320,13 +401,19 @@ mod tests {
         let none = Map::new();
         let bad = |b: Value, t: Option<&[String]>, cur: &Map<String, Value>| invalid_sounds(&cfg(b), t, cur);
         assert_eq!(bad(json!({}), Some(&tunes), &none), "");
-        assert_eq!(bad(json!({"event_sounds": {"pr_merged": "tada", "ci_failed": "off", "release": ""}}), Some(&tunes), &none), "");
+        assert_eq!(
+            bad(json!({"event_sounds": {"pr_merged": "tada", "ci_failed": "off", "release": ""}}), Some(&tunes), &none),
+            ""
+        );
         assert_eq!(bad(json!({"event_sounds": {"pr_merged": "anything_newer"}}), None, &none), "");
         assert!(bad(json!({"event_sounds": {"pr_merged": "coins"}}), Some(&tunes), &none).contains("no sound 'coins'"));
         let saved = cfg(json!({"event_sounds": {"pr_merged": "coins"}}));
         assert_eq!(bad(json!({"event_sounds": {"pr_merged": "coins"}}), Some(&tunes), &saved), ""); // kept as it was
         // the page sends every kind: a default the (older) stick lacks may stay too
-        assert_eq!(bad(json!({"event_sounds": {"pr_merged": "applause", "ci_failed": "tada"}}), Some(&tunes), &none), "");
+        assert_eq!(
+            bad(json!({"event_sounds": {"pr_merged": "applause", "ci_failed": "tada"}}), Some(&tunes), &none),
+            ""
+        );
         assert!(bad(json!({"event_sounds": {"ci_failed": "applause"}}), Some(&tunes), &none).contains("no sound"));
         assert!(bad(json!({"event_sounds": ["tada"]}), None, &none).contains("must map"));
         assert!(bad(json!({"event_sounds": {"bogus": "tada"}}), None, &none).contains("no event kind"));
