@@ -43,7 +43,7 @@ void    saveStandbyMin(uint8_t m);
 bool    soundOn();                    // sound cues on the speaker
 void    saveSoundOn(bool on);       // only sound::setOn() calls this (it stops playback)
 uint8_t soundVolume();                // 0-255
-void    saveSoundVolume(uint8_t v);
+void    saveSoundVolume(uint8_t v);  // only sound::setVolume() calls this
 
 uint8_t brightnessPct();              // screen brightness 25/50/75/100
 void    saveBrightnessPct(uint8_t p);
