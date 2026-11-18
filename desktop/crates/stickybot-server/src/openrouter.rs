@@ -3,7 +3,7 @@
 //!
 //! The conversation lives in memory; each round is one streamed `POST {base}/chat/completions`
 //! (SSE: `data: {chunk}` lines, `: comment` keep-alives, `data: [DONE]`). The stick tools go along as
-//! OpenAI-style functions (`mcp::openai_tools`) and run through `mcp::call_approved` (the same code
+//! OpenAI-style functions (`mcp::openai_tools`) and run through `mcp::call` (the same code
 //! as the MCP server; open_url / open_app / quick_command ask on the stick first), at most
 //! [`MAX_ROUNDS`] tool rounds, then one last round without tools for the answer.
 //!
@@ -516,7 +516,8 @@ impl OpenRouterBrain {
     ) -> Result<Round, Fail> {
         let mut body = json!({"model": model, "messages": messages, "stream": true, "max_tokens": max_tokens});
         if tools {
-            body["tools"] = json!(crate::mcp::openai_tools());
+            let profile = crate::tool_policy::Profile::configured(&self.cfg(), crate::tool_policy::Caller::OpenRouter);
+            body["tools"] = json!(crate::mcp::openai_tools_for(profile));
         }
         info.rounds += 1;
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -590,7 +591,11 @@ impl OpenRouterBrain {
             let _ = tx.send(BrainEvent::Progress(describe(name, &args)));
         }
         let Some(st) = self.inner.st.upgrade() else { return "error: the stick tools aren't available".into() };
-        let (text, err, _) = crate::mcp::call_approved(&st, name, &args, "Agent").await;
+        let ctx = match crate::tool_policy::Context::brain(&st, crate::tool_policy::Caller::OpenRouter) {
+            Ok(ctx) => ctx,
+            Err(error) => return json!({"error":error}).to_string(),
+        };
+        let (text, err, _) = crate::mcp::call(&st, name, &args, &ctx).await;
         format!("{}{text}", if err { "error: " } else { "" }).chars().take(TOOL_RESULT_CHARS).collect()
     }
 
@@ -792,6 +797,7 @@ impl Brain for OpenRouterBrain {
                 return (false, "Still working on the last request.".into());
             }
             me.inner.cancelled.store(false, Ordering::Relaxed);
+            let _turn = me.inner.st.upgrade().map(|st| st.mcp.session.begin());
             let r = me.ask_inner(text, events).await;
             me.inner.busy.store(false, Ordering::Relaxed);
             r
@@ -799,6 +805,9 @@ impl Brain for OpenRouterBrain {
     }
 
     fn cancel(&self) {
+        if let Some(st) = self.inner.st.upgrade() {
+            st.mcp.session.cancel();
+        }
         if let Some(c) = self.inner.cancel.lock().unwrap().take() {
             self.inner.cancelled.store(true, Ordering::Relaxed);
             let _ = c.send(());
@@ -810,6 +819,9 @@ impl Brain for OpenRouterBrain {
     }
 
     fn forget(&self) {
+        if let Some(st) = self.inner.st.upgrade() {
+            st.mcp.session.cancel();
+        }
         self.inner.history.lock().unwrap().clear();
     }
 
@@ -838,7 +850,8 @@ pub(crate) mod tests {
     use crate::talk::tests::{T, agent};
     use std::sync::atomic::AtomicUsize;
 
-    pub const KEY: &str = concat!("sk-or-v1-", "0123456789abcdef", "0123456789abcdef", "0123456789abcdef", "0123456789abcdef"); // a made-up key, split so secret scanners don't flag it
+    pub const KEY: &str =
+        concat!("sk-or-v1-", "0123456789abcdef", "0123456789abcdef", "0123456789abcdef", "0123456789abcdef"); // a made-up key, split so secret scanners don't flag it
     pub const MODEL: &str = "test/fast-model";
 
     pub fn text_chunk(t: &str) -> Value {
@@ -1103,10 +1116,14 @@ pub(crate) mod tests {
         for _ in 0..300 {
             if let Some(p) = t.st.approvals.list().as_array().and_then(|a| a.first().cloned()) {
                 assert_eq!(
-                    (p["tool"].as_str(), p["hint"].as_str(), p["from"].as_str()),
-                    (Some("open_url"), Some("https://example.com/docs"), Some("Agent"))
+                    (p["tool"].as_str(), p["hint"].as_str()),
+                    (Some("open_url"), Some("https://example.com/docs"))
                 );
-                t.st.approvals.decide(p["id"].as_str().unwrap(), if allow { "once" } else { "deny" }, "dashboard");
+                assert!(t.st.approvals.decide_from_device(
+                    p["id"].as_str().unwrap(),
+                    if allow { "once" } else { "deny" },
+                    &t.st
+                ));
                 return;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

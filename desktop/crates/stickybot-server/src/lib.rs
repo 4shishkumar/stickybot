@@ -43,6 +43,7 @@ pub mod speech;
 pub mod switch;
 pub mod sysrun;
 pub mod talk;
+pub mod tool_policy;
 pub mod updates;
 pub mod usb;
 pub mod weather;
@@ -160,6 +161,8 @@ pub struct AppState {
     pub speaker: speak::Speaker,
     /// the stick tools (MCP): rate limit, calls
     pub mcp: mcp::McpState,
+    /// Mac-wide MCP transport sessions and pending requests, independent of the default device.
+    pub(crate) mcp_http: Arc<mcp::HttpState>,
     /// runs `claude mcp …` for terminal sessions (tests swap it)
     pub claude_runner: Arc<Mutex<mcp::ClaudeRunner>>,
     /// when a button was last pressed on the stick (`hub::now()` seconds)
@@ -194,7 +197,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(opts: &Options, backend: Backend) -> Result<Arc<Self>, String> {
-        Self::new_session(opts, backend, None, "primary".into(), None)
+        Self::new_session(opts, backend, None, "primary".into(), None, Arc::new(commands::Apps::system()))
     }
 
     fn new_session(
@@ -203,6 +206,7 @@ impl AppState {
         parent: Option<&Arc<Self>>,
         device_id: String,
         session_cfg: Option<Map<String, Value>>,
+        apps: Arc<commands::Apps>,
     ) -> Result<Arc<Self>, String> {
         let paths = config::Paths::new(&opts.home)?;
         paths.ensure().map_err(|e| format!("{}: {e}", paths.home.display()))?;
@@ -248,7 +252,7 @@ impl AppState {
             fake,
             speech: parent.map(|p| p.speech.clone()).unwrap_or_else(|| Arc::new(speech::Speech::default())),
             commands: parent.map(|p| p.commands.clone()).unwrap_or_else(|| Arc::new(commands)),
-            apps: parent.map(|p| p.apps.clone()).unwrap_or_else(|| Arc::new(commands::Apps::system())),
+            apps,
             runner: parent.map(|p| p.runner.clone()).unwrap_or_else(|| Arc::new(Mutex::new(commands::system_runner()))),
             brain: Mutex::new(Arc::new(talk::NoBrain)),
             activity: Mutex::new(None),
@@ -283,6 +287,7 @@ impl AppState {
             import_from: parent.map(|p| p.import_from.clone()).unwrap_or_else(|| opts.import_from.clone()),
             speaker: speak::Speaker::default(),
             mcp: mcp::McpState::default(),
+            mcp_http: parent.map(|p| p.mcp_http.clone()).unwrap_or_default(),
             claude_runner: parent
                 .map(|p| p.claude_runner.clone())
                 .unwrap_or_else(|| Arc::new(Mutex::new(mcp::system_claude_runner()))),
@@ -724,7 +729,8 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     let cfg: brain::Config =
         Arc::new(move || weak.upgrade().map(|s| s.cfg.lock().unwrap().clone()).unwrap_or_else(config::defaults));
     let claude = brain::ClaudeBrain::new(cfg, state.paths.home.join("workspace"));
-    let (home, port, token) = (state.paths.home.clone(), addr.port(), state.token.clone());
+    let (home, port, token) = (state.paths.home.clone(), addr.port(), state.mcp.voice_token.clone());
+    claude.set_tool_session(state.mcp.session.clone());
     claude.set_mcp(move || mcp::brain_config_device(&home, port, &token, "primary"));
     let or = Arc::new(state.openrouter());
     state.set_brain(Arc::new(brains::Brains::new(Arc::new(claude), or, Arc::downgrade(&state))));
@@ -782,7 +788,8 @@ fn start_device_session(state: Arc<AppState>) {
             Arc::new(move || weak.upgrade().map(|s| s.cfg.lock().unwrap().clone()).unwrap_or_default());
         let claude = brain::ClaudeBrain::new(cfg, state.paths.home.join("workspaces").join(&state.device_id));
         let (home, port, token, id) =
-            (state.paths.home.clone(), state.port, state.token.clone(), state.device_id.clone());
+            (state.paths.home.clone(), state.port, state.mcp.voice_token.clone(), state.device_id.clone());
+        claude.set_tool_session(state.mcp.session.clone());
         claude.set_mcp(move || mcp::brain_config_device(&home, port, &token, &id));
         state.set_brain(Arc::new(brains::Brains::new(
             Arc::new(claude),

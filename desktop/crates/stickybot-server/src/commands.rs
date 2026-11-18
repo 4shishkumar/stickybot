@@ -391,6 +391,16 @@ const ALIASES: &[(&str, &str)] = &[
 ];
 
 impl Apps {
+    fn folders() -> [PathBuf; 4] {
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        [
+            PathBuf::from("/Applications"),
+            PathBuf::from("/System/Applications"),
+            PathBuf::from("/System/Applications/Utilities"),
+            home.join("Applications"),
+        ]
+    }
+
     pub fn system() -> Self {
         Self { fixed: None }
     }
@@ -400,13 +410,7 @@ impl Apps {
             return f.clone();
         }
         let mut apps = BTreeMap::new();
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-        for d in [
-            PathBuf::from("/Applications"),
-            PathBuf::from("/System/Applications"),
-            PathBuf::from("/System/Applications/Utilities"),
-            home.join("Applications"),
-        ] {
+        for d in Self::folders() {
             for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
                 let p = e.path();
                 if p.extension().is_some_and(|x| x == "app")
@@ -417,6 +421,18 @@ impl Apps {
             }
         }
         apps
+    }
+
+    /// Freeze the installed bundle path before requesting permission. Never launch by fuzzy name.
+    pub fn resolve(&self, spoken: &str) -> Option<String> {
+        let name = self.find(spoken)?;
+        if self.fixed.is_some() {
+            return Some(format!("/Applications/{name}.app"));
+        }
+        Self::folders()
+            .iter()
+            .find_map(|dir| std::fs::canonicalize(dir.join(format!("{name}.app"))).ok())
+            .map(|path| path.to_string_lossy().into_owned())
     }
 
     /// The app a spoken name means (commands.py `find_app`).

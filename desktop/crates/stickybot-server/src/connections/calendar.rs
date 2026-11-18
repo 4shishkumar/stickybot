@@ -531,15 +531,20 @@ fn lines<Tz: chrono::TimeZone>(day: &[&Event], tz: &Tz, word: &str) -> String {
 
 /// Opens the meeting link (only a known conference service's, https) of the meeting on now, else the
 /// next with one today, through the same `open` runner as quick commands.
-pub async fn open_join(st: &Arc<AppState>) -> Result<String, String> {
+pub fn resolve_join(st: &Arc<AppState>) -> Result<(String, String), String> {
     let (s, events, now) = snapshot(st)?;
     let found =
         zoned!(st.calendar, tz => agenda::join_choice(&events, &s, &tz, now).map(|(e, p, u)| (e.title.clone(), p, u)));
     let Some((title, provider, url)) = found else { return Err("No meeting link found.".into()) };
+    let title: String = crate::talk::stick_text(&title).chars().take(40).collect();
+    Ok((url, format!("Opened {provider} for {}.", if title.trim().is_empty() { "your meeting" } else { title.trim() })))
+}
+
+pub async fn open_join(st: &Arc<AppState>) -> Result<String, String> {
+    let (url, reply) = resolve_join(st)?;
     let runner = st.runner();
     let _ = tokio::task::spawn_blocking(move || runner(&Action::Open(vec![url]))).await;
-    let title: String = crate::talk::stick_text(&title).chars().take(40).collect();
-    Ok(format!("Opened {provider} for {}.", if title.trim().is_empty() { "your meeting" } else { title.trim() }))
+    Ok(reply)
 }
 
 // --- the API -----------------------------------------------------------------------------------
