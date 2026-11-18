@@ -545,7 +545,7 @@ static void onMenu(menu::Action a) {
       settings::saveLandscape(d.landscape);
       settings::saveClock24(d.clock24);
       settings::saveDevMode(d.devMode);
-      settings::saveSoundOn(d.sound);
+      sound::setOn(d.sound);
       settings::saveSoundVolume(d.volume);
       settings::saveWirelessMic(d.wmic);
       if (!d.autoRotate) ui::setFlipped(settings::flipped());
@@ -754,13 +754,13 @@ static void pollSerial() {
       else if (line.startsWith("sound")) {  // sound test | on | off | vol <0-255>
         String arg = line.substring(5);
         arg.trim();
-        if (arg == "on" || arg == "off") settings::saveSoundOn(arg == "on");
+        if (arg == "on" || arg == "off") sound::setOn(arg == "on");
         else if (arg.startsWith("vol")) settings::saveSoundVolume(constrain(arg.substring(3).toInt(), 0, 255));
         else if (arg.startsWith("play ")) {
           String name = arg.substring(5);
           name.trim();
           if (!sound::play(name)) Serial.printf("unknown sound '%s'\n", name.c_str());
-          else Serial.printf("playing %s\n", name.c_str());
+          else Serial.printf(sound::on() ? "playing %s\n" : "%s: muted (sound off)\n", name.c_str());
         } else sound::play(sound::Cue::TEST);
         Serial.printf("Sounds %s, volume %u\n", settings::soundOn() ? "on" : "off", settings::soundVolume());
       }
@@ -1118,7 +1118,7 @@ void loop() {
       const events::Event& e = events::current();
       buddy::eventShown(e.id);
       ui::wake(e.level == events::Level::HEADSUP ? 61000 : 8000);
-      if (settings::soundOn())  // its own sound; one this firmware doesn't have: the level's default
+      if (sound::on())  // its own sound; one this firmware doesn't have: the level's default
         event_sound::play(e.sound.c_str(), events::defaultSound(e.level),
                           [](const char* n) { return sound::play(String(n)); });
       Log.event(diagnostics::Event::Event);
