@@ -38,11 +38,48 @@ struct Ask {
 pub struct Approvals {
     prompts: Mutex<HashMap<String, Prompt>>,
     asks: Mutex<HashMap<String, Ask>>,
+    slots: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// a shorter resend interval for tests
     pub resend: Mutex<Option<Duration>>,
 }
 
 impl Approvals {
+    /// FIFO per stick, shared by broker and built-in hooks. Sorted acquisition prevents
+    /// deadlocks for multi-stick prompts; unrelated destination sets can proceed together.
+    async fn reserve(
+        &self,
+        destinations: &[(Arc<AppState>, u64)],
+        deadline: tokio::time::Instant,
+        valid: impl Fn() -> bool,
+    ) -> Option<Vec<tokio::sync::OwnedMutexGuard<()>>> {
+        let locks = {
+            let mut ids: Vec<_> = destinations.iter().map(|(st, _)| st.device_id.clone()).collect();
+            ids.sort();
+            ids.dedup();
+            let mut slots = self.slots.lock().unwrap();
+            ids.into_iter().map(|id| slots.entry(id).or_default().clone()).collect::<Vec<_>>()
+        };
+        let acquire = async move {
+            let mut guards = Vec::new();
+            for lock in locks {
+                guards.push(lock.lock_owned().await);
+            }
+            guards
+        };
+        tokio::pin!(acquire);
+        let mut tick = tokio::time::interval(Duration::from_millis(50));
+        loop {
+            if !valid() || tokio::time::Instant::now() >= deadline {
+                return None;
+            }
+            tokio::select! {
+                guards = &mut acquire => return valid().then_some(guards),
+                _ = tokio::time::sleep_until(deadline) => return None,
+                _ = tick.tick() => {},
+            }
+        }
+    }
+
     pub fn pending_for(&self, device: &str) -> bool {
         self.prompts
             .lock()
@@ -211,6 +248,8 @@ pub async fn ask_permission(
     if destinations.is_empty() {
         return None;
     }
+    let deadline = tokio::time::Instant::now() + wait.min(WAIT);
+    let leases = st.approvals.reserve(&destinations, deadline, || true).await?;
     let owners = destinations.iter().map(|(s, g)| (s.device_id.clone(), *g)).collect();
     let id = new_id();
     let (tx, mut rx) = oneshot::channel();
@@ -226,6 +265,14 @@ pub async fn ask_permission(
             bound: None,
         },
     );
+    let mut guard = PromptGuard {
+        st: st.clone(),
+        id: id.clone(),
+        destinations: destinations.clone(),
+        leases: Some(leases),
+        strict: false,
+        decision: None,
+    };
     st.hub.emit("prompt", json!({"id": id, "tool": tool, "hint": hint, "origin": origin}));
     for (device, _) in &destinations {
         if device.device_id != st.device_id {
@@ -235,7 +282,6 @@ pub async fn ask_permission(
     let short: String = hint.chars().take(160).collect();
     let prompt = json!({"src": "cli", "prompt": {"id": id, "tool": tool, "hint": short, "from": origin}});
     let resend = st.approvals.resend.lock().unwrap().unwrap_or(RESEND);
-    let deadline = tokio::time::Instant::now() + wait.min(WAIT);
     let mut decision = None;
     while tokio::time::Instant::now() < deadline {
         for (device, _) in &destinations {
@@ -252,13 +298,7 @@ pub async fn ask_permission(
             Err(_) => {}
         }
     }
-    st.approvals.prompts.lock().unwrap().remove(&id);
-    for (device, _) in &destinations {
-        let generation = device.link.generation();
-        device.link.with_generation(generation, device.link.send(&clear_message(device, &id))).await;
-        device.hub.emit("prompt_done", json!({"id":id,"decision":decision}));
-    }
-    st.hub.emit("prompt_done", json!({"id": id, "decision": decision}));
+    guard.decision = decision.clone();
     decision
 }
 
@@ -267,7 +307,7 @@ pub async fn ask_permission(
 struct Binding {
     mac: Value,
     device: String,
-    generation: u64,
+    generation: Option<u64>,
     session: String,
     turn: String,
     caller: crate::tool_policy::Caller,
@@ -279,7 +319,7 @@ impl Binding {
         Self {
             mac: st.host.json()["id"].clone(),
             device: st.device_id.clone(),
-            generation: st.link.generation(),
+            generation: (tool != "calendar_join").then(|| st.link.generation()),
             session: ctx.scope.session.clone(),
             turn: ctx.scope.turn.clone(),
             caller: ctx.caller,
@@ -300,10 +340,10 @@ impl Bound {
     fn live(&self) -> bool {
         self.context.active()
             && tokio::time::Instant::now() < self.deadline
-            && self
-                .target
-                .upgrade()
-                .is_some_and(|st| connection(&st, self.binding.generation) && st.host.json()["id"] == self.binding.mac)
+            && self.target.upgrade().is_some_and(|st| {
+                self.binding.generation.is_none_or(|generation| connection(&st, generation))
+                    && st.host.json()["id"] == self.binding.mac
+            })
     }
     fn responder_live(&self) -> bool {
         let responder = self.responder.lock().unwrap();
@@ -343,18 +383,26 @@ struct PromptGuard {
     st: Arc<AppState>,
     id: String,
     destinations: Vec<(Arc<AppState>, u64)>,
+    leases: Option<Vec<tokio::sync::OwnedMutexGuard<()>>>,
+    strict: bool,
+    decision: Option<String>,
 }
 impl Drop for PromptGuard {
     fn drop(&mut self) {
         self.st.approvals.prompts.lock().unwrap().remove(&self.id);
         let destinations = self.destinations.clone();
         let id = self.id.clone();
-        self.st.hub.emit("prompt_done", json!({"id":id}));
+        let leases = self.leases.take();
+        let strict = self.strict;
+        let decision = self.decision.clone();
+        self.st.hub.emit("prompt_done", json!({"id":id,"decision":decision}));
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
+                let _leases = leases; // Hold the queue slots until the old screen has been cleared.
                 for (st, generation) in destinations {
+                    let generation = if strict { generation } else { st.link.generation() };
                     // Old firmware's clear has no id: do not clear a newer prompt.
-                    if !st.approvals.pending_for(&st.device_id) {
+                    if !st.approvals.pending_for(&st.device_id) && !st.approvals.asking_for(&st.device_id) {
                         st.link.with_generation(generation, st.link.send(&clear_message(&st, &id))).await;
                     }
                     st.hub.emit("prompt_done", json!({"id":id}));
@@ -390,18 +438,20 @@ pub(crate) async fn approve_tool(
     if !bound.live() {
         return Err("The device or turn is no longer active".into());
     }
+    let leases = st
+        .approvals
+        .reserve(&destinations, bound.deadline, || {
+            bound.live() && destinations.iter().any(|(st, generation)| connection(st, *generation))
+        })
+        .await
+        .ok_or("Approval expired or was cancelled while waiting for the stick")?;
     let (tx, mut rx) = oneshot::channel();
     let id = new_id();
     let origin = format!("{} · {}", ctx.who, st.host.json()["label"].as_str().unwrap_or("Mac"));
     {
         let mut prompts = st.approvals.prompts.lock().unwrap();
-        // A stick displays one permission at a time. Do not replace a prompt under the user's finger.
-        if prompts.contains_key(&id)
-            || prompts
-                .values()
-                .any(|p| p.destinations.iter().any(|(id, _)| destinations.iter().any(|(s, _)| &s.device_id == id)))
-        {
-            return Err("Another approval is already waiting on the stick".into());
+        if prompts.contains_key(&id) {
+            return Err("Could not create a unique approval".into());
         }
         prompts.insert(
             id.clone(),
@@ -416,8 +466,15 @@ pub(crate) async fn approve_tool(
             },
         );
     }
-    let _guard = PromptGuard { st: st.clone(), id: id.clone(), destinations: destinations.clone() };
-    let shown = crate::tool_policy::display_hint(&prepared.hint)?;
+    let _guard = PromptGuard {
+        st: st.clone(),
+        id: id.clone(),
+        destinations: destinations.clone(),
+        leases: Some(leases),
+        strict: true,
+        decision: None,
+    };
+    let shown = &prepared.wire_hint;
     let mac_label = st.host.json()["label"].as_str().unwrap_or("Mac").to_string();
     for (device, _) in &destinations {
         device.hub.emit("prompt", json!({"id":id,"tool":tool,"hint":prepared.hint,"origin":origin}));
@@ -890,6 +947,115 @@ mod broker_tests {
             .unwrap();
         let (permit, id) = tokio::join!(approve_tool(st, ctx, "open_url", &action, wait), approve_next(st, "once"));
         (permit.unwrap(), action, id)
+    }
+
+    async fn prompt_for(st: &AppState, tool: &str) -> String {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                for p in st.approvals.list().as_array().unwrap() {
+                    if p["tool"] == tool {
+                        return p["id"].as_str().unwrap().to_string();
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+    fn permission_task(
+        st: Arc<AppState>,
+        legacy: bool,
+        wait: Duration,
+    ) -> tokio::task::JoinHandle<Result<String, String>> {
+        tokio::spawn(async move {
+            if legacy {
+                ask_permission(&st, "Bash", "pwd", "terminal", wait).await.ok_or("expired".into())
+            } else {
+                let ctx = Context::internal("test");
+                let prepared =
+                    Prepared::resolve(&st, "open_url", json!({"url":"https://example.com/a"}).as_object().unwrap())
+                        .await?;
+                let mut grant = approve_tool(&st, &ctx, "open_url", &prepared, wait).await?;
+                grant.consume(&st, &ctx, "open_url", &prepared.arguments)?;
+                Ok("allow".into())
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn hook_and_broker_permissions_queue_in_both_orders() {
+        for legacy_first in [true, false] {
+            let t = agent(&format!("broker-queue-{legacy_first}"), false).await;
+            let first = permission_task(t.st.clone(), legacy_first, WAIT);
+            let first_id = prompt_for(&t.st, if legacy_first { "Bash" } else { "open_url" }).await;
+            let mut second = permission_task(t.st.clone(), !legacy_first, WAIT);
+            assert!(tokio::time::timeout(Duration::from_millis(80), &mut second).await.is_err());
+            assert_eq!(t.st.approvals.list().as_array().unwrap().len(), 1);
+            assert_eq!(t.st.approvals.list()[0]["id"], first_id);
+            assert!(t.st.approvals.decide_from_device(&first_id, "once", &t.st));
+            assert_eq!(first.await.unwrap().unwrap(), "allow");
+            let second_id = prompt_for(&t.st, if legacy_first { "open_url" } else { "Bash" }).await;
+            assert_ne!(first_id, second_id);
+            assert!(t.st.approvals.decide_from_device(&second_id, "once", &t.st));
+            assert_eq!(second.await.unwrap().unwrap(), "allow");
+        }
+    }
+
+    #[tokio::test]
+    async fn queue_expiry_and_cancellation_do_not_replace_or_block_other_prompts() {
+        let t = agent("broker-queue-cancel", false).await;
+        let first = permission_task(t.st.clone(), true, WAIT);
+        let id = prompt_for(&t.st, "Bash").await;
+        assert!(permission_task(t.st.clone(), false, Duration::from_millis(80)).await.unwrap().is_err());
+        assert_eq!(t.st.approvals.list()[0]["id"], id);
+        let mut cancelled = permission_task(t.st.clone(), false, WAIT);
+        assert!(tokio::time::timeout(Duration::from_millis(80), &mut cancelled).await.is_err());
+        cancelled.abort();
+        let _ = cancelled.await;
+        assert!(t.st.approvals.decide_from_device(&id, "once", &t.st));
+        assert_eq!(first.await.unwrap().unwrap(), "allow");
+        let next = permission_task(t.st.clone(), false, WAIT);
+        approve_next(&t.st, "once").await;
+        assert_eq!(next.await.unwrap().unwrap(), "allow");
+        assert!(t.ran.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn offline_calendar_target_can_use_another_connected_approval_stick() {
+        let t = agent("calendar-offline-approval", false).await;
+        t.st.devices.init(&t.st).unwrap();
+        let responder = t.st.devices.add(&t.st, "SECOND", "Approver").unwrap();
+        responder.link.watch_state().wait_for(|s| *s == stick_link::LinkState::Connected).await.unwrap();
+        let calendar = macos_calendar::fake::FakeCalendar::new();
+        calendar.set_events(vec![macos_calendar::Event {
+            id: "meeting".into(),
+            title: "Standup".into(),
+            start: 1_800_000_900,
+            end: 1_800_001_800,
+            url: "https://meet.google.com/abc-defg-hij".into(),
+            ..Default::default()
+        }]);
+        t.st.calendar.set_source(Arc::new(calendar));
+        t.st.calendar.set_clock(1_800_000_180, 0);
+        crate::connections::calendar::connect(&t.st).await.unwrap();
+        t.st.cfg.lock().unwrap().insert("approval_devices".into(), json!([responder.device_id]));
+        t.st.link.pause(true);
+        t.st.link.watch_state().wait_for(|s| *s == stick_link::LinkState::Paused).await.unwrap();
+        let ctx = Context::internal("test");
+        let args = json!({});
+        let (result, _) =
+            tokio::join!(crate::mcp::call(&t.st, "calendar_join", &args, &ctx), approve_next(&responder, "once"));
+        assert!(!result.1, "{}", result.0);
+        assert_eq!(
+            *t.ran.lock().unwrap(),
+            [crate::commands::Action::Open(vec!["https://meet.google.com/abc-defg-hij".into()])]
+        );
+        responder.link.pause(true);
+        responder.link.watch_state().wait_for(|s| *s == stick_link::LinkState::Paused).await.unwrap();
+        let failed = crate::mcp::call(&t.st, "calendar_join", &json!({}), &Context::internal("test")).await;
+        assert!(failed.1);
+        assert_eq!(t.ran.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

@@ -388,7 +388,8 @@ pub struct McpState {
     pub alerts: Mutex<RateLimit>,
     pub calls: Mutex<u64>,
     pub last_call: Mutex<Value>,
-    /// legacy clients cancel with `notifications/cancelled`: (caller, request id) -> the call
+    http_sessions: Mutex<HashMap<String, (Caller, Instant)>>,
+    /// (server-issued MCP session, typed JSON request id) -> call; never a display header.
     inflight: Mutex<HashMap<(String, String), tokio::task::AbortHandle>>,
     /// the last home-card push, and a later one already planned
     card_at: Mutex<f64>,
@@ -403,10 +404,39 @@ impl Default for McpState {
             alerts: Mutex::new(RateLimit::new(ALERT_GAP.as_secs_f64(), ALERT_PER_MIN)),
             calls: Mutex::new(0),
             last_call: Mutex::new(Value::Null),
+            http_sessions: Mutex::new(HashMap::new()),
             inflight: Mutex::new(HashMap::new()),
             card_at: Mutex::new(f64::MIN),
             card_later: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+}
+
+impl McpState {
+    fn http_session(&self, headers: &HeaderMap, caller: Caller, initialize: bool) -> Result<String, RpcError> {
+        let mut sessions = self.http_sessions.lock().unwrap();
+        sessions.retain(|_, (_, touched)| touched.elapsed() < Duration::from_secs(30 * 60));
+        if let Some(id) = headers.get("mcp-session-id") {
+            let id = id.to_str().unwrap_or_default();
+            let Some((owner, touched)) = sessions.get_mut(id).filter(|(owner, _)| *owner == caller) else {
+                return Err(
+                    RpcError::new(INVALID_REQUEST, "Unknown or expired MCP session").status(StatusCode::NOT_FOUND)
+                );
+            };
+            debug_assert_eq!(*owner, caller);
+            *touched = Instant::now();
+            return Ok(id.to_string());
+        }
+        let id = crate::config::new_token();
+        if initialize {
+            if sessions.len() >= 256 {
+                return Err(RpcError::new(INTERNAL, "Too many MCP sessions").status(StatusCode::SERVICE_UNAVAILABLE));
+            }
+            sessions.insert(id.clone(), (caller, Instant::now()));
+        }
+        // Stateless requests have independent owners; without a session, cancellation cannot
+        // identify another request. Dropping its HTTP/SSE response still cancels that request.
+        Ok(id)
     }
 }
 
@@ -505,6 +535,9 @@ async fn run_mac(
     ctx: &Context,
 ) -> ToolResult {
     let prepared = Prepared::resolve(st, name, args).await?;
+    if let Some(reply) = prepared.informational_reply() {
+        return Ok((reply.into(), None));
+    }
     let mut permit = crate::approvals::approve_tool(st, ctx, name, &prepared, crate::approvals::WAIT).await?;
     let (st, origin, ctx, name) = (st.clone(), origin.clone(), ctx.clone(), name.to_string());
     tokio::task::spawn_blocking(move || {
@@ -929,12 +962,15 @@ pub async fn post(st: Arc<AppState>, headers: HeaderMap, body: &[u8]) -> Respons
         .unwrap_or_default();
     let identity = if crate::api::same(bearer, st.mcp.voice_token.as_bytes()) { Caller::Claude } else { Caller::Mcp };
     let profile = Profile::configured(&st.cfg.lock().unwrap(), identity);
-    let owner = identity.key().to_string();
+    let initializing = id.is_some() && matches!(method, "initialize" | "server/discover");
+    let owner = match st.mcp.http_session(&headers, identity, initializing) {
+        Ok(owner) => owner,
+        Err(error) => return rpc_error(id, error),
+    };
     let Some(id) = id.cloned() else {
         // a notification
         if method == "notifications/cancelled" {
             let rid = match params.get("requestId") {
-                Some(Value::String(s)) => s.clone(),
                 Some(v) => v.to_string(),
                 None => String::new(),
             };
@@ -983,9 +1019,8 @@ pub async fn post(st: Arc<AppState>, headers: HeaderMap, body: &[u8]) -> Respons
             let args = params.get("arguments").cloned().unwrap_or(Value::Null);
             let accept = headers.get("accept").and_then(|v| v.to_str().ok()).unwrap_or("");
             let key = (
-                owner,
+                owner.clone(),
                 match id_ref {
-                    Some(Value::String(s)) => s.clone(),
                     Some(v) => v.to_string(),
                     None => String::new(),
                 },
@@ -996,7 +1031,9 @@ pub async fn post(st: Arc<AppState>, headers: HeaderMap, body: &[u8]) -> Respons
                     Err(e) => return axum::Json(reply(tool_result(&e, true, None))).into_response(),
                 }
             } else {
-                Context::request(identity, &who)
+                let mut ctx = Context::request(identity, &who);
+                ctx.scope.session = owner.clone();
+                ctx
             };
             let st2 = st.clone();
             let task = {
@@ -1034,7 +1071,11 @@ pub async fn post(st: Arc<AppState>, headers: HeaderMap, body: &[u8]) -> Respons
             );
         }
     };
-    axum::Json(reply(result)).into_response()
+    let mut response = axum::Json(reply(result)).into_response();
+    if initializing {
+        response.headers_mut().insert("mcp-session-id", owner.parse().unwrap());
+    }
+    response
 }
 
 /// Stops the call when the SSE stream goes away (the client closed it).
@@ -1730,6 +1771,117 @@ mod tests {
         }
         assert!(!c.t.st.approvals.pending());
         assert!(c.t.ran.lock().unwrap().is_empty());
+    }
+
+    async fn initialize_client(c: &C) -> String {
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("host", "localhost:8670")
+            .header("authorization", format!("Bearer {}", c.t.st.token))
+            .body(Body::from(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}).to_string()))
+            .unwrap();
+        let response = c.app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        response.headers()["mcp-session-id"].to_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn clients_reuse_request_ids_without_collisions_or_cross_cancellation() {
+        let c = C::new("mcp-client-sessions").await;
+        let a = initialize_client(&c).await;
+        let b = initialize_client(&c).await;
+        assert_ne!(a, b);
+        let start = |session: String, url: &'static str| {
+            let app = c.app.clone();
+            let token = c.t.st.token.clone();
+            tokio::spawn(async move {
+                let request = axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header("host", "localhost:8670")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("mcp-session-id", session)
+                    .body(Body::from(
+                        json!({"jsonrpc":"2.0","id":5,"method":"tools/call",
+                        "params":{"name":"open_url","arguments":{"url":url}}})
+                        .to_string(),
+                    ))
+                    .unwrap();
+                let response = app.oneshot(request).await.unwrap();
+                serde_json::from_slice::<Value>(&response.into_body().collect().await.unwrap().to_bytes()).unwrap()
+            })
+        };
+        let first = start(a.clone(), "https://example.com/a");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !c.t.st.approvals.pending() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let second = start(b.clone(), "https://example.com/b");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while c.t.st.mcp.inflight.lock().unwrap().len() < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let bearer = format!("Bearer {}", c.t.st.token);
+        let cancel = json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":5}}).to_string();
+        // A stateless notification cannot cancel somebody else's request.
+        assert_eq!(c.raw("POST", &cancel, &[("authorization", &bearer)]).await.0, StatusCode::ACCEPTED);
+        assert!(!first.is_finished() && !second.is_finished());
+        c.raw("POST", &cancel, &[("authorization", &bearer), ("mcp-session-id", &b)]).await;
+        let cancelled = tokio::time::timeout(Duration::from_secs(2), second).await.unwrap().unwrap();
+        assert_eq!(cancelled["error"]["message"], "cancelled");
+        assert!(!first.is_finished());
+        crate::approvals::approve_next(&c.t.st, "once").await;
+        assert_eq!(first.await.unwrap()["result"]["isError"], false);
+        assert_eq!(*c.t.ran.lock().unwrap(), [crate::commands::Action::Open(vec!["https://example.com/a".into()])]);
+        let (_, unknown, _) =
+            c.raw("POST", &cancel, &[("authorization", &bearer), ("mcp-session-id", "unknown")]).await;
+        assert!(unknown["error"]["message"].as_str().unwrap().contains("session"));
+    }
+
+    #[tokio::test]
+    async fn default_quick_commands_keep_deep_links_and_informational_replies() {
+        let mut c = C::new("mcp-quick-compat").await;
+        for url in ["obsidian://open?vault=Work", "slack://open", "zoommtg://zoom.us/join?id=123"] {
+            c.t.st
+                .commands
+                .save(
+                    json!({"commands":[{"name":"Saved link","phrases":["launch"],"open_url":url}]})
+                        .as_object()
+                        .unwrap(),
+                )
+                .unwrap();
+            let st = c.t.st.clone();
+            let ((reply, error, _), _) = tokio::join!(
+                c.call("quick_command", json!({"phrase":"launch"}), &[]),
+                crate::approvals::approve_next(&st, "once")
+            );
+            assert!(!error, "{reply}");
+            assert_eq!(c.t.ran.lock().unwrap().last(), Some(&crate::commands::Action::Open(vec![url.into()])));
+        }
+        c.t.st
+            .commands
+            .save(
+                json!({"commands":[{"name":"PR","phrases":["pr"],"open_url":"https://github.com/<org>/<repo>"}]})
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap();
+        let (reply, error, _) = c.call("quick_command", json!({"phrase":"pr"}), &[]).await;
+        assert!(!error);
+        assert_eq!(reply, "Set your repo in the dashboard (Commands).");
+        assert!(!c.t.st.approvals.pending());
+        assert_eq!(c.t.ran.lock().unwrap().len(), 3);
+        c.t.st.cfg.lock().unwrap().insert("tool_profiles".into(), json!({"mcp":"assistant"}));
+        assert!(c.call("quick_command", json!({"phrase":"pr"}), &[]).await.1);
+        assert!(c.call("open_url", json!({"url":"slack://open"}), &[]).await.1);
+        assert_eq!(c.t.ran.lock().unwrap().len(), 3);
     }
 
     #[tokio::test]

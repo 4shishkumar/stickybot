@@ -181,45 +181,72 @@ pub fn normalized_url(value: &str) -> Result<String, String> {
     Ok(url.to_string())
 }
 
-/// Legacy firmware wraps only on spaces, including URLs. Insert soft word breaks so the
-/// full destination fits both 135x240 portrait (7 lines) and 240x135 landscape (4 lines).
-/// Widths: existing Inter 10 VLW glyph extent/advance + 1px margin; no transliteration.
-/// Seven <=100px pieces fit portrait, and pairs fit the 220px landscape hint area.
-pub(crate) fn display_hint(hint: &str) -> Result<String, String> {
+// Existing Inter 10 glyph extent/advance + 1px margin; the two marker glyphs are
+// also in the firmware font. Use the firmware's word wrapping, including every space.
+fn hint_pixels(text: &str) -> usize {
     const WIDTH: [u8; 95] = [
         4, 4, 6, 8, 8, 11, 8, 4, 5, 5, 6, 8, 4, 6, 4, 5, 8, 5, 7, 7, 8, 7, 8, 7, 8, 8, 4, 4, 8, 8, 7, 6, 12, 8, 8, 9,
         9, 7, 7, 9, 9, 4, 6, 8, 7, 10, 9, 10, 8, 10, 8, 8, 8, 9, 8, 11, 8, 8, 8, 5, 5, 5, 6, 6, 4, 7, 7, 6, 7, 7, 6, 7,
         7, 4, 4, 7, 4, 10, 7, 6, 7, 7, 5, 6, 5, 7, 7, 9, 7, 7, 7, 6, 4, 6, 8,
     ];
+    text.chars()
+        .map(|c| match c {
+            '·' | '•' => 8,
+            ' '..='~' => usize::from(WIDTH[c as usize - 32]),
+            _ => usize::MAX / 1024,
+        })
+        .sum()
+}
+fn hint_fits(text: &str, width: usize, lines: usize) -> bool {
+    let mut used = 1;
+    let mut line = String::new();
+    for word in text.split(' ') {
+        let trial = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+        if !line.is_empty() && hint_pixels(&trial) > width {
+            used += 1;
+            line = word.to_string();
+        } else {
+            line = trial;
+        }
+        if used > lines || hint_pixels(&line) > width {
+            return false;
+        }
+    }
+    true
+}
+
+/// A visible continuation dot ends each soft-wrapped piece. Actual spaces become bullets;
+/// the legend makes those two meanings explicit, and neither marker can occur in ASCII input.
+/// Reject anything that cannot be shown in full on both existing firmware layouts.
+pub(crate) fn display_hint(hint: &str) -> Result<String, String> {
+    if !hint.bytes().all(|b| (32..=126).contains(&b)) {
+        return Err("The exact destination contains characters the stick cannot display".into());
+    }
     let mut pieces = Vec::new();
     let mut piece = String::new();
-    let mut pixels = 0u16;
-    for byte in hint.bytes() {
-        if !(32..=126).contains(&byte) {
-            return Err("The exact destination contains characters the stick cannot display".into());
-        }
-        let width = u16::from(WIDTH[usize::from(byte - 32)]);
-        if pixels + width > 100 {
+    for c in hint.chars().map(|c| if c == ' ' { '•' } else { c }) {
+        if hint_pixels(&piece) + hint_pixels(&c.to_string()) + hint_pixels("·") > 100 {
+            piece.push('·');
             pieces.push(std::mem::take(&mut piece));
-            pixels = 0;
         }
-        piece.push(char::from(byte));
-        pixels += width;
+        piece.push(c);
     }
     if !piece.is_empty() {
         pieces.push(piece);
     }
-    if pieces.len() > 7 {
+    let shown = format!("· wrap, • space: {}", pieces.join(" "));
+    if !hint_fits(&shown, 115, 7) || !hint_fits(&shown, 220, 4) {
         return Err("The complete destination will not fit on the stick; use a shorter destination".into());
     }
-    Ok(pieces.join(" "))
+    Ok(shown)
 }
 
 /// Preparation cannot run a command. Approval and execution use the same captured action.
 pub struct Prepared {
-    action: commands::Action,
+    action: Option<commands::Action>,
     pub arguments: Value,
     pub hint: String,
+    pub wire_hint: String,
     reply: String,
     shell_output: bool,
 }
@@ -251,9 +278,10 @@ impl Prepared {
             }
             "quick_command" => {
                 let phrase = s("phrase").split_whitespace().collect::<Vec<_>>().join(" ");
-                let (command, slots) = st.commands.find(&phrase).ok_or("no quick command matches that phrase")?;
                 let apps = st.apps.clone();
-                let (action, reply) = tokio::task::spawn_blocking(move || {
+                let commands = st.commands.clone();
+                let (action, reply) = tokio::task::spawn_blocking(move || -> Result<_, String> {
+                    let (command, slots) = commands.find(&phrase).ok_or("no quick command matches that phrase")?;
                     let captured = Arc::new(Mutex::new(None));
                     let save = captured.clone();
                     let recorder: commands::Runner = Arc::new(move |action| {
@@ -261,26 +289,32 @@ impl Prepared {
                         String::new()
                     });
                     let reply = commands::run(&command, &slots, true, &apps, &recorder);
-                    let action = captured.lock().unwrap().take();
-                    (action, reply)
+                    let mut action = captured.lock().unwrap().take();
+                    // Resolve every app on this blocking worker, before the approval. Saved
+                    // default-profile URL schemes/paths retain commands::run's existing behavior.
+                    if let Some(commands::Action::Open(values)) = &mut action
+                        && values.first().is_some_and(|v| v == "-a")
+                    {
+                        values[1] = apps.resolve(&values[1]).ok_or("No installed app matches that name")?;
+                    }
+                    Ok((action, reply))
                 })
                 .await
-                .map_err(|_| "Couldn't resolve the quick command")?;
-                let mut action = action.ok_or("that command doesn't apply here")?;
-                // Capture resolved launch targets too; command settings may change during approval.
-                if let commands::Action::Open(values) = &mut action {
-                    if values.first().is_some_and(|v| v == "-a") {
-                        let app = st.apps.resolve(&values[1]).ok_or("No installed app matches that name")?;
-                        values[1] = app;
-                        if let Some(url) = values.get_mut(2) {
-                            *url = normalized_url(url)?;
-                        }
-                    } else if let Some(url) = values.first_mut() {
-                        *url = normalized_url(url)?;
-                    }
-                }
+                .map_err(|_| "Couldn't resolve the quick command")??;
+                let reply = reply.ok_or("that command doesn't apply here")?;
+                let Some(action) = action else {
+                    // Informational commands have no Mac effect and need no permission prompt.
+                    return Ok(Self {
+                        action: None,
+                        arguments: Value::Null,
+                        hint: String::new(),
+                        wire_hint: String::new(),
+                        reply,
+                        shell_output: false,
+                    });
+                };
                 let shell = matches!(action, commands::Action::Shell(_));
-                (action, reply.unwrap_or_default(), shell)
+                (action, reply, shell)
             }
             _ => return Err("Not a Mac-changing tool".into()),
         };
@@ -295,12 +329,19 @@ impl Prepared {
         if hint.chars().count() > 160 || hint.chars().any(char::is_control) {
             return Err("The destination is too long to confirm safely on the stick".into());
         }
-        display_hint(&hint)?;
-        Ok(Self { action, arguments, hint, reply, shell_output })
+        let wire_hint = display_hint(&hint)?;
+        Ok(Self { action: Some(action), arguments, hint, wire_hint, reply, shell_output })
+    }
+
+    pub fn informational_reply(&self) -> Option<&str> {
+        self.action.is_none().then_some(self.reply.as_str())
     }
 
     pub fn run(self, runner: &commands::Runner) -> String {
-        let output = runner(&self.action);
+        let Some(action) = self.action else {
+            return self.reply;
+        };
+        let output = runner(&action);
         if self.shell_output {
             let short: String = crate::talk::stick_text(output.trim()).chars().take(200).collect();
             if short.is_empty() { "Done.".into() } else { short }
@@ -321,12 +362,30 @@ mod tests {
             "/Applications/Slack.app",
         ] {
             let display = display_hint(hint).unwrap();
-            assert_eq!(display.replace(' ', ""), hint);
+            assert_eq!(display.strip_prefix("· wrap, • space: ").unwrap().replace("· ", "").replace('•', " "), hint);
             assert!(display.split(' ').all(|word| word.len() <= 25));
         }
         assert!(display_hint(&"W".repeat(100)).is_err());
         assert!(display_hint("/Applications/日本.app").is_err());
         assert!(display_hint("https://example.com/\u{202e}moc.live").is_err());
+    }
+
+    #[test]
+    fn prompt_wraps_never_masquerade_as_spaces_and_both_layouts_fit() {
+        for original in [
+            "rm -rf ~/tmpdir",
+            "  rm  -rf  ~/a-very-long-directory-name  ",
+            "https://example.com/some-long-path?query=a%20b",
+        ] {
+            let shown = display_hint(original).unwrap();
+            let body = shown.strip_prefix("· wrap, • space: ").unwrap();
+            assert_eq!(body.replace("· ", "").replace('•', " "), original);
+            assert_eq!(body.matches('•').count(), original.matches(' ').count());
+            assert!(hint_fits(&shown, 115, 7) && hint_fits(&shown, 220, 4));
+        }
+        // Existing spaces consume width too, including at word boundaries and in the legend.
+        assert!(!hint_fits("a a", 17, 1));
+        assert!(display_hint(&" ".repeat(100)).is_err());
     }
 
     #[tokio::test]

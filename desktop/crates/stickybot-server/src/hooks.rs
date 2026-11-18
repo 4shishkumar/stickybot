@@ -243,18 +243,18 @@ pub fn permission(req: &Value, home: &Path, port: u16, token: &str) -> Option<St
         cwd.file_name().map(|n| n.to_string_lossy().to_string()).filter(|n| !n.is_empty()).unwrap_or("terminal".into())
     };
     let tool = req.get("tool_name").and_then(Value::as_str).unwrap_or("?");
-    // Our server brokers its own tools. Keep this hook for Claude's built-in tools.
-    if tool.strip_prefix("mcp__stick__").is_some_and(|name| crate::mcp::tool(name).is_some()) {
-        return Some(
-            json!({"hookSpecificOutput":{"hookEventName":"PermissionRequest",
-            "decision":{"behavior":"allow"}}})
-            .to_string(),
-        );
-    }
     let hint: String = describe(tool, req.get("tool_input").unwrap_or(&json!({}))).chars().take(300).collect();
     let body = json!({"tool": tool, "hint": hint, "from": origin, "wait": WAIT_S});
     let answer = post(port, token, "/api/permission", &body, std::time::Duration::from_secs(WAIT_S + 5))?;
-    let d = answer.get("decision").and_then(Value::as_str)?;
+    permission_decision(tool, &answer)
+}
+
+fn permission_decision(tool: &str, answer: &Value) -> Option<String> {
+    let brokered = tool.strip_prefix("mcp__stick__").is_some_and(|name| crate::mcp::tool(name).is_some());
+    let d = match answer.get("decision").and_then(Value::as_str)? {
+        "broker" if brokered && answer["broker"] == "exact-stick-approval-v1" => "allow",
+        decision => decision,
+    };
     if d != "allow" && d != "deny" {
         return None;
     }
@@ -359,16 +359,20 @@ mod tests {
     // --- test_installer.py's merge cases ---
 
     #[test]
-    fn brokered_tools_skip_the_hook_but_unknown_tools_do_not() {
-        let home = Path::new("/unused");
+    fn broker_bypass_requires_an_explicit_server_capability() {
+        let capable = json!({"decision":"broker","broker":"exact-stick-approval-v1"});
         for tool in crate::mcp::tools() {
-            let req = json!({"tool_name":format!("mcp__stick__{}", tool["name"].as_str().unwrap())});
-            let reply: Value = serde_json::from_str(&permission(&req, home, 0, "").unwrap()).unwrap();
+            let name = format!("mcp__stick__{}", tool["name"].as_str().unwrap());
+            let reply: Value = serde_json::from_str(&permission_decision(&name, &capable).unwrap()).unwrap();
             assert_eq!(reply["hookSpecificOutput"]["decision"]["behavior"], "allow");
+            for older in [json!({}), json!({"decision":null}), json!({"decision":"broker"})] {
+                assert!(permission_decision(&name, &older).is_none());
+            }
+            // An older server's explicit user denial is honored, not auto-allowed.
+            assert!(permission_decision(&name, &json!({"decision":"deny"})).unwrap().contains("deny"));
         }
-        // With no server, built-ins retain Claude's own fallback instead of being auto-allowed.
         for name in ["Bash", "Write", "mcp__stick__unknown", "mcp__other__open_url"] {
-            assert!(permission(&json!({"tool_name":name}), home, 0, "").is_none());
+            assert!(permission_decision(name, &capable).is_none());
         }
     }
 

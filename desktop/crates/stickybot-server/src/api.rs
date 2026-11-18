@@ -929,6 +929,14 @@ async fn new_chat(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
 /// `{"tool","hint","from","wait"}` -> `{"decision": "allow"|"deny"|null}`.
 async fn permission(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<Value> {
     let b = body_obj(&body);
+    if b.get("tool")
+        .and_then(Value::as_str)
+        .and_then(|t| t.strip_prefix("mcp__stick__"))
+        .is_some_and(|t| crate::mcp::tool(t).is_some())
+    {
+        // A capability response, not a grant. The authenticated MCP call must still pass the broker.
+        return axum::Json(json!({"decision":"broker","broker":"exact-stick-approval-v1"}));
+    }
     let s = |k: &str, d: &str| b.get(k).and_then(Value::as_str).unwrap_or(d).to_string();
     let wait = b.get("wait").and_then(Value::as_f64).unwrap_or(30.0).clamp(0.0, 120.0);
     let d = crate::approvals::ask_permission(
@@ -1151,6 +1159,20 @@ mod tests {
         let v =
             serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into()));
         (status, v, ctype)
+    }
+
+    #[tokio::test]
+    async fn permission_hook_capability_is_only_for_known_broker_tools() {
+        let (app, st, _) = app("permission-capability", false).await;
+        let (_, answer, _) =
+            call(&app, req("POST", "/api/permission", Some(json!({"tool":"mcp__stick__open_url"})), Some(&st.token)))
+                .await;
+        assert_eq!(answer, json!({"decision":"broker","broker":"exact-stick-approval-v1"}));
+        assert!(!st.approvals.pending());
+        let (_, answer, _) =
+            call(&app, req("POST", "/api/permission", Some(json!({"tool":"Bash","wait":0})), Some(&st.token))).await;
+        assert_eq!(answer["decision"], Value::Null);
+        assert!(answer.get("broker").is_none());
     }
 
     #[tokio::test]
