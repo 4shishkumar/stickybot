@@ -319,6 +319,7 @@ static bool speakerUp() {
 bool on() { return on_; }
 
 void setOn(bool on) {
+  if (on == on_) return;
   settings::saveSoundOn(on);
   on_ = on;
   if (on) return;

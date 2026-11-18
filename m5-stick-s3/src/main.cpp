@@ -506,6 +506,7 @@ static void onMenu(menu::Action a) {
       break;
     case menu::Action::VOLUME:  // takes effect (and plays a preview) right away
       settings::saveSoundVolume(menu::draft().volume);
+      if (menu::draft().sound && !sound::on()) sound::setOn(true);  // Sounds ON in the draft: hear the level
       sound::play(sound::Cue::TEST);
       dirty = true;
       return;
@@ -584,7 +585,7 @@ static void openSettings() {
   menu::open({settings::combo(), hid::slot(), settings::standbyMin(), settings::brightnessPct(),
               settings::enterDelayMs(),
               settings::liftWakes(), settings::faceDownSleeps(), settings::shakeEscapes(),
-              settings::autoRotate(), settings::landscape(), settings::clock24(), settings::devMode(), settings::soundOn(), settings::soundVolume(),
+              settings::autoRotate(), settings::landscape(), settings::clock24(), settings::devMode(), sound::on(), settings::soundVolume(),
               settings::wirelessMic()},
              hid::state() == hid::Bt::OFF);
   mode = Mode::MENU;
@@ -762,7 +763,7 @@ static void pollSerial() {
           if (!sound::play(name)) Serial.printf("unknown sound '%s'\n", name.c_str());
           else Serial.printf(sound::on() ? "playing %s\n" : "%s: muted (sound off)\n", name.c_str());
         } else sound::play(sound::Cue::TEST);
-        Serial.printf("Sounds %s, volume %u\n", settings::soundOn() ? "on" : "off", settings::soundVolume());
+        Serial.printf("Sounds %s, volume %u\n", sound::on() ? "on" : "off", settings::soundVolume());
       }
       else protocol::serialLine(line);
       line = "";
@@ -1118,8 +1119,8 @@ void loop() {
       const events::Event& e = events::current();
       buddy::eventShown(e.id);
       ui::wake(e.level == events::Level::HEADSUP ? 61000 : 8000);
-      if (sound::on())  // its own sound; one this firmware doesn't have: the level's default
-        event_sound::play(e.sound.c_str(), events::defaultSound(e.level),
+      // its own sound; one this firmware doesn't have: the level's default (silent with sound off)
+      event_sound::play(e.sound.c_str(), events::defaultSound(e.level),
                           [](const char* n) { return sound::play(String(n)); });
       Log.event(diagnostics::Event::Event);
       lastFrame = 0;

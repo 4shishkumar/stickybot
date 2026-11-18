@@ -41,7 +41,7 @@ uint8_t standbyMin();                 // minutes idle on battery before standby,
 void    saveStandbyMin(uint8_t m);
 
 bool    soundOn();                    // sound cues on the speaker
-void    saveSoundOn(bool on);
+void    saveSoundOn(bool on);       // only sound::setOn() calls this (it stops playback)
 uint8_t soundVolume();                // 0-255
 void    saveSoundVolume(uint8_t v);
 
