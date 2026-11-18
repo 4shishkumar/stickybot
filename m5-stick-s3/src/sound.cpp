@@ -140,8 +140,10 @@ void clipPacket(const uint8_t* data, size_t len) {
 
 static void decodeFrame(const uint8_t* f, size_t len) { clipAsm.add(f, len); }
 
+static bool on_ = true;  // Sound on (settings::soundOn(), kept here; changed only by setOn)
+
 static void startBuiltin(const BuiltinClip* c) {
-  if (!settings::soundOn()) return;
+  if (!on_) return;
   clipBegin(c->samples, 16000);
   for (size_t i = 0; i < c->bytes;) {
     size_t len = c->data[i++];
@@ -154,12 +156,16 @@ static void startBuiltin(const BuiltinClip* c) {
 // Handles queued packets in order: start / ADPCM frame / end (logic/clip.cpp).
 struct ClipQueueSink : clip::Sink {
   void begin(uint32_t samples, uint16_t rate) override {
+    if (!on_) {  // muted: drop the clip without allocating or speeding up the link
+      cancelClip();
+      return;
+    }
     buddy::fastLink();
     clipBegin(samples, rate);
   }
   void frame(const uint8_t* f, size_t len) override { decodeFrame(f, len); }
   void end() override {
-    if (!clipBuf || !settings::soundOn()) return;  // muted: the clip is dropped
+    if (!clipBuf) return;
     clipReady = true;
     Log.event(diagnostics::Event::Sound);
     Log.count(diagnostics::Counter::ClipFrames, clipAsm.frames);
@@ -186,6 +192,7 @@ static void amp(bool on) { board::speakerAmp(on); }  // the speaker amp's power
 
 void begin() {
   amp(false);
+  on_ = settings::soundOn();
   prefs.begin("sounds", false);
   for (size_t i = 0; i < EVENT_COUNT; i++) choice[i] = prefs.getString(EVENTS[i].name, EVENTS[i].def);
 }
@@ -202,7 +209,7 @@ void cancelClip() {
 }
 
 static void start(const Tune* t) {
-  if (!t || !settings::soundOn()) return;  // Sound off mutes everything: cues, games, the Mac's sounds
+  if (!t || !on_) return;  // Sound off mutes everything: cues, games, the Mac's sounds
   cur = t;
   step = 0;
   stepEnd = 0;
@@ -220,7 +227,7 @@ static bool startNamed(const String& name) {
 }
 
 void playListen() {
-  if (!settings::soundOn()) return;  // no cue: don't interrupt the mic at all
+  if (!on_) return;  // no cue: don't interrupt the mic at all
   mic::suspend(true);
   resumeMic = true;
   play(Cue::LISTEN);
@@ -231,7 +238,6 @@ void playListen() {
 }
 
 void play(Cue c) {
-  if (!settings::soundOn()) return;
   for (size_t i = 0; i < EVENT_COUNT; i++)
     if (EVENTS[i].cue == c) {
       startNamed(choice[i]);
@@ -242,16 +248,16 @@ void play(Cue c) {
 bool play(const String& name) {
   int e = eventIndex(name);
   if (e >= 0) {
-    startNamed(choice[e]);  // asked for by name (still silent with sound off)
+    startNamed(choice[e]);  // asked for by name
     return true;
   }
   return startNamed(name);
 }
 
-static void speakerOff();
+static void speakerOff(bool force = false);
 
 void effect(const char* name) {
-  if (!settings::soundOn() || mic::live()) return;
+  if (!on_ || mic::live()) return;
   for (auto& t : GAME_TUNES)
     if (!strcmp(name, t.name)) {
       if (cur) M5.Speaker.stop();
@@ -280,18 +286,19 @@ void describe(JsonObject out) {
   JsonObject map = out["map"].to<JsonObject>();
   for (size_t i = 0; i < EVENT_COUNT; i++)
     if (EVENTS[i].cue != Cue::TEST) map[EVENTS[i].name] = choice[i];
-  out["on"] = settings::soundOn();
+  out["on"] = on_;
   out["volume"] = settings::soundVolume();
 }
 
-static void speakerOff() {
+// force: power down even during a game (keep_)
+static void speakerOff(bool force) {
   if (resumeMic) {  // the "speak now" cue is done: give the chip back to the mic
     resumeMic = false;
     mic::suspend(false);
   }
   if (!speakerOn) return;
   M5.Speaker.stop();
-  if (keep_) return;  // a game: stays up for the next effect
+  if (keep_ && !force) return;  // a game: stays up for the next effect
   M5.Speaker.end();
   amp(false);  // the amp draws power even when silent
   speakerOn = false;
@@ -309,26 +316,20 @@ static bool speakerUp() {
   return speakerOn;
 }
 
-// Sound turned off while something plays (a game, a clip): stop it now.
-static void silence() {
-  cur = nullptr;
+bool on() { return on_; }
+
+void setOn(bool on) {
+  settings::saveSoundOn(on);
+  on_ = on;
+  if (on) return;
+  cur = nullptr;  // stop whatever plays now: a cue, a game effect, a clip
   pending = false;
-  clipReady = false;
-  if (clipPlaying) {
-    clipPlaying = false;
-    M5.Speaker.stop();
-    free(clipBuf);
-    clipBuf = nullptr;
-  }
-  const bool keep = keep_;  // a game keeps the speaker up: power it down anyway while muted
-  keep_ = false;
-  speakerOff();
-  keep_ = keep;
+  cancelClip();
+  speakerOff(true);
 }
 
 void loop() {
   decodeClipFrames();
-  if (busy() && !settings::soundOn()) silence();
   if (clipPlaying) {
     if (millis() < clipEndsAt || M5.Speaker.isPlaying()) return;
     clipPlaying = false;

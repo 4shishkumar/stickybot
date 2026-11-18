@@ -48,7 +48,7 @@ static launcherui::QuickView quickView() {
   v.sel = qsel;
   v.brightness = settings::brightnessPct();
   v.volume = settings::soundVolume();
-  v.sound = settings::soundOn();
+  v.sound = sound::on();
   v.wmic = settings::wirelessMic();
   v.clock24 = settings::clock24();
   v.rotate = settings::autoRotate();
@@ -110,12 +110,12 @@ static Action quickChange() {
     }
     case Quick::VOLUME:  // turning it up unmutes; a preview at the new level
       settings::saveSoundVolume(nextVolume(settings::soundVolume()));
-      if (!settings::soundOn()) settings::saveSoundOn(true);
+      if (!sound::on()) sound::setOn(true);
       sound::play(sound::Cue::TEST);
       break;
     case Quick::SOUND:
-      settings::saveSoundOn(!settings::soundOn());
-      if (settings::soundOn()) sound::play(sound::Cue::TEST);
+      sound::setOn(!sound::on());
+      sound::play(sound::Cue::TEST);
       break;
     case Quick::WMIC: settings::saveWirelessMic(!settings::wirelessMic()); break;
     case Quick::CLOCK24: settings::saveClock24(!settings::clock24()); break;

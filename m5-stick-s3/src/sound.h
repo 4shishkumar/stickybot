@@ -8,8 +8,8 @@
 // the microphone, so a cue waits until the mic is off (dropped after 2.5 s).
 namespace sound {
 
-// Sound off (settings::soundOn() false) mutes every sound: cues, game effects, tunes and clips
-// the Mac sends. Turning it off stops whatever is playing.
+// Sound off mutes every sound: cues, game effects, tunes and clips the Mac sends.
+// Change it only through setOn() (saved), which stops whatever is playing when turned off.
 
 enum class Cue {
   SENT,       // B released: request on its way
@@ -25,9 +25,11 @@ enum class Cue {
 };
 
 void begin();
+bool on();
+void setOn(bool on);
 void loop();
 void play(Cue c);                                // nothing with sound off
-bool play(const String& name);                   // an event ("answer") or a tune ("ping-3")
+bool play(const String& name);                   // an event ("answer") or a tune ("ping-3"); true if known
 bool setTune(const String& event, const String& tune);  // tune "off" = silent; saved
 void describe(JsonObject out);                   // {tunes:[...], map:{event: tune}, on, volume}
 bool busy();
