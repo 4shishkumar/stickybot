@@ -89,15 +89,13 @@ impl Llama {
             read_only,
             loopback_ports: vec![],
             listen_ports: vec![port],
+            app_port: None,
         };
-        sandbox::self_test(&policy).map_err(|e| format!("sandbox check failed, not starting the model: {e}"))?;
-        let mut cmd = sandbox::confine(server, &args(model, port, &key), &policy)?;
-        cmd.env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("HOME", scratch.path())
-            .env("TMPDIR", scratch.path())
-            .current_dir(scratch.path())
-            .stdin(std::process::Stdio::null())
+        // confine() runs the sandbox self-test first and refuses to start anything if it fails;
+        // the app owns the TCP port and relays it to a Unix socket in scratch (sandbox/listener.rs)
+        let mut cmd = sandbox::confine(server, &args(model, port, &key), &policy)
+            .map_err(|e| format!("sandbox check failed, not starting the model: {e}"))?;
+        cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::fs::File::create(scratch.path().join("llama.log")).map_err(|e| e.to_string())?)
             .kill_on_drop(true);

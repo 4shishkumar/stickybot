@@ -524,9 +524,7 @@ pub async fn call(st: &Arc<AppState>, name: &str, args: &Value, ctx: &Context) -
         return ("Tool is not allowed by this caller's profile or turn".into(), true, None);
     }
     let origin = st.clone();
-    if ctx.caller.brain()
-        && args.get("device_id").and_then(Value::as_str).is_some_and(|id| id != st.device_id)
-    {
+    if ctx.caller.brain() && args.get("device_id").and_then(Value::as_str).is_some_and(|id| id != st.device_id) {
         return ("The voice credential belongs to a different device".into(), true, None);
     }
     if args.get("device_id").is_some_and(|id| !id.is_string()) {

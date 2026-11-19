@@ -1,6 +1,7 @@
 //! Selectable brains (a port of `brains.py`): who answers a request that isn't a quick command
 //! (config `brain`): "claude" (Claude Code, the user's subscription; `brain.rs`) or "openrouter"
-//! (any model on OpenRouter with the user's own key; `openrouter.rs`).
+//! (any model on OpenRouter with the user's own key; `openrouter.rs`) or "local" (a read-only
+//! assistant that runs on this Mac: Goose + a local model; `local/`).
 //!
 //! Each request goes to the brain picked in Settings, so a change applies from the next request on,
 //! without a restart. Switching away forgets the old one's conversation (Claude's session process
@@ -13,11 +14,12 @@ use serde_json::{Map, Value, json};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::mpsc;
 
-pub const NAMES: &[&str] = &["claude", "openrouter"];
+pub const NAMES: &[&str] = &["claude", "openrouter", "local"];
 
 pub fn selected(cfg: &Map<String, Value>) -> &'static str {
     match cfg.get("brain").and_then(Value::as_str) {
         Some("openrouter") => "openrouter",
+        Some("local") => "local",
         _ => "claude",
     }
 }
@@ -25,6 +27,7 @@ pub fn selected(cfg: &Map<String, Value>) -> &'static str {
 pub struct Brains {
     claude: Arc<dyn Brain>,
     openrouter: Arc<dyn Brain>,
+    local: Arc<dyn Brain>,
     st: Weak<AppState>,
     name: Mutex<&'static str>,
     /// the brain of the last request (its `cancelled` flag)
@@ -32,9 +35,9 @@ pub struct Brains {
 }
 
 impl Brains {
-    pub fn new(claude: Arc<dyn Brain>, openrouter: Arc<dyn Brain>, st: Weak<AppState>) -> Self {
+    pub fn new(claude: Arc<dyn Brain>, openrouter: Arc<dyn Brain>, local: Arc<dyn Brain>, st: Weak<AppState>) -> Self {
         let name = st.upgrade().map(|s| selected(&s.cfg.lock().unwrap())).unwrap_or("claude");
-        Self { last: Mutex::new(claude.clone()), claude, openrouter, st, name: Mutex::new(name) }
+        Self { last: Mutex::new(claude.clone()), claude, openrouter, local, st, name: Mutex::new(name) }
     }
 
     pub fn name(&self) -> &'static str {
@@ -42,7 +45,11 @@ impl Brains {
     }
 
     fn by_name(&self, n: &str) -> Arc<dyn Brain> {
-        if n == "openrouter" { self.openrouter.clone() } else { self.claude.clone() }
+        match n {
+            "openrouter" => self.openrouter.clone(),
+            "local" => self.local.clone(),
+            _ => self.claude.clone(),
+        }
     }
 
     fn current(&self) -> Arc<dyn Brain> {
@@ -52,7 +59,7 @@ impl Brains {
 
 impl Brain for Brains {
     fn busy(&self) -> bool {
-        self.claude.busy() || self.openrouter.busy()
+        self.claude.busy() || self.openrouter.busy() || self.local.busy()
     }
 
     fn ask(&self, text: String, events: mpsc::UnboundedSender<BrainEvent>) -> BoxFuture<'static, (bool, String)> {
@@ -68,6 +75,7 @@ impl Brain for Brains {
     fn cancel(&self) {
         self.claude.cancel();
         self.openrouter.cancel();
+        self.local.cancel();
     }
 
     fn cancelled(&self) -> bool {
@@ -77,6 +85,7 @@ impl Brain for Brains {
     fn forget(&self) {
         self.claude.forget();
         self.openrouter.forget();
+        self.local.forget();
     }
 
     fn prewarm(&self) {
@@ -155,7 +164,12 @@ mod tests {
     async fn switching_brains_without_a_restart() {
         let (t, orb_brain, fake) = orb("brains-switch").await;
         let claude = Arc::new(FakeClaude::default());
-        let sw = Arc::new(Brains::new(claude.clone(), Arc::new(orb_brain.clone()), Arc::downgrade(&t.st)));
+        let sw = Arc::new(Brains::new(
+            claude.clone(),
+            Arc::new(orb_brain.clone()),
+            Arc::new(crate::talk::NoBrain),
+            Arc::downgrade(&t.st),
+        ));
         t.st.set_brain(sw.clone());
         assert_eq!((sw.name(), sw.status()["brain"].as_str()), ("claude", Some("claude")));
         assert_eq!(ask(sw.as_ref(), "hi").await, (true, "Claude says hi.".to_string()));
@@ -178,7 +192,12 @@ mod tests {
     async fn voice_requests_and_new_chat_go_through_openrouter() {
         let (t, orb_brain, fake) = orb("brains-voice").await;
         let claude = Arc::new(FakeClaude::default());
-        t.st.set_brain(Arc::new(Brains::new(claude, Arc::new(orb_brain.clone()), Arc::downgrade(&t.st))));
+        t.st.set_brain(Arc::new(Brains::new(
+            claude,
+            Arc::new(orb_brain.clone()),
+            Arc::new(crate::talk::NoBrain),
+            Arc::downgrade(&t.st),
+        )));
         set(&t.st, "brain", json!("openrouter"));
         fake.reply(answer(&["It's Paris."], 0.0));
         crate::talk::handle_text(t.st.clone(), "capital of France?".into(), "typed").await;

@@ -256,7 +256,10 @@ impl Runtime {
         }
         file.flush().map_err(|e| e.to_string())?;
         if have != a.size {
-            return Err(format!("{}: download stopped early ({have} of {} bytes); try again to resume", a.label, a.size));
+            return Err(format!(
+                "{}: download stopped early ({have} of {} bytes); try again to resume",
+                a.label, a.size
+            ));
         }
         Ok(())
     }

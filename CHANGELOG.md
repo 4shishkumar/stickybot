@@ -13,6 +13,11 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 ## [Unreleased]
 
 ### Added
+- **Local brain (private, read-only).** Settings → Brain → Local runs a voice assistant entirely on
+  this Mac: Goose drives Qwen3.5 9B on llama.cpp, with a one-time pinned, checksum-verified
+  download (an existing LM Studio copy of the model is reused). Both run in the sandbox; Goose
+  reaches only a relay that passes model requests only when the tools offered are exactly the
+  read-only assistant tools, and the session stops otherwise. Nothing about a conversation is kept.
 - The assistant can check Mac and network status and read selected folders, with bounded file and Git tools and a Seatbelt launcher for local agents. Folder access excludes hidden paths, secrets and `~/Library`. The app refuses grants to the home directory, its ancestors and system roots.
 - Optional assistant tool profiles hide and refuse commands, infrared controls and other mutating
   tools. App and link launches require a fresh approval on the stick, showing the actual destination.
