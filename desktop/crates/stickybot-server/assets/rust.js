@@ -15,6 +15,24 @@ if (window.stickyAddPage) {
     '<path d="M9 3v4M15 3v4"/><path d="M6 7h12v4a6 6 0 0 1-12 0z"/><path d="M12 17v4"/>', "feedback");
 }
 
+function assistantCard(folders) {
+  const input = h("input", {type: "text", placeholder: "/Users/me/Documents", "aria-label": "Folder path"});
+  const list = h("ul");
+  async function change(action, path) {
+    const result = await post("/api/assistant/folders", {action, path});
+    if (result.error) return toast(result.error, "err");
+    render(result.folders);
+    if (action === "add") input.value = "";
+  }
+  function render(paths) {
+    list.replaceChildren(...paths.map(path => h("li", null, path, " ",
+      h("button", {type: "button", onclick: () => change("remove", path)}, "Remove"))));
+  }
+  render(folders);
+  return card("Assistant", h("label", null, "Folders the assistant can read"), list, input,
+    h("button", {type: "button", onclick: () => change("add", input.value)}, "Add folder"));
+}
+
 function dockCard(cfg) {
   const box = h("input", {type: "checkbox", id: "rsDock", checked: !!cfg.dock_always, onchange: async () => {
     const r = await put("/api/config", {dock_always: box.checked});
@@ -101,8 +119,9 @@ async function maybeAdd() {
   if (document.getElementById("rsImport") || !page.querySelector(".card")) return;
   busy = true;
   try {
-    const [info, login, sw, cfg] = await Promise.all([get("/api/import"), get("/api/login-item"), get("/api/switch-over"), get("/api/config")]);
+    const [info, login, sw, cfg, assistant] = await Promise.all([get("/api/import"), get("/api/login-item"), get("/api/switch-over"), get("/api/config"), get("/api/assistant/folders")]);
     if (!info.error && !document.getElementById("rsImport") && title.textContent === "Settings") {
+      if (assistant.folders) page.appendChild(assistantCard(assistant.folders));
       if (!login.error) {
         const l = loginCard(login);
         l.id = "rsLogin-card";

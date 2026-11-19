@@ -7,6 +7,7 @@
 pub mod api;
 pub mod appctl;
 pub mod approvals;
+mod assistant;
 pub mod brain;
 pub mod brains;
 pub mod clips;
@@ -36,6 +37,7 @@ pub mod openrouter;
 pub mod pet;
 pub mod python_agent;
 pub mod releases;
+pub mod sandbox;
 pub mod selfupdate;
 pub mod setup;
 pub mod speak;
@@ -636,6 +638,9 @@ impl AppState {
 
     /// Settings changed (PUT /api/config): save, tell the pages, follow a new stick.
     pub fn update_config(&self, changes: Map<String, Value>) -> Result<Map<String, Value>, String> {
+        if changes.contains_key("assistant_folders") {
+            return Err("Use Assistant folder settings".into());
+        }
         if let Some(root) = self.owner.upgrade() {
             return self.devices.update_session(&root, self, changes);
         }
