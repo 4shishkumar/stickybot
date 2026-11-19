@@ -13,6 +13,7 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 ## [Unreleased]
 
 ### Added
+- The assistant can check Mac and network status and read selected folders, with secret exclusions, bounded file and Git tools, and a Seatbelt launcher for local agents.
 - Optional assistant tool profiles hide and refuse commands, infrared controls and other mutating
   tools. App and link launches require a fresh approval on the stick, showing the actual destination.
 - **Several sticks, several Macs.** StickyBot.app's Devices page adds, selects, pauses and removes

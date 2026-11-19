@@ -160,6 +160,7 @@ pub fn tools() -> &'static [Value] {
                 "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}},
                 "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true}}),
         ];
+        tools.extend(crate::assistant::schemas());
         for tool in &mut tools { tool["inputSchema"]["properties"]["device_id"] = text(128,"Optional configured device ID; omitted uses the saved default."); }
         tools
     })
@@ -534,6 +535,25 @@ pub async fn call(st: &Arc<AppState>, name: &str, args: &Value, ctx: &Context) -
         obj.remove("device_id");
     }
     let args = &args;
+    // Keep file paths, queries, and results out of the activity feed and persistent logs,
+    // including on invalid arguments or a concurrent profile change.
+    if crate::assistant::TOOLS.contains(&name) {
+        let parsed = match check_args(&tool(name).unwrap()["inputSchema"], args) {
+            Ok(a) => a,
+            Err(e) => return (e, true, None),
+        };
+        return match tokio::time::timeout(Duration::from_secs(10), crate::assistant::run(st, name, &parsed)).await {
+            Ok(Ok((text, structured)))
+                if ctx.active()
+                    && tool_policy::allowed(st, ctx.caller, name)
+                    && tool_policy::allowed(&origin, ctx.caller, name) =>
+            {
+                (text, false, structured)
+            }
+            Ok(Err(e)) => (e, true, None),
+            _ => ("not readable".into(), true, None),
+        };
+    }
     let started = Instant::now();
     let out = match tool(name) {
         None => Err(format!("unknown tool: {name}")),
@@ -1371,7 +1391,13 @@ mod tests {
                 "ir_send",
                 "calendar_next",
                 "calendar_today",
-                "calendar_join"
+                "calendar_join",
+                "system_status",
+                "network_status",
+                "files_search",
+                "files_info",
+                "files_read_text",
+                "git_status"
             ]
         );
         assert_eq!(allowed_tool_names()[0], "mcp__stick__notify");
@@ -1801,7 +1827,10 @@ mod tests {
     async fn assistant_catalog_and_calls_enforce_server_profile_despite_spoofed_headers() {
         let mut c = C::new("mcp-assistant").await;
         let (_, legacy) = c.rpc("tools/list", json!({}), &[], false).await;
-        assert_eq!(legacy["result"]["tools"], json!(tools()));
+        assert_eq!(
+            legacy["result"]["tools"],
+            json!(tools().iter().filter(|t| Profile::Default.allows(t["name"].as_str().unwrap())).collect::<Vec<_>>())
+        );
         c.t.st.cfg.lock().unwrap().insert("tool_profiles".into(), json!({"mcp":"assistant","claude":"default"}));
         let headers = [("x-stick-client", "voice"), ("x-stick-profile", "default")];
         let (_, listed) = c.rpc("tools/list", json!({}), &headers, false).await;
@@ -1817,7 +1846,13 @@ mod tests {
                 "ir_list",
                 "calendar_next",
                 "calendar_today",
-                "calendar_join"
+                "calendar_join",
+                "system_status",
+                "network_status",
+                "files_search",
+                "files_info",
+                "files_read_text",
+                "git_status"
             ]
         );
         for tool in ["quick_command", "ir_send", "notify", "speak", "pin_home", "progress", "celebrate"] {

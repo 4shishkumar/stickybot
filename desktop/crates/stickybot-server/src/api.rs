@@ -164,6 +164,44 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
+async fn assistant_folders(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    let root = st.devices.root().unwrap_or(st);
+    let paths = root.cfg.lock().unwrap().get("assistant_folders").cloned().unwrap_or(json!([]));
+    axum::Json(json!({"folders":paths}))
+}
+
+async fn change_assistant_folder(State(st): State<Arc<AppState>>, axum::Json(body): axum::Json<Value>) -> Response {
+    let root = st.devices.root().unwrap_or(st);
+    let Some(path) = body["path"].as_str().filter(|s| s.len() <= 4096) else {
+        return err(StatusCode::BAD_REQUEST, "path required");
+    };
+    let mut cfg = root.cfg.lock().unwrap();
+    let mut folders = cfg.get("assistant_folders").and_then(Value::as_array).cloned().unwrap_or_default();
+    match body["action"].as_str() {
+        Some("add") => {
+            let Ok(path) = crate::assistant::folder(path, &root.paths.home) else {
+                return err(StatusCode::BAD_REQUEST, "not readable");
+            };
+            let p = json!(path);
+            if !folders.contains(&p) {
+                if folders.len() >= 32 {
+                    return err(StatusCode::BAD_REQUEST, "folder limit reached");
+                }
+                folders.push(p)
+            }
+        }
+        Some("remove") => folders.retain(|v| v != path),
+        _ => return err(StatusCode::BAD_REQUEST, "expected add or remove"),
+    }
+    let mut next = cfg.clone();
+    next.insert("assistant_folders".into(), json!(folders));
+    if crate::config::save(&root.paths, &next).is_err() {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "could not save folders");
+    }
+    *cfg = next;
+    axum::Json(json!({"folders":folders})).into_response()
+}
+
 async fn device_list(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
     axum::Json(st.devices.describe(&st))
 }
@@ -254,6 +292,7 @@ fn session_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(page))
         .route("/static/{*path}", get(static_file))
+        .route("/api/assistant/folders", get(assistant_folders).post(change_assistant_folder))
         .route("/api/status", get(status))
         .route("/api/hosts/select", post(hosts_select))
         .route("/api/events", get(events))
@@ -1164,6 +1203,26 @@ mod tests {
         let v =
             serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into()));
         (status, v, ctype)
+    }
+
+    #[tokio::test]
+    async fn assistant_folder_settings_persist_and_revoke() {
+        let (app, st, _) = app("assistant-folders", false).await;
+        let uri = "/api/assistant/folders";
+        let folder = std::env::temp_dir().join(crate::config::new_token());
+        std::fs::create_dir(&folder).unwrap();
+        let grant = json!({"action":"add","path":folder.join(".")});
+        assert_eq!(call(&app, req("POST", uri, Some(grant.clone()), None)).await.0, StatusCode::FORBIDDEN);
+        let (_, result, _) = call(&app, req("POST", uri, Some(grant), Some(&st.token))).await;
+        let canonical = folder.canonicalize().unwrap();
+        assert_eq!(result["folders"], json!([canonical]));
+        assert_eq!(crate::config::load(&st.paths)["assistant_folders"], json!([canonical]));
+        assert_eq!(call(&app, req("GET", uri, None, None)).await.1["folders"], json!([canonical]));
+        std::fs::remove_dir(&folder).unwrap();
+        let (_, result, _) =
+            call(&app, req("POST", uri, Some(json!({"action":"remove","path":canonical})), Some(&st.token))).await;
+        assert_eq!(result["folders"], json!([]));
+        assert_eq!(crate::config::load(&st.paths)["assistant_folders"], json!([]));
     }
 
     #[tokio::test]

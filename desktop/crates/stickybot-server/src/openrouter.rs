@@ -1061,7 +1061,10 @@ pub(crate) mod tests {
             body["messages"].as_array().unwrap().last().unwrap(),
             &json!({"role": "user", "content": "what's the capital of France?"})
         );
-        assert_eq!(body["tools"].as_array().unwrap().len(), crate::mcp::tools().len());
+        assert_eq!(
+            body["tools"].as_array().unwrap().len(),
+            crate::mcp::openai_tools_for(crate::tool_policy::Profile::Default).len()
+        );
         let last = b.last();
         assert!(
             last["ok"] == true

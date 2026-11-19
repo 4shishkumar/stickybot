@@ -260,6 +260,36 @@ existing cloud configuration and administrator APIs are not a filesystem/network
 Folder allowlists, secret exclusions, sandboxing and a local harness remain later phases.
 Launching an explicitly approved app or URL can itself cause that app to write or communicate.
 
+### Read-only Mac tools
+
+In Settings → Assistant, add the absolute paths of folders the assistant can read. Removing
+a folder revokes access. Grants are Mac-wide and start empty. The settings API uses
+`GET /api/assistant/folders` and authenticated `POST /api/assistant/folders` with
+`{"action":"add","path":"/absolute/folder"}` or `"action":"remove"`.
+
+The assistant profile adds `system_status`, `network_status`, `files_search`, `files_info`,
+`files_read_text`, and `git_status`. Spotlight returns up to 20 matches. Text reads accept
+UTF-8 files up to 4 MiB, return at most 8,000 characters, and label the result as file data.
+PDF extraction is deferred. Git status reads a local repository root with a real `.git` directory.
+Online and VPN status reflect local interface configuration. The tools check folder grants and
+secret exclusions at execution and keep request arguments and results out of the activity log.
+
+`sandbox::confine` takes an absolute executable, arguments, and a `Policy` with an existing private
+scratch directory, read-only runtime paths, outbound ports and listener ports. It runs the Seatbelt
+probes before returning a command. For llama-server, set one `listen_ports` entry and call from
+a Tokio runtime. The app listens on exactly `127.0.0.1` and forwards to the confined server's
+`llama.sock` in scratch. The relay checks the peer PID and releases the port when the child exits.
+Runtime paths may include the installed executables and model in the app's `assistant/` directory.
+
+**Goose integration is blocked on macOS 27.2.1.** Seatbelt rejects numeric IPv4 outbound filters.
+Its `localhost` filter also permits the Mac's LAN address on the same port. A policy requesting
+direct outbound TCP therefore fails closed on this OS. A client transport using private Unix
+sockets to the trusted inference and MCP proxies would preserve the exact-address boundary.
+
+To repeat the model check, set `STICK_TEST_LLAMA` and `STICK_TEST_GGUF` to the absolute paths
+of a Metal-enabled llama-server and GGUF, then run
+`cargo test -p stickybot-server --lib sandbox::tests::metal_health -- --ignored`.
+
 ## Testing
 
 `cargo test --workspace` never touches audio hardware: the wireless mic's tests run on the fake

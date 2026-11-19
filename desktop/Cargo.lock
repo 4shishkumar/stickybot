@@ -4270,6 +4270,7 @@ dependencies = [
  "hound",
  "http-body-util",
  "httpdate",
+ "libc",
  "log",
  "macos-audio",
  "macos-calendar",

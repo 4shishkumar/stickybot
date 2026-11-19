@@ -49,19 +49,22 @@ impl Profile {
 
     pub fn allows(self, tool: &str) -> bool {
         match self {
-            Self::Default => true,
+            Self::Default => !crate::assistant::TOOLS.contains(&tool),
             Self::Denied => false,
-            Self::Assistant => matches!(
-                tool,
-                "ask"
-                    | "stick_status"
-                    | "ir_list"
-                    | "calendar_next"
-                    | "calendar_today"
-                    | "open_app"
-                    | "open_url"
-                    | "calendar_join"
-            ),
+            Self::Assistant => {
+                crate::assistant::TOOLS.contains(&tool)
+                    || matches!(
+                        tool,
+                        "ask"
+                            | "stick_status"
+                            | "ir_list"
+                            | "calendar_next"
+                            | "calendar_today"
+                            | "open_app"
+                            | "open_url"
+                            | "calendar_join"
+                    )
+            }
         }
     }
 }
@@ -424,7 +427,10 @@ mod tests {
         for caller in [Caller::Mcp, Caller::Claude, Caller::OpenRouter, Caller::Internal] {
             assert_eq!(Profile::configured(&defaults, caller), Profile::Default);
             for tool in crate::mcp::tools() {
-                assert!(Profile::Default.allows(tool["name"].as_str().unwrap()));
+                assert_eq!(
+                    Profile::Default.allows(tool["name"].as_str().unwrap()),
+                    !crate::assistant::TOOLS.contains(&tool["name"].as_str().unwrap())
+                );
             }
         }
         for invalid in [json!(null), json!("assistant"), json!({"mcp":"typo"}), json!({"mcp":null})] {
