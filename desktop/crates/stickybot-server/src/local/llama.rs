@@ -218,7 +218,11 @@ pub mod tempdir {
     fn command_of(pid: u32) -> Option<PathBuf> {
         let out = std::process::Command::new("/bin/ps").args(["-o", "comm=", "-p", &pid.to_string()]).output().ok()?;
         let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        (out.status.success() && !s.is_empty()).then(|| PathBuf::from(s))
+        // compare real paths: /var/… and /private/var/… are the same folder
+        (out.status.success() && !s.is_empty()).then(|| {
+            let p = PathBuf::from(s);
+            p.canonicalize().unwrap_or(p)
+        })
     }
 
     /// Stops every recorded process that runs one of our pinned programs (under `runtime_root`)
