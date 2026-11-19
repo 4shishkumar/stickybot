@@ -391,10 +391,10 @@ async fn guard(State(st): State<Arc<AppState>>, mut req: Request, next: Next) ->
             .strip_prefix("/api/devices/")
             .and_then(|p| p.strip_suffix("/mcp"))
             .and_then(|id| st.devices.resolve(id))
-            .filter(|device| same(bearer, device.mcp.voice_token.as_bytes()));
+            .filter(|device| device.mcp.brain_caller(bearer).is_some());
         let forwarded_voice = req.uri().path() == "/mcp"
             && req.extensions().get::<VoiceCredential>().is_some_and(|v| v.0 == st.device_id)
-            && same(bearer, st.mcp.voice_token.as_bytes());
+            && st.mcp.brain_caller(bearer).is_some();
         let ok = voice.is_some()
             || forwarded_voice
             || same(h("x-stick-token"), st.token.as_bytes())
