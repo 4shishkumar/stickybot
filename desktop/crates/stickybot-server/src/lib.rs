@@ -515,6 +515,10 @@ impl AppState {
         }
         self.bye_blocking(std::time::Duration::from_millis(1500));
         wmic::shutdown(self);
+        if self.owner.upgrade().is_none() {
+            // the model server and agents: kill_on_drop doesn't run on process::exit
+            local::shutdown(self.local_runtime.root());
+        }
     }
 
     /// Quitting: tells the stick ("Agent offline" at once instead of after 25 s). Waits at most
@@ -757,6 +761,11 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     claude.set_tool_session(state.mcp.session.clone());
     claude.set_mcp(move || mcp::brain_config_device(&home, port, &token, "primary"));
     let or = Arc::new(state.openrouter());
+    if !state.fake {
+        // a crash or a hard quit can leave the model server running and agent folders behind
+        let root = state.local_runtime.root().to_path_buf();
+        tokio::task::spawn_blocking(move || local::shutdown(&root));
+    }
     let local = Arc::new(state.local());
     state.set_brain(Arc::new(brains::Brains::new(Arc::new(claude), or, local, Arc::downgrade(&state))));
     let weak = Arc::downgrade(&state);
