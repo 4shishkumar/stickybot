@@ -4,7 +4,7 @@ use std::{
     ffi::OsString,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[derive(Clone, Debug)]
@@ -18,9 +18,17 @@ pub struct Policy {
 #[cfg(target_os = "macos")]
 mod listener;
 
-fn quote(path: &Path) -> Result<String, String> {
+pub(crate) fn quote(path: &Path) -> Result<String, String> {
     let s = path.to_str().filter(|s| !s.chars().any(char::is_control)).ok_or("invalid sandbox path")?;
-    Ok(format!("{s:?}"))
+    let mut quoted = String::from("\"");
+    for c in s.chars() {
+        if matches!(c, '"' | '\\') {
+            quoted.push('\\');
+        }
+        quoted.push(c);
+    }
+    quoted.push('"');
+    Ok(quoted)
 }
 
 fn canonical(path: &Path) -> Result<PathBuf, String> {
@@ -58,15 +66,16 @@ fn wrapped(program: &Path, args: &[OsString], profile: String, dir: &Path) -> Re
 fn profile(program: &Path, policy: &Policy) -> Result<(String, PathBuf), String> {
     let scratch = canonical(&policy.scratch)?;
     let home = canonical(Path::new(&std::env::var_os("HOME").ok_or("missing HOME")?))?;
+    let app = crate::config::default_home();
+    let app = app.canonicalize().unwrap_or(app);
     if !scratch.is_dir()
         || home.starts_with(&scratch)
         || scratch.metadata().map_err(|_| "invalid scratch")?.permissions().mode() & 0o077 != 0
-        || crate::assistant::excluded(&scratch, &crate::config::default_home())
+        || crate::assistant::excluded(&scratch, &app)
     {
         return Err("scratch must be a private directory".into());
     }
-    let app = crate::config::default_home();
-    let runtime = app.canonicalize().unwrap_or_else(|_| app.clone()).join("assistant");
+    let runtime = app.join("assistant");
     let runtime_denied = |p: &Path| {
         if let Ok(rel) = p.strip_prefix(&runtime) {
             crate::assistant::excluded(rel, &app)
@@ -109,7 +118,10 @@ fn profile(program: &Path, policy: &Policy) -> Result<(String, PathBuf), String>
             quote(&path)?
         ));
     }
-    p.push_str(&format!("(allow file-read* file-write* (subpath {}))(allow file-write-data (literal \"/dev/null\")(literal \"/dev/tty\"))\n",quote(&scratch)?));
+    p.push_str(&format!(
+        "(allow file-read* file-write* (subpath {}))(allow file-write-data (literal \"/dev/null\"))\n",
+        quote(&scratch)?
+    ));
     p.push_str(&crate::assistant::seatbelt_exclusions(true)?);
     // On hosts that reject numeric address filters, profile compilation must fail.
     // Seatbelt's "localhost" also matches the Mac's LAN address.
@@ -144,6 +156,23 @@ fn command(program: &Path, args: &[OsString], policy: &Policy) -> Result<Command
 
 pub fn confine(program: &Path, args: &[OsString], policy: &Policy) -> Result<tokio::process::Command, String> {
     self_test(policy)?;
+    tokio::task::block_in_place(|| confined_command(program, args, policy))
+}
+
+/// Asynchronous entry point, including for single-threaded Tokio callers.
+pub async fn confine_async(
+    program: &Path,
+    args: &[OsString],
+    policy: &Policy,
+) -> Result<tokio::process::Command, String> {
+    self_test_async(policy).await?;
+    let (program, args, policy) = (program.to_owned(), args.to_owned(), policy.clone());
+    tokio::task::spawn_blocking(move || confined_command(&program, &args, &policy))
+        .await
+        .map_err(|_| "sandbox setup failed")?
+}
+
+fn confined_command(program: &Path, args: &[OsString], policy: &Policy) -> Result<tokio::process::Command, String> {
     #[cfg(target_os = "macos")]
     if !policy.listen_ports.is_empty() {
         return listener::server(program, args, policy);
@@ -151,7 +180,45 @@ pub fn confine(program: &Path, args: &[OsString], policy: &Policy) -> Result<tok
     Ok(command(program, args, policy)?.into())
 }
 
+/// Synchronous compatibility entry point. On a multithread runtime Tokio hands the
+/// worker's other tasks off while the caller waits. Single-thread runtimes must await.
 pub fn self_test(policy: &Policy) -> Result<(), String> {
+    if let Ok(rt) = tokio::runtime::Handle::try_current() {
+        if rt.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
+            return tokio::task::block_in_place(|| rt.block_on(self_test_async(policy)));
+        }
+        return Err("use self_test_async or confine_async on a single-thread runtime".into());
+    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "probe runtime unavailable")?
+        .block_on(self_test_async(policy))
+}
+
+pub async fn self_test_async(policy: &Policy) -> Result<(), String> {
+    let policy_copy = policy.clone();
+    let (_listener, cmd) =
+        tokio::task::spawn_blocking(move || probe_command(&policy_copy)).await.map_err(|_| "probe setup failed")??;
+    let mut child =
+        tokio::process::Command::from(cmd).kill_on_drop(true).spawn().map_err(|_| "Seatbelt probe failed to launch")?;
+    let status = match tokio::time::timeout(Duration::from_secs(4), child.wait()).await {
+        Ok(result) => result.map_err(|_| "Seatbelt probe failed")?,
+        Err(_) => {
+            let _ = child.kill().await;
+            return Err("Seatbelt probe timed out".into());
+        }
+    };
+    if status.success() {
+        Ok(())
+    } else if status.code() == Some(65) && !policy.loopback_ports.is_empty() {
+        Err("Seatbelt cannot enforce outbound TCP to exactly 127.0.0.1 on this host".into())
+    } else {
+        Err(format!("Seatbelt probe failed ({status})"))
+    }
+}
+
+fn probe_command(policy: &Policy) -> Result<(std::net::TcpListener, Command), String> {
     let perl = std::fs::read_dir("/usr/bin")
         .map_err(|_| "missing probe runtime")?
         .flatten()
@@ -191,25 +258,7 @@ pub fn self_test(policy: &Policy) -> Result<(), String> {
         port.to_string().into(),
     ];
     args.extend(policy.listen_ports.iter().map(|p| OsString::from(p.to_string())));
-    let mut child = command(&perl, &args, policy)?.spawn().map_err(|_| "Seatbelt probe failed to launch")?;
-    let start = Instant::now();
-    loop {
-        if let Some(status) = child.try_wait().map_err(|_| "Seatbelt probe failed")? {
-            return if status.success() {
-                Ok(())
-            } else if status.code() == Some(65) && !policy.loopback_ports.is_empty() {
-                Err("Seatbelt cannot enforce outbound TCP to exactly 127.0.0.1 on this host".into())
-            } else {
-                Err(format!("Seatbelt probe failed ({status})"))
-            };
-        }
-        if start.elapsed() > Duration::from_secs(4) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("Seatbelt probe timed out".into());
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    Ok((listener, command(&perl, &args, policy)?))
 }
 
 // Git processes repository-controlled config and attributes. Deny subprocesses, network,
@@ -221,8 +270,18 @@ pub(crate) fn git(repo: &Path, args: &[OsString]) -> Result<tokio::process::Comm
             .map(Path::new)
             .find(|p| p.is_file())
             .ok_or("Apple Git unavailable")?;
+    // Git needs its own metadata, including .gitignore in visible worktree directories.
+    // Otherwise it silently reports ignored files as untracked. The broker still excludes
+    // every dot path from file access, names and counts returned to the assistant.
+    let git_dir = quote(&repo.join(".git"))?;
+    let working_tree_rules = r#"(require-all (regex #"/[.]gitignore$") (require-not (regex #"/[.][^/]+/")))"#;
     let p = format!(
-        "{BASE}(allow file-write-data (literal \"/dev/null\"))(allow process-exec file-read* file-map-executable (literal {}))(allow file-read* (subpath {})){}",
+        r#"{BASE}
+(allow file-write-data (literal "/dev/null"))
+(allow process-exec file-read* file-map-executable (literal {}))
+(allow file-read* (subpath {}))
+{}
+(deny file-read* (require-all (regex #"/[.][^/]") (require-not (subpath {git_dir})) (require-not {working_tree_rules})))"#,
         quote(exe)?,
         quote(repo)?,
         crate::assistant::seatbelt_exclusions(false)?
@@ -259,6 +318,14 @@ mod tests {
         }
         std::fs::remove_dir(p.scratch).unwrap();
     }
+    #[tokio::test]
+    async fn single_thread_caller_can_await_the_probe() {
+        let p = policy();
+        let mut cmd = confine_async(Path::new("/usr/bin/true"), &[], &p).await.unwrap();
+        assert!(cmd.status().await.unwrap().success());
+        std::fs::remove_dir(p.scratch).unwrap();
+    }
+
     #[test]
     fn scratch_only() {
         let p = policy();
