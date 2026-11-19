@@ -385,6 +385,8 @@ fn percent_decode(s: &str) -> String {
 /// The tools' shared state (in [`AppState`]).
 pub struct McpState {
     pub(crate) voice_token: String,
+    /// the local assistant's credential (Goose); always the assistant profile
+    pub(crate) local_token: String,
     pub(crate) session: Arc<tool_policy::Session>,
     pub alerts: Mutex<RateLimit>,
     pub calls: Mutex<u64>,
@@ -398,12 +400,26 @@ impl Default for McpState {
     fn default() -> Self {
         Self {
             voice_token: crate::config::new_token(),
+            local_token: crate::config::new_token(),
             session: Arc::new(tool_policy::Session::default()),
             alerts: Mutex::new(RateLimit::new(ALERT_GAP.as_secs_f64(), ALERT_PER_MIN)),
             calls: Mutex::new(0),
             last_call: Mutex::new(Value::Null),
             card_at: Mutex::new(f64::MIN),
             card_later: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+impl McpState {
+    /// The brain a bearer credential belongs to: Claude Code (voice) or the local assistant.
+    pub(crate) fn brain_caller(&self, bearer: &[u8]) -> Option<Caller> {
+        if crate::api::same(bearer, self.voice_token.as_bytes()) {
+            Some(Caller::Claude)
+        } else if crate::api::same(bearer, self.local_token.as_bytes()) {
+            Some(Caller::Local)
+        } else {
+            None
         }
     }
 }
@@ -425,8 +441,8 @@ impl HttpPrincipal {
             .unwrap_or_default()
             .strip_prefix(b"Bearer ")
             .unwrap_or_default();
-        if crate::api::same(bearer, st.mcp.voice_token.as_bytes()) {
-            Self { caller: Caller::Claude, device: Some(st.device_id.clone()) }
+        if let Some(caller) = st.mcp.brain_caller(bearer) {
+            Self { caller, device: Some(st.device_id.clone()) }
         } else {
             Self { caller: Caller::Mcp, device: None }
         }
@@ -508,7 +524,7 @@ pub async fn call(st: &Arc<AppState>, name: &str, args: &Value, ctx: &Context) -
         return ("Tool is not allowed by this caller's profile or turn".into(), true, None);
     }
     let origin = st.clone();
-    if ctx.caller == Caller::Claude
+    if ctx.caller.brain()
         && args.get("device_id").and_then(Value::as_str).is_some_and(|id| id != st.device_id)
     {
         return ("The voice credential belongs to a different device".into(), true, None);
@@ -1090,7 +1106,7 @@ pub async fn post(st: Arc<AppState>, headers: HeaderMap, body: &[u8]) -> Respons
                     None => String::new(),
                 },
             );
-            let ctx = if identity == Caller::Claude {
+            let ctx = if identity.brain() {
                 match Context::brain(&st, identity) {
                     Ok(ctx) => ctx,
                     Err(e) => return axum::Json(reply(tool_result(&e, true, None))).into_response(),
@@ -1108,7 +1124,7 @@ pub async fn post(st: Arc<AppState>, headers: HeaderMap, body: &[u8]) -> Respons
                 }
                 let explicit_target = crate::events::device_targeted();
                 let task = tokio::spawn(async move {
-                    let _scope = (identity != Caller::Claude).then(|| tool_policy::TurnGuard(ctx.scope.clone()));
+                    let _scope = (!identity.brain()).then(|| tool_policy::TurnGuard(ctx.scope.clone()));
                     if explicit_target {
                         crate::events::for_device(call(&st2, &name, &args, &ctx)).await
                     } else {
