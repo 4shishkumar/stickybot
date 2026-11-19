@@ -172,6 +172,12 @@ async fn assistant_folders(State(st): State<Arc<AppState>>) -> axum::Json<Value>
 
 async fn change_assistant_folder(State(st): State<Arc<AppState>>, axum::Json(body): axum::Json<Value>) -> Response {
     let root = st.devices.root().unwrap_or(st);
+    tokio::task::spawn_blocking(move || update_assistant_folders(&root, &body))
+        .await
+        .unwrap_or_else(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "could not update folders"))
+}
+
+fn update_assistant_folders(root: &AppState, body: &Value) -> Response {
     let Some(path) = body["path"].as_str().filter(|s| s.len() <= 4096) else {
         return err(StatusCode::BAD_REQUEST, "path required");
     };
@@ -1211,6 +1217,17 @@ mod tests {
         let uri = "/api/assistant/folders";
         let folder = std::env::temp_dir().join(crate::config::new_token());
         std::fs::create_dir(&folder).unwrap();
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap()).canonicalize().unwrap();
+        for path in ["/", "/System", "/System/Library", "/Library", "/usr", "/private", "/private/etc"]
+            .iter()
+            .map(std::path::Path::new)
+            .chain(home.ancestors())
+        {
+            let body = json!({"action":"add","path":path});
+            let (status, response, _) = call(&app, req("POST", uri, Some(body), Some(&st.token))).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{}", path.display());
+            assert_eq!(response["error"], "not readable");
+        }
         let grant = json!({"action":"add","path":folder.join(".")});
         assert_eq!(call(&app, req("POST", uri, Some(grant.clone()), None)).await.0, StatusCode::FORBIDDEN);
         let (_, result, _) = call(&app, req("POST", uri, Some(grant), Some(&st.token))).await;
