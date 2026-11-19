@@ -152,7 +152,8 @@ impl Inner {
             listen_ports: vec![],
             app_port: Some(proxy.port),
         };
-        let mut cmd = crate::sandbox::confine(&goose, &[] as &[OsString], &policy)
+        let mut cmd = crate::sandbox::confine_async(&goose, &[] as &[OsString], &policy)
+            .await
             .map_err(|e| format!("sandbox check failed, not starting the agent: {e}"))?;
         let base = format!("http://127.0.0.1:{}", proxy.port);
         for (k, v) in [

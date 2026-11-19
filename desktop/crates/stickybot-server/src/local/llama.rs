@@ -98,7 +98,8 @@ impl Llama {
         // the app owns the TCP port and relays it to a Unix socket in scratch (sandbox/listener.rs)
         let key_file = scratch.path().join("api-key");
         write_private(&key_file, &key)?;
-        let mut cmd = sandbox::confine(server, &args(model, port, &key_file), &policy)
+        let mut cmd = sandbox::confine_async(server, &args(model, port, &key_file), &policy)
+            .await
             .map_err(|e| format!("sandbox check failed, not starting the model: {e}"))?;
         cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
