@@ -11,7 +11,7 @@
 //! - Opening an app or link needs an exact, one-use approval on the stick (the broker).
 //!
 //! Nothing about a conversation is kept: "new chat", switching brains or quitting removes the
-//! agent's temporary folder.
+//! agent's temporary folder; after a hard quit the next start removes it (`tempdir::sweep`).
 
 pub mod acp;
 pub mod llama;
@@ -80,6 +80,7 @@ struct Session {
     id: String,
     proxy: proxy::Proxy,
     child: tokio::process::Child,
+    _tracked: tempdir::Tracked,
     _scratch: tempdir::Dir,
 }
 
@@ -174,6 +175,7 @@ impl Inner {
             .stderr(std::fs::File::create(root.join("goose.log")).map_err(|e| e.to_string())?)
             .kill_on_drop(true);
         let mut child = cmd.spawn().map_err(|e| format!("goose: {e}"))?;
+        let tracked = tempdir::Tracked::new(child.id(), root);
         let (Some(stdout), Some(stdin)) = (child.stdout.take(), child.stdin.take()) else {
             return Err("goose: no pipes".into());
         };
@@ -204,7 +206,7 @@ impl Inner {
                 return Err(format!("{e} {tail}").trim().to_string());
             }
         };
-        Ok(Session { acp, id, proxy, child, _scratch: scratch })
+        Ok(Session { acp, id, proxy, child, _tracked: tracked, _scratch: scratch })
     }
 
     async fn ask(self: Arc<Self>, text: String, events: mpsc::UnboundedSender<BrainEvent>) -> (bool, String) {
@@ -220,6 +222,10 @@ impl Inner {
             Ok(v) => v,
             Err(e) => return (false, format!("The local model couldn't start: {e}")),
         };
+        // cancelled while the model loaded: no turn exists yet, so stop here (no tools run)
+        if self.cancelled.load(Ordering::Acquire) {
+            return (false, String::new());
+        }
         let mut guard = self.session.lock().await;
         if guard.as_ref().is_some_and(|s| !s.acp.alive()) {
             *guard = None;
@@ -233,9 +239,14 @@ impl Inner {
         let s = guard.as_ref().unwrap();
         s.proxy.set_upstream(proxy::Upstream { port, key }); // a restarted model has a new port
         let _turn = st.mcp.session.begin(); // tool calls belong to this voice turn
+        *self.now.lock().unwrap() = Some((s.acp.clone(), s.id.clone()));
+        // cancelled while the agent started (cancel() sets the flag before it reads `now`)
+        if self.cancelled.load(Ordering::Acquire) {
+            *self.now.lock().unwrap() = None;
+            return (false, String::new());
+        }
         let (tx, mut updates) = mpsc::unbounded_channel();
         s.acp.set_updates(Some(tx));
-        *self.now.lock().unwrap() = Some((s.acp.clone(), s.id.clone()));
         let acp = s.acp.clone();
         let params = json!({"sessionId": s.id, "prompt": [{"type": "text", "text": text}]});
         let prompt = acp.request("session/prompt", params, TIMEOUT);
@@ -292,6 +303,12 @@ fn on_update(u: &Value, reply: &mut String, events: &mpsc::UnboundedSender<Brain
         }
         _ => {}
     }
+}
+
+/// Stops the model server and every agent, and removes their folders (quitting, and at start-up
+/// after a crash). Blocking.
+pub fn shutdown(runtime_root: &std::path::Path) {
+    tempdir::sweep(runtime_root);
 }
 
 impl Brain for LocalBrain {
