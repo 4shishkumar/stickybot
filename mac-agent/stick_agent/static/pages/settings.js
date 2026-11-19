@@ -113,7 +113,9 @@ function brainStatus() {
   const paint = b => {
     clear(line);
     if (!b) { line.textContent = "This version of the agent doesn't report it."; return; }
-    if (b.brain === "openrouter") {
+    if (b.brain === "local") {
+      line.appendChild(h("div", null, `Now: Local, ${b.model || "on this Mac"}${b.installed ? "" : " (not downloaded yet)"}`));
+    } else if (b.brain === "openrouter") {
       line.appendChild(h("div", null, `Now: OpenRouter, ${b.model || "no model picked"}${b.session ? " (a conversation is going)" : ""}`));
       const l = b.last;
       if (l) line.appendChild(h("div", null, l.ok

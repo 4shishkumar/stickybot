@@ -1,15 +1,17 @@
-//! The inference proxy between Goose and llama.cpp, on its own loopback port with its own key.
-//!
-//! Only chat completions (and a fixed model list) pass. Every request's tool list must be our
+//! The relay between Goose and the rest of the Mac, on its own loopback port with its own key:
+//! the only port the sandboxed Goose can reach. Two things pass: chat completions to llama.cpp
+//! (and a fixed model list), and MCP to the app's tool broker with the local assistant's
+//! credential added here (Goose never holds it; the broker gives it the read-only profile).
+//! Every request's tool list must be our
 //! read-only catalog: if Goose ever offers the model a tool of its own (shell, file edits,
 //! extensions), the request is refused and the brain stops the session (fail closed).
 
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::{HeaderMap, Request, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use hyper_util::rt::TokioIo;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -23,8 +25,17 @@ pub struct Upstream {
     pub key: String,
 }
 
+/// The app's MCP endpoint for the local assistant.
+#[derive(Clone, Debug)]
+pub struct Mcp {
+    pub port: u16,
+    pub path: String,
+    pub token: String,
+}
+
 pub struct Shared {
     key: String,
+    mcp: Option<Mcp>,
     allowed: BTreeSet<String>,
     upstream: Mutex<Option<Upstream>>,
     violation: Mutex<Option<String>>,
@@ -46,12 +57,17 @@ impl Drop for Proxy {
 
 impl Proxy {
     /// `allowed`: the exact tool names Goose may offer the model.
-    pub async fn start(allowed: BTreeSet<String>, on_use: Box<dyn Fn() + Send + Sync>) -> Result<Self, String> {
+    pub async fn start(
+        allowed: BTreeSet<String>,
+        mcp: Option<Mcp>,
+        on_use: Box<dyn Fn() + Send + Sync>,
+    ) -> Result<Self, String> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.map_err(|e| e.to_string())?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         let key = crate::config::new_token();
         let shared = Arc::new(Shared {
             key: key.clone(),
+            mcp,
             allowed,
             upstream: Mutex::new(None),
             violation: Mutex::new(None),
@@ -60,6 +76,7 @@ impl Proxy {
         let app = Router::new()
             .route("/v1/chat/completions", post(chat))
             .route("/v1/models", get(models))
+            .route("/mcp", any(relay_mcp))
             .layer(DefaultBodyLimit::max(BODY_LIMIT))
             .with_state(shared.clone());
         let task = tokio::spawn(async move {
@@ -80,6 +97,9 @@ impl Proxy {
 
 /// Every offered tool must be one of `allowed` (no tools at all is fine: e.g. a title request).
 pub fn check_tools(req: &Value, allowed: &BTreeSet<String>) -> Result<(), String> {
+    if req.get("functions").is_some() {
+        return Err("legacy functions offered to the model".into());
+    }
     let Some(tools) = req.get("tools") else { return Ok(()) };
     if tools.is_null() {
         return Ok(());
@@ -90,9 +110,6 @@ pub fn check_tools(req: &Value, allowed: &BTreeSet<String>) -> Result<(), String
         if t.get("type").and_then(Value::as_str) != Some("function") || !allowed.contains(name) {
             return Err(format!("unexpected tool offered to the model: {}", if name.is_empty() { "?" } else { name }));
         }
-    }
-    if req.get("functions").is_some() {
-        return Err("legacy functions offered to the model".into());
     }
     Ok(())
 }
@@ -130,34 +147,82 @@ async fn chat(State(st): State<Arc<Shared>>, headers: HeaderMap, body: Bytes) ->
         return refuse(StatusCode::SERVICE_UNAVAILABLE, "the local model isn't running");
     };
     (st.on_use)();
+    let offered = req.get("tools").and_then(Value::as_array).map_or(0, Vec::len);
+    log::debug!("local assistant: model request with {offered} tools");
     req.insert("model".into(), json!(super::llama::ALIAS));
     let body = serde_json::to_vec(&req).unwrap_or_default();
-    match forward(&up, body).await {
+    let headers = [(header::CONTENT_TYPE, HeaderValue::from_static("application/json"))];
+    match forward(Method::POST, up.port, "/v1/chat/completions", &up.key, &headers, body).await {
         Ok(r) => r,
         Err(e) => refuse(StatusCode::BAD_GATEWAY, &e),
     }
 }
 
-/// POSTs to llama-server and streams its answer back (SSE when the client asked to stream).
-async fn forward(up: &Upstream, body: Vec<u8>) -> Result<Response, String> {
-    let stream = tokio::net::TcpStream::connect(("127.0.0.1", up.port)).await.map_err(|e| e.to_string())?;
+/// MCP headers passed each way; nothing else (no client credentials, no forwarding headers).
+const MCP_REQUEST: [&str; 7] =
+    ["content-type", "accept", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id"];
+const MCP_RESPONSE: [&str; 2] = ["mcp-session-id", "content-type"];
+
+async fn relay_mcp(State(st): State<Arc<Shared>>, method: Method, headers: HeaderMap, body: Bytes) -> Response {
+    if !authorized(&st, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let Some(m) = st.mcp.clone() else { return StatusCode::NOT_FOUND.into_response() };
+    if !matches!(method, Method::POST | Method::GET | Method::DELETE) {
+        return StatusCode::METHOD_NOT_ALLOWED.into_response();
+    }
+    // Goose 1.59.2's client stops after a 2026-07-28 `server/discover` (no tools/list follows);
+    // "method not found" makes it fall back to the 2025-11-25 initialize handshake, which works.
+    if headers.get("mcp-method").is_some_and(|m| m == "server/discover") {
+        let id = serde_json::from_slice::<Value>(&body).ok().and_then(|v| v.get("id").cloned()).unwrap_or(Value::Null);
+        return axum::Json(
+            json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "Method not found"}}),
+        )
+        .into_response();
+    }
+    let pass: Vec<(HeaderName, HeaderValue)> =
+        MCP_REQUEST.iter().filter_map(|k| headers.get(*k).map(|v| (HeaderName::from_static(k), v.clone()))).collect();
+    match forward(method.clone(), m.port, &m.path, &m.token, &pass, body.to_vec()).await {
+        Ok(r) => {
+            log::debug!("local assistant: MCP {method} -> {}", r.status());
+            r
+        }
+        Err(e) => refuse(StatusCode::BAD_GATEWAY, &e),
+    }
+}
+
+/// Sends one request to a loopback server and streams its answer back (SSE included).
+async fn forward(
+    method: Method,
+    port: u16,
+    path: &str,
+    bearer: &str,
+    headers: &[(HeaderName, HeaderValue)],
+    body: Vec<u8>,
+) -> Result<Response, String> {
+    let stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.map_err(|e| e.to_string())?;
     let (mut send, conn) =
         hyper::client::conn::http1::handshake(TokioIo::new(stream)).await.map_err(|e| e.to_string())?;
     tokio::spawn(async move {
         let _ = conn.await;
     });
-    let req = Request::post("/v1/chat/completions")
-        .header(header::HOST, format!("127.0.0.1:{}", up.port))
-        .header(header::AUTHORIZATION, format!("Bearer {}", up.key))
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CONTENT_LENGTH, body.len())
-        .body(http_body_util::Full::new(Bytes::from(body)))
-        .map_err(|e| e.to_string())?;
+    let mut req = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(header::HOST, format!("127.0.0.1:{port}"))
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .header(header::CONTENT_LENGTH, body.len());
+    for (k, v) in headers {
+        req = req.header(k, v);
+    }
+    let req = req.body(http_body_util::Full::new(Bytes::from(body))).map_err(|e| e.to_string())?;
     let resp = send.send_request(req).await.map_err(|e| e.to_string())?;
     let (parts, incoming) = resp.into_parts();
     let mut out = Response::builder().status(parts.status);
-    if let Some(ct) = parts.headers.get(header::CONTENT_TYPE) {
-        out = out.header(header::CONTENT_TYPE, ct);
+    for k in MCP_RESPONSE {
+        if let Some(v) = parts.headers.get(k) {
+            out = out.header(k, v);
+        }
     }
     out.body(Body::new(incoming)).map_err(|e| e.to_string())
 }
@@ -229,6 +294,7 @@ mod tests {
         let u2 = used.clone();
         let p = Proxy::start(
             allowed(),
+            None,
             Box::new(move || {
                 u2.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }),

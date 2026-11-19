@@ -1400,7 +1400,10 @@ pub(crate) mod tests {
         let tok = t.st.token.clone();
         let (_, body) = call(&app, "GET", "/api/brain", None, None).await;
         let v: Value = serde_json::from_str(&body).unwrap();
-        assert_eq!((v["brain"].as_str(), v["choices"].clone()), (Some("claude"), json!(["claude", "openrouter"])));
+        assert_eq!(
+            (v["brain"].as_str(), v["choices"].clone()),
+            (Some("claude"), json!(["claude", "openrouter", "local"]))
+        );
         assert_eq!(
             (v["openrouter"]["key"]["saved"].as_bool(), v["openrouter"]["model"].as_str()),
             (Some(true), Some(MODEL))
