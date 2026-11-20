@@ -312,8 +312,11 @@ async fn network() -> Result<Value, String> {
         None
     };
     let ifaces = state.lines().find_map(|s| s.strip_prefix("Network interfaces:")).unwrap_or("");
+    // macOS hides the Wi-Fi name from apps without Location access, so whether Wi-Fi is up comes
+    // from the active interfaces instead
+    let wifi_on = wifi.is_some_and(|w| ifaces.split_whitespace().any(|s| s == w));
     Ok(
-        json!({"online":!ifaces.trim().is_empty(),"wifi_name":ssid,"vpn_interface_up":ifaces.split_whitespace().any(|s|["utun","ipsec","ppp"].iter().any(|p|s.starts_with(p)))}),
+        json!({"online":!ifaces.trim().is_empty(),"wifi_connected":wifi_on,"wifi_name":ssid.or(wifi_on.then_some("(hidden by macOS)".to_owned())),"vpn_interface_up":ifaces.split_whitespace().any(|s|["utun","ipsec","ppp"].iter().any(|p|s.starts_with(p)))}),
     )
 }
 async fn search(access: &Access, a: &Map<String, Value>) -> Result<Value, String> {
