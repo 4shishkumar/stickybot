@@ -28,6 +28,7 @@ pub mod hosts;
 pub mod hub;
 pub mod ir;
 pub mod keys;
+pub mod local;
 pub mod login;
 pub mod logs;
 pub mod mcp;
@@ -178,6 +179,10 @@ pub struct AppState {
     /// face packages: the catalog, installs (`faces.rs`)
     pub faces: Arc<faces::Faces>,
     openrouter: OnceLock<openrouter::OpenRouterBrain>,
+    /// the local assistant's downloads and model server: one per Mac (`local/`)
+    pub local_runtime: Arc<local::runtime::Runtime>,
+    pub local_model: Arc<local::llama::Llama>,
+    local: OnceLock<local::LocalBrain>,
     /// the setup page, the components, restart / window (`setup.rs`); with the fake stick a
     /// pretend Mac (`sysrun::FakeSystem`: tests never run gh / claude or touch ~/.claude)
     pub setup: Arc<setup::Setup>,
@@ -307,6 +312,12 @@ impl AppState {
             }),
             faces: Arc::new(faces::Faces::new(fake)),
             openrouter: OnceLock::new(),
+            local_runtime: parent.map(|p| p.local_runtime.clone()).unwrap_or_else(|| {
+                let user = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+                Arc::new(local::runtime::Runtime::new(&paths_home, user))
+            }),
+            local_model: parent.map(|p| p.local_model.clone()).unwrap_or_default(),
+            local: OnceLock::new(),
             setup: parent.map(|p| p.setup.clone()).unwrap_or_else(|| {
                 Arc::new(setup::Setup::new(if fake {
                     Arc::new(sysrun::FakeSystem::new(&paths_home))
@@ -369,6 +380,14 @@ impl AppState {
     pub fn openrouter(&self) -> openrouter::OpenRouterBrain {
         let me = self.me.get().cloned().unwrap_or_default();
         self.openrouter.get_or_init(|| openrouter::OpenRouterBrain::new(me)).clone()
+    }
+
+    /// The local brain (made on first use).
+    pub fn local(&self) -> local::LocalBrain {
+        let me = self.me.get().cloned().unwrap_or_default();
+        self.local
+            .get_or_init(|| local::LocalBrain::new(me, self.local_runtime.clone(), self.local_model.clone()))
+            .clone()
     }
 
     pub fn runner(&self) -> commands::Runner {
@@ -496,6 +515,10 @@ impl AppState {
         }
         self.bye_blocking(std::time::Duration::from_millis(1500));
         wmic::shutdown(self);
+        if self.owner.upgrade().is_none() {
+            // the model server and agents: kill_on_drop doesn't run on process::exit
+            local::shutdown(self.local_runtime.root());
+        }
     }
 
     /// Quitting: tells the stick ("Agent offline" at once instead of after 25 s). Waits at most
@@ -738,7 +761,13 @@ pub async fn start(opts: Options) -> Result<Running, String> {
     claude.set_tool_session(state.mcp.session.clone());
     claude.set_mcp(move || mcp::brain_config_device(&home, port, &token, "primary"));
     let or = Arc::new(state.openrouter());
-    state.set_brain(Arc::new(brains::Brains::new(Arc::new(claude), or, Arc::downgrade(&state))));
+    if !state.fake {
+        // a crash or a hard quit can leave the model server running and agent folders behind
+        let root = state.local_runtime.root().to_path_buf();
+        tokio::task::spawn_blocking(move || local::shutdown(&root));
+    }
+    let local = Arc::new(state.local());
+    state.set_brain(Arc::new(brains::Brains::new(Arc::new(claude), or, local, Arc::downgrade(&state))));
     let weak = Arc::downgrade(&state);
     logs::set_live(Some(Box::new(move |text| {
         if let Some(st) = weak.upgrade() {
@@ -799,6 +828,7 @@ fn start_device_session(state: Arc<AppState>) {
         state.set_brain(Arc::new(brains::Brains::new(
             Arc::new(claude),
             Arc::new(state.openrouter()),
+            Arc::new(state.local()),
             Arc::downgrade(&state),
         )));
     }

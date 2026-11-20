@@ -218,9 +218,9 @@ pub fn invalid(body: &Map<String, Value>) -> String {
         return "tool_profiles must map mcp, claude, openrouter or internal to default or assistant".into();
     }
     if let Some(b) = body.get("brain")
-        && !matches!(b.as_str(), Some("claude" | "openrouter"))
+        && !matches!(b.as_str(), Some("claude" | "openrouter" | "local"))
     {
-        return "brain must be one of: claude, openrouter".into();
+        return "brain must be one of: claude, openrouter, local".into();
     }
     if let Some(m) = body.get("openrouter_model") {
         let ok = m.as_str().is_some_and(|s| {

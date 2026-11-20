@@ -12,6 +12,8 @@ pub enum Caller {
     Mcp,
     Claude,
     OpenRouter,
+    /// the local assistant (Goose on this Mac): always the assistant profile
+    Local,
     Internal,
 }
 
@@ -21,8 +23,13 @@ impl Caller {
             Self::Mcp => "mcp",
             Self::Claude => "claude",
             Self::OpenRouter => "openrouter",
+            Self::Local => "local",
             Self::Internal => "internal",
         }
+    }
+    /// A brain's credential: tool calls belong to the current voice turn.
+    pub fn brain(self) -> bool {
+        matches!(self, Self::Claude | Self::Local)
     }
 }
 
@@ -35,6 +42,9 @@ pub enum Profile {
 
 impl Profile {
     pub fn configured(cfg: &Map<String, Value>, caller: Caller) -> Self {
+        if caller == Caller::Local {
+            return Self::Assistant; // not configurable: the local assistant is read-only
+        }
         if cfg.get("tool_profiles").is_some_and(|v| !v.is_object()) {
             return Self::Denied;
         }
@@ -440,6 +450,11 @@ mod tests {
         }
         for tool in ["quick_command", "ir_send", "future_mutator"] {
             assert!(!Profile::Assistant.allows(tool));
+        }
+        // The local assistant is read-only whatever the saved configuration says.
+        let wide = json!({"tool_profiles":{"local":"default","mcp":"default"}}).as_object().unwrap().clone();
+        for cfg in [&defaults, &wide] {
+            assert_eq!(Profile::configured(cfg, Caller::Local), Profile::Assistant);
         }
         let openai = crate::mcp::openai_tools_for(Profile::Assistant);
         assert!(!openai.iter().any(|t| t["function"]["name"] == "quick_command" || t["function"]["name"] == "ir_send"));

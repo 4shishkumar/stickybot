@@ -1,5 +1,6 @@
 // Settings → Brain (brains.py / brain_api.py): who answers voice requests — Claude Code (your
-// subscription) or OpenRouter (your own key, pay per use). The key goes straight to the agent, which
+// subscription), OpenRouter (your own key, pay per use) or, in the Rust app, Local (a read-only
+// assistant that runs on this Mac; shown only when /api/brain reports it). The key goes straight to the agent, which
 // keeps it in the macOS Keychain; the page never gets it back (only "saved …abcd").
 // The choice and the model are saved with the page's Save button (config "brain", "openrouter_model").
 import {h, clear, get, put, post, api, field, report} from "./lib.js";
@@ -12,14 +13,27 @@ const CHOICES = [
 const price = v => v == null ? "?" : v === 0 ? "free" : `$${v < 1 ? +v.toPrecision(2) : +v.toFixed(2)}`;
 const label = m => `${m.name} — ${price(m.in)} in / ${price(m.out)} out per M tokens${m.tools ? "" : " · no tools"}`;
 
+const LOCAL = ["local", "Local (private)", "Runs entirely on this Mac with an open-source model (Qwen3.5 9B). Read-only: it can look things up (battery, disk, network, calendar, files in folders you allow) but never changes anything; opening an app or link asks on the stick."];
+
 export function brainPanel(c) {
-  const picked = c.brain === "openrouter" ? "openrouter" : "claude";
+  const picked = ["openrouter", "local"].includes(c.brain) ? c.brain : "claude";
   const orBox = h("div", {style: `display:${picked === "openrouter" ? "flex" : "none"};flex-direction:column;gap:12px;margin-top:12px`});
-  const radios = h("div", {style: "display:flex;flex-direction:column;gap:8px"}, CHOICES.map(([v, name, help]) =>
+  const localBox = h("div", {style: `display:${picked === "local" ? "flex" : "none"};flex-direction:column;gap:12px;margin-top:12px`});
+  const show = v => {
+    orBox.style.display = v === "openrouter" ? "flex" : "none";
+    localBox.style.display = v === "local" ? "flex" : "none";
+    if (v === "openrouter") models.load();
+  };
+  const radio = ([v, name, help]) =>
     h("label", {style: "display:flex;gap:9px;align-items:flex-start;cursor:pointer"},
-      h("input", {type: "radio", name: "brain", value: v, checked: picked === v, style: "margin-top:3px",
-        onchange: () => { orBox.style.display = v === "openrouter" ? "flex" : "none"; if (v === "openrouter") models.load(); }}),
-      h("span", null, h("b", null, name), h("div", {class: "small dim"}, help)))));
+      h("input", {type: "radio", name: "brain", value: v, checked: picked === v, style: "margin-top:3px", onchange: () => show(v)}),
+      h("span", null, h("b", null, name), h("div", {class: "small dim"}, help)));
+  const radios = h("div", {style: "display:flex;flex-direction:column;gap:8px"}, CHOICES.map(radio));
+  get("/api/brain").then(b => {
+    if (!b || !b.local) return; // the Python app has no local brain
+    radios.append(radio(LOCAL));
+    localField(localBox, b.local);
+  });
 
   orBox.append(
     h("div", {class: "notice warn"}, h("div", {class: "grow"},
@@ -28,7 +42,43 @@ export function brainPanel(c) {
     keyField(),
     models.field(c),
     testField());
-  return h("div", null, field("Answers from", radios), orBox);
+  return h("div", null, field("Answers from", radios), orBox, localBox);
+}
+
+// --- the local assistant: one download (Goose, llama.cpp, the model), then nothing leaves the Mac --
+
+function localField(box, s) {
+  const gb = n => (n / 1e9).toFixed(1) + " GB";
+  const state = h("div", {class: "small"});
+  const bar = h("progress", {max: 1, value: 0, style: "width:320px;display:none"});
+  const btn = h("button", {class: "btn", type: "button", onclick: async () => {
+    btn.disabled = true;
+    await post("/api/brain/local/install", {});
+    poll();
+  }}, "Download");
+  const paint = l => {
+    const p = l.progress || {};
+    const busy = ["downloading", "verifying", "unpacking"].includes(p.phase);
+    btn.style.display = l.installed || busy ? "none" : "";
+    btn.disabled = false;
+    bar.style.display = busy ? "" : "none";
+    if (busy && p.total) { bar.max = p.total; bar.value = p.done || 0; }
+    state.textContent = l.installed ? `Ready: ${l.model}. Nothing you say leaves this Mac.`
+      : busy ? `${p.phase[0].toUpperCase()}${p.phase.slice(1)} ${p.item}…${p.phase === "downloading" && p.total ? ` ${gb(p.done || 0)} of ${gb(p.total)}` : ""}`
+      : p.phase === "failed" ? `Download failed: ${p.error} (try again: it resumes).`
+      : `Needs a one-time download of about ${gb(l.download_bytes)} (reuses LM Studio's copy of the model if you have it).`;
+    return busy;
+  };
+  const poll = async () => {
+    const b = await get("/api/brain");
+    if (b && b.local && paint(b.local)) setTimeout(poll, 1500);
+  };
+  box.append(
+    h("div", {class: "notice"}, h("div", {class: "grow"},
+      h("b", null, "Private: "),
+      h("span", null, "the model runs on this Mac (about 6 GB of memory while in use; freed after 10 minutes idle). Files are read only from folders you allow in Settings → Assistant."))),
+    field("Local model", h("div", {style: "display:flex;flex-direction:column;gap:8px"}, state, bar, btn)));
+  if (paint(s)) poll();
 }
 
 // --- the key: write-only ------------------------------------------------------------------
