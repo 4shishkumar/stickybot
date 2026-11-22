@@ -4232,7 +4232,7 @@ dependencies = [
 
 [[package]]
 name = "stickybot-app"
-version = "2.6.0"
+version = "2.7.0"
 dependencies = [
  "base64 0.23.1",
  "block2",
@@ -4255,7 +4255,7 @@ dependencies = [
 
 [[package]]
 name = "stickybot-server"
-version = "2.6.0"
+version = "2.7.0"
 dependencies = [
  "anyhow",
  "axum",
