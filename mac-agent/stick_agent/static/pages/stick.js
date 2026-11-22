@@ -6,6 +6,7 @@
 // state is asked again and only the cards whose data changed are redrawn in place, keeping
 // the scroll position and the focused control (keepView).
 import {h, $, clear, card, field, toggle, proto, get, put, post, report, toast, store, fmtAgo, recall, remember, deviceApi, deviceId} from "../lib.js";
+import {volumeControl} from "../volume.js";
 import {firmwarePanel} from "../firmware.js";
 import {airCard} from "./air.js";
 import {layout, structureKey, slicesOf, changedCards, openSections, summary} from "./stick_layout.js";
@@ -18,6 +19,7 @@ const MODS = [["Ctrl", 1], ["Option", 4], ["Shift", 2], ["Cmd", 8]];
 const REFRESH_MS = 45000;  // battery and anything changed on the stick itself
 let root = null, wrap = null, st = null, keys = null, via = null, snd = null, petInfo = null, gamesInfo = null, lastRes = null;
 let structure = null, slices = {}, nodes = {}, secs = {}, jump = null, seq = 0, timer = null, lastCard = null;
+let volume = null;
 let headObs = null, onScroll = null, spyFrame = 0, unsub = null;
 
 export function actions() {
@@ -43,12 +45,16 @@ export function render(el) {
   onScroll = () => { if (!spyFrame) spyFrame = requestAnimationFrame(() => { spyFrame = 0; spy(); }); };
   window.addEventListener("scroll", onScroll, {passive: true});
   timer = setInterval(() => { if (!document.hidden) load(); }, REFRESH_MS);
-  unsub = store.on(type => { if (type === "status" && structure) update(); });  // the hero's name before the stick answers
+  unsub = store.on((type, ev) => {
+    if (type === "event" && ev.kind === "sounds") { snd = ev.sounds; update(); }
+    if (type === "event" && ev.kind === "link") volume?.link(ev.state === "connected");
+    if (type === "status" && structure) update();
+  });  // the hero's name before the stick answers
   load(true);
 }
 
 export function leave() {
-  root = wrap = null;
+  root = wrap = volume = null;
   seq++;
   clearInterval(timer);
   if (headObs) headObs.disconnect();
@@ -132,6 +138,7 @@ function buildCard(k) {
 }
 
 function redraw(k) {
+  if (k === "sounds" && volume && snd) { volume.sync(snd); return; }
   if (REPAINT[k]) { REPAINT[k](); return; }
   const old = nodes[k];
   old.replaceWith(buildCard(k));
@@ -720,21 +727,11 @@ function motionCard() {
 }
 
 function soundCard() {
-  const target = deviceApi(), {put, post} = target;
+  volume = null;
   if (!snd) return card("Sounds", h("div", {class: "empty"}, "Sound settings come from the stick; it didn't answer."));
-  const vol = h("input", {type: "range", id: "stickVol", min: 0, max: 255, value: snd.volume});
-  const out = h("span", {class: "num small", style: "width:44px"}, Math.round(snd.volume / 2.55) + "%");
-  vol.addEventListener("input", () => { out.textContent = Math.round(vol.value / 2.55) + "%"; });
-  vol.addEventListener("change", async () => {
-    if (report(await put("/api/sounds", {volume: +vol.value})) && target.id === deviceId()) { snd = {...snd, volume: +vol.value}; update(); } else update(["sounds"]);
-    post("/api/sounds/play", {name: "test"});
-  });
-  const setOn = async e => {
-    if (report(await put("/api/sounds", {on: e.target.checked}), "Saved") && target.id === deviceId()) { snd = {...snd, on: e.target.checked}; update(); } else update(["sounds"]);
-  };
+  volume = volumeControl(snd, deviceApi(), "stickVol");
   return card(h("div", {class: "row grow"}, h("h2", null, "Sounds"), h("a", {class: "btn sm", href: "#sounds", style: "margin-left:auto"}, "Choose sounds")),
-    field("Sounds", toggle("stickSnd", "Play cues on the stick's speaker", snd.on, setOn)),
-    field("Volume", h("div", {class: "row"}, vol, out)),
+    field("Stick volume", volume.el),
     h("p", {class: "small faint", style: "margin-top:12px"}, "The stick's microphone for Wispr Flow is under ",
       h("a", {href: "#settings"}, "Settings → Wireless Wispr mic"), "."));
 }

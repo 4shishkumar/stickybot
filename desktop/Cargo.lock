@@ -4236,6 +4236,7 @@ version = "2.7.0"
 dependencies = [
  "base64 0.23.1",
  "block2",
+ "cc",
  "flate2",
  "futures-util",
  "libc",

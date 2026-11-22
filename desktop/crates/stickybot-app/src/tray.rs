@@ -11,8 +11,7 @@
 //! Open in browser
 //! Check for Updates…                 its title shows the result for a few seconds
 //! Report an issue…                   the dashboard's Feedback page
-//! Stick volume ▸ Mute / 25% / 50% / 75% / 100%   (a check on the current one)
-//! Sounds on the stick                (checked while on)
+//! Stick volume slider and Mute / Unmute
 //! ───
 //! Pause / Resume
 //! Restart
@@ -25,13 +24,16 @@
 //! everything goes through the server's own functions (no HTTP to itself).
 
 use crate::icon;
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(target_os = "macos")]
+#[path = "volume.rs"]
+mod volume;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use stick_link::LinkState;
 use stickybot_server::AppState;
 use tauri::image::Image;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::{AppHandle, Manager, Wry};
 
@@ -41,7 +43,6 @@ pub const REFRESH_EVERY: Duration = Duration::from_millis(500);
 pub const SETUP_EVERY: Duration = Duration::from_secs(30);
 /// how long "Check for Updates…" shows the result
 pub const CHECK_SAID_FOR: Duration = Duration::from_secs(8);
-pub const VOLUMES: [u8; 5] = [0, 25, 50, 75, 100];
 
 /// What the menu shows, read off the running app.
 #[derive(Debug, Clone, Default)]
@@ -57,6 +58,8 @@ pub struct Snapshot {
     pub paused: bool,
     /// the stick's sound settings, as it last reported them
     pub sounds: Option<Value>,
+    pub device_id: String,
+    pub generation: u64,
     /// the update status (`Updates::status`): the title, the install state, its progress
     pub update: Value,
 }
@@ -75,6 +78,8 @@ impl Snapshot {
             prompts: st.prompts_waiting(),
             paused: st.link.paused(),
             sounds: st.sounds(),
+            device_id: st.device_id.clone(),
+            generation: st.link.generation(),
             update: st.updates.status(&cfg, false),
         }
     }
@@ -125,30 +130,6 @@ pub fn status_text(s: &Snapshot) -> String {
         text.extend(s.detail.chars().take(50));
     }
     text
-}
-
-/// Which "Stick volume" item has the check (menubar.py: within 12 % of it; Mute only at 0).
-pub fn volume_checks(sounds: Option<&Value>) -> [bool; 5] {
-    let Some(v) = sounds.and_then(|s| s.get("volume")).and_then(Value::as_f64) else {
-        return [false; 5];
-    };
-    let pct = (v / 2.55).round() as i64;
-    VOLUMES.map(|p| (pct - p as i64).abs() < 13 && (p > 0 || pct == 0))
-}
-
-pub fn sounds_on(sounds: Option<&Value>) -> bool {
-    sounds.and_then(|s| s.get("on")).and_then(Value::as_bool).unwrap_or(false)
-}
-
-/// The volume message for `pct` % (the stick's 0-255).
-pub fn volume_payload(pct: u8) -> Value {
-    json!({"volume": (f64::from(pct) * 2.55).round() as u64})
-}
-
-/// "Sounds on the stick" clicked: the opposite of what the stick said (on if it never said).
-pub fn sounds_toggle_payload(sounds: Option<&Value>) -> Value {
-    let on = sounds.and_then(|s| s.get("on")).and_then(Value::as_bool).unwrap_or(true);
-    json!({"on": !on})
 }
 
 /// An update check's status -> what "Check for Updates…" says (menubar.py `check_result`).
@@ -231,8 +212,7 @@ struct Shown {
     icon: Option<icon::Style>,
     status: String,
     pause: String,
-    volume: Option<[bool; 5]>,
-    sounds: Option<bool>,
+    volume: Option<Option<(String, u64, bool, u8)>>,
     update: Option<Option<String>>,
     setup: Option<bool>,
 }
@@ -242,12 +222,12 @@ pub struct Tray {
     st: Arc<AppState>,
     tray: TrayIcon,
     menu: Menu<Wry>,
+    #[cfg(target_os = "macos")]
+    volume_control: volume::Control,
     status: MenuItem<Wry>,
     update: MenuItem<Wry>,
     setup: MenuItem<Wry>,
     check: MenuItem<Wry>,
-    volume: Vec<CheckMenuItem<Wry>>,
-    sounds: CheckMenuItem<Wry>,
     pause: MenuItem<Wry>,
     name: &'static str,
     shown: Mutex<Shown>,
@@ -273,17 +253,7 @@ impl Tray {
         let browser = MenuItem::with_id(app, "browser", "Open in browser", true, None::<&str>)?;
         let check = MenuItem::with_id(app, "check", CHECK, true, None::<&str>)?;
         let feedback = MenuItem::with_id(app, "feedback", "Report an issue…", true, None::<&str>)?;
-        let volume = VOLUMES
-            .iter()
-            .map(|&p| {
-                let label = if p == 0 { "Mute".to_string() } else { format!("{p}%") };
-                CheckMenuItem::with_id(app, format!("volume-{p}"), label, true, false, None::<&str>)
-            })
-            .collect::<tauri::Result<Vec<_>>>()?;
-        let vol_refs: Vec<&dyn tauri::menu::IsMenuItem<Wry>> =
-            volume.iter().map(|i| i as &dyn tauri::menu::IsMenuItem<Wry>).collect();
-        let volume_menu = Submenu::with_id_and_items(app, "volume", "Stick volume", true, &vol_refs)?;
-        let sounds = CheckMenuItem::with_id(app, "sounds", "Sounds on the stick", true, false, None::<&str>)?;
+        let volume = MenuItem::with_id(app, "volume", "Stick volume", true, None::<&str>)?;
         let pause = MenuItem::with_id(app, "pause", "Pause", true, None::<&str>)?;
         let restart = MenuItem::with_id(app, "restart", "Restart", true, None::<&str>)?;
         let quit = MenuItem::with_id(app, "quit", format!("Quit {name}"), true, Some("cmd+q"))?;
@@ -291,21 +261,7 @@ impl Tray {
         // the update and setup items go in at 1 / 2 when there's something to say (`apply`)
         let menu = Menu::with_items(
             app,
-            &[
-                &status,
-                &sep()?,
-                &open,
-                &browser,
-                &check,
-                &feedback,
-                &volume_menu,
-                &sounds,
-                &sep()?,
-                &pause,
-                &restart,
-                &sep()?,
-                &quit,
-            ],
+            &[&status, &sep()?, &open, &browser, &check, &feedback, &volume, &sep()?, &pause, &restart, &sep()?, &quit],
         )?;
         let tray = TrayIconBuilder::with_id("main")
             .tooltip(name)
@@ -321,6 +277,8 @@ impl Tray {
             .build(app)?;
         let me = Arc::new(Self {
             app: app.clone(),
+            #[cfg(target_os = "macos")]
+            volume_control: volume::Control::new(app.clone(), st.clone()),
             st,
             tray,
             menu,
@@ -328,8 +286,6 @@ impl Tray {
             update,
             setup,
             check,
-            volume,
-            sounds,
             pause,
             name,
             shown: Mutex::new(Shown::default()),
@@ -374,8 +330,17 @@ impl Tray {
         let next = Shown {
             icon: Some(icon::style(snap.icon_key())),
             pause: if snap.paused { "Resume" } else { "Pause" }.into(),
-            volume: Some(volume_checks(snap.sounds.as_ref())),
-            sounds: Some(sounds_on(snap.sounds.as_ref())),
+            volume: Some(snap.sounds.as_ref().and_then(|s| {
+                if snap.link != Some(LinkState::Connected) {
+                    return None;
+                }
+                Some((
+                    snap.device_id.clone(),
+                    snap.generation,
+                    s["on"].as_bool()?,
+                    u8::try_from(s["volume"].as_u64()?).ok()?,
+                ))
+            })),
             update: Some(update_text(&snap.update)),
             setup: Some(*self.setup_pending.lock().unwrap()),
             status,
@@ -392,18 +357,9 @@ impl Tray {
             let _ = self.check.set_text(CHECK);
         }
         let shown = self.shown.lock().unwrap().clone();
-        // a click on a check item toggles its check on its own: put the stick's word back each time
-        if let Some(v) = next.volume {
-            for (item, on) in self.volume.iter().zip(v) {
-                if item.is_checked().ok() != Some(on) {
-                    let _ = item.set_checked(on);
-                }
-            }
-        }
-        if let Some(on) = next.sounds
-            && self.sounds.is_checked().ok() != Some(on)
-        {
-            let _ = self.sounds.set_checked(on);
+        #[cfg(target_os = "macos")]
+        if shown.volume != next.volume {
+            self.volume_control.render(&self.app, &self.menu, &self.st, next.volume.clone().flatten());
         }
         if shown == next {
             return;
@@ -448,6 +404,12 @@ impl Tray {
         *self.shown.lock().unwrap() = next;
     }
 
+    #[cfg(target_os = "macos")]
+    fn refresh_volume(&self) {
+        self.shown.lock().unwrap().volume = None;
+        self.nudge.notify_one();
+    }
+
     fn clicked(self: &Arc<Self>, id: &str) {
         let st = self.st.devices.default_session().unwrap_or_else(|| self.st.clone());
         match id {
@@ -487,22 +449,10 @@ impl Tray {
                     *me.check_said.lock().unwrap() = Some(Instant::now()); // back to "Check for Updates…" soon
                 });
             }
-            "sounds" => {
-                let payload = sounds_toggle_payload(st.sounds().as_ref());
-                tauri::async_runtime::spawn(async move { st.sound(payload).await });
-            }
+            "volume" => crate::show_dashboard_at(&self.app, "sounds"),
             "pause" => st.link.pause(!st.link.paused()),
             "restart" => self.app.request_restart(), // the Exit event still runs (the wireless mic's device goes)
             "quit" => self.app.exit(0),
-            v if v.starts_with("volume-") => {
-                let Ok(pct) = v["volume-".len()..].parse::<u8>() else { return };
-                tauri::async_runtime::spawn(async move {
-                    st.sound(volume_payload(pct)).await;
-                    if pct > 0 {
-                        st.sound(json!({"play": "answer"})).await; // a sample at the new level
-                    }
-                });
-            }
             _ => {}
         }
         self.nudge.notify_one(); // the checks and titles at once, not half a second later
@@ -512,6 +462,7 @@ impl Tray {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn snap(state: &str) -> Snapshot {
         Snapshot { state: state.into(), ..Default::default() }
@@ -548,26 +499,6 @@ mod tests {
         assert_eq!(status_text(&s), "Waiting for approval (2)");
         assert_eq!(s.icon_key(), "approval");
         assert_eq!(snap("thinking").icon_key(), "thinking");
-    }
-
-    #[test]
-    fn the_volume_check_sits_on_the_nearest_level() {
-        assert_eq!(volume_checks(None), [false; 5]);
-        assert_eq!(volume_checks(Some(&json!({"volume": 0}))), [true, false, false, false, false]);
-        assert_eq!(volume_checks(Some(&json!({"volume": 160}))), [false, false, false, true, false]); // 63 % -> 75
-        assert_eq!(volume_checks(Some(&json!({"volume": 255}))), [false, false, false, false, true]);
-        assert_eq!(volume_checks(Some(&json!({"volume": 5}))), [false; 5]); // 2 % is neither mute nor 25 %
-        assert_eq!(volume_payload(50), json!({"volume": 127})); // as Python rounds 127.4999…
-        assert_eq!(volume_payload(100), json!({"volume": 255}));
-    }
-
-    #[test]
-    fn sounds_on_and_its_toggle() {
-        assert!(!sounds_on(None));
-        assert!(sounds_on(Some(&json!({"on": true}))));
-        assert_eq!(sounds_toggle_payload(Some(&json!({"on": true}))), json!({"on": false}));
-        assert_eq!(sounds_toggle_payload(Some(&json!({"on": false}))), json!({"on": true}));
-        assert_eq!(sounds_toggle_payload(None), json!({"on": false}));
     }
 
     #[test]

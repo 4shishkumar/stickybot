@@ -111,21 +111,20 @@ class Menu(rumps.App):
         self.check_item = rumps.MenuItem(CHECK, callback=self.check_updates)  # its title shows the result
         self.check_said = 0.0
         self.pause_item = rumps.MenuItem("Pause", callback=self.toggle_pause)
-        # Stick speaker: volume levels + sounds on/off (saved on the stick)
         self.volume_menu = rumps.MenuItem("Stick volume")
-        self.volume_items = {}
-        for pct in (0, 25, 50, 75, 100):
-            item = rumps.MenuItem("Mute" if pct == 0 else f"{pct}%", callback=lambda _, p=pct: self.set_volume(p))
-            self.volume_items[pct] = item
-            self.volume_menu.add(item)
-        self.sounds_item = rumps.MenuItem("Sounds on the stick", callback=self.toggle_sounds)
+        self.volume_slider = rumps.SliderMenuItem(value=0, callback=self.set_volume)
+        self.volume_slider._slider.setAccessibilityLabel_("Stick volume")
+        self.volume_slider._slider.setContinuous_(False)  # one saved level when the thumb is released
+        self.sounds_item = rumps.MenuItem("Mute", callback=self.toggle_sounds)
+        self.volume_menu.add(self.volume_slider)
+        self.volume_menu.add(self.sounds_item)
         # "Finish setup…" (the setup page) while the speech model or the stick isn't set up yet
         self.setup_item = rumps.MenuItem(SETUP, callback=lambda _: self.open_page("install"))
         self.setup_pending, self.setup_checked = None, 0.0
         self.menu = [self.status_item, self.update_item, self.setup_item, None,
                      rumps.MenuItem("Open StickyBot", callback=lambda _: self.open_page()),
                      rumps.MenuItem("Open in browser", callback=lambda _: webbrowser.open(f"http://localhost:{config.PORT}")),
-                     self.check_item, self.volume_menu, self.sounds_item, None,
+                     self.check_item, self.volume_menu, None,
                      self.pause_item, rumps.MenuItem("Restart", callback=self.restart), None,
                      rumps.MenuItem("Quit StickyBot", callback=self.quit)]
         self.timer = rumps.Timer(self.refresh, 0.5)
@@ -170,11 +169,13 @@ class Menu(rumps.App):
         self.status_item.title = text
         self.pause_item.title = "Resume" if self.agent.link.paused else "Pause"
         snd = self.agent.sounds or {}
-        if "volume" in snd:
-            vol = round(snd["volume"] / 2.55)
-            for pct, item in self.volume_items.items():
-                item.state = 1 if abs(vol - pct) < 13 and (pct > 0 or vol == 0) else 0
-        self.sounds_item.state = 1 if snd.get("on") else 0
+        available = self.agent.link.connected and "volume" in snd
+        vol = max(1, round(snd["volume"] * 100 / 255)) if snd.get("on") and snd.get("volume") else 0
+        self.volume_slider.value = vol
+        self.volume_slider._slider.setEnabled_(available)
+        self.volume_menu.title = f"Stick volume · {vol}%" if available else "Stick volume"
+        self.sounds_item.title = "Mute" if vol else "Unmute"
+        self.sounds_item.set_callback(self.toggle_sounds if available else None)
         self.show_update()
         self.show_setup()
         if self.check_said and time.monotonic() - self.check_said > 8:
@@ -231,13 +232,15 @@ class Menu(rumps.App):
         if self.agent.loop:
             asyncio.run_coroutine_threadsafe(self.agent.sound(payload), self.agent.loop)
 
-    def set_volume(self, pct):
-        self._stick({"volume": round(pct * 2.55)})
-        if pct:
-            self._stick({"play": "answer"})  # a sample at the new level
+    def set_volume(self, slider):
+        pct = round(slider.value)
+        if self.agent.link.connected:
+            self._stick({"volume": (pct * 255 + 50) // 100, "on": True} if pct else {"on": False})
 
     def toggle_sounds(self, _):
-        self._stick({"on": not (self.agent.sounds or {}).get("on", True)})
+        snd = self.agent.sounds or {}
+        if self.agent.link.connected and "volume" in snd:
+            self._stick({"on": not (snd.get("on") and snd["volume"] > 0), "volume": snd["volume"] or 140})
 
     def toggle_pause(self, _):
         self.agent.loop.call_soon_threadsafe(self.agent.link.pause, not self.agent.link.paused)
