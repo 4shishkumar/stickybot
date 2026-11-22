@@ -12,4 +12,4 @@ description: "The two Mac apps (the Rust StickyBot.app that ships, the legacy Py
 | File | Description |
 |------|-------------|
 | [connections](connections.md) | The Rust Connections page and shared Calendar service: read-only EventKit, settings, cached refresh, destination-aware reminder delivery and retries, per-device meeting cards, join links, voice phrases, tools, and privacy. |
-| [mac-apps](mac-apps.md) | Rust StickyBot.app and the legacy Python app: independent device sessions, scoped APIs/MCP/history/jobs, default routing, host labels, shared Mac services, source-bound approvals, shared dashboard compatibility, permissions and in-app updates. |
+| [mac-apps](mac-apps.md) | Rust StickyBot.app and the legacy Python app: independent device sessions, scoped APIs/MCP/history/jobs, default routing, host labels, shared Mac services, source-bound approvals, shared dashboard compatibility, stick volume controls, permissions and in-app updates. |

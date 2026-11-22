@@ -1,0 +1,57 @@
+id: 4q4i
+name: 261122-4q4i-stick-volume-slider
+created: 2026-11-22T19:12:50Z
+created_by: Ashish Kumar
+change_type: feat
+issues: []
+progress:
+    intake: done
+    apply: done
+    review: done
+    hydrate: done
+    ship: active
+    review-pr: pending
+plan:
+    generated: true
+    task_count: 2
+    acceptance_count: 2
+    acceptance_completed: 2
+confidence:
+    certain: 2
+    confident: 0
+    tentative: 0
+    unresolved: 0
+    score: 5.0
+    fuzzy: true
+    dimensions:
+        signal: 95.0
+        reversibility: 92.5
+        competence: 95.0
+        disambiguation: 95.0
+stage_metrics:
+    intake: {started_at: "2026-11-22T19:12:50Z", driver: fab-new, iterations: 1, completed_at: "2026-11-22T19:13:17Z"}
+    apply: {started_at: "2026-11-22T19:16:20Z", driver: fab-adopt, iterations: 2, completed_at: "2026-11-22T19:18:20Z"}
+    review: {started_at: "2026-11-22T19:18:20Z", driver: fab-adopt, iterations: 2, completed_at: "2026-11-22T19:19:09Z"}
+    hydrate: {started_at: "2026-11-22T19:19:09Z", driver: fab-adopt, iterations: 1, completed_at: "2026-11-22T19:19:56Z"}
+    ship: {started_at: "2026-11-22T19:19:56Z", driver: fab-adopt, iterations: 1}
+prs: []
+base_branch: main
+change_type_source: explicit
+summary: Control stick volume from the menu bar and dashboard with a 0–100% slider and mute that preserves the exact level
+true_impact:
+    added: 559
+    deleted: 162
+    net: 397
+    excluding:
+        added: 558
+        deleted: 162
+        net: 396
+    tests:
+        added: 140
+        deleted: 0
+        net: 140
+    computed_at: "2026-11-22T19:19:56Z"
+    computed_at_stage: hydrate
+# base_branch: written by /git-branch or /fab-new when the change's branch is created (no placeholder here).
+# true_impact: lazily created on first stage-finish that computes it (no placeholder here).
+last_updated: 2026-11-22T19:19:56Z
