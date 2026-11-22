@@ -13,6 +13,10 @@ pub struct Policy {
     pub read_only: Vec<PathBuf>,
     pub loopback_ports: Vec<u16>,
     pub listen_ports: Vec<u16>,
+    /// One port the trusted app listens on at 127.0.0.1 only (the local brain's relay). Uses
+    /// Seatbelt's "localhost:PORT" rule, which also matches the Mac's LAN address on that same
+    /// port; nothing listens there, so only the app's loopback listener is reachable.
+    pub app_port: Option<u16>,
 }
 
 #[cfg(target_os = "macos")]
@@ -118,6 +122,10 @@ fn profile(program: &Path, policy: &Policy) -> Result<(String, PathBuf), String>
             quote(&path)?
         ));
     }
+    // SQLite (Goose's session store) resolves the scratch path: metadata only, no listings
+    for dir in scratch.ancestors().skip(1) {
+        p.push_str(&format!("(allow file-read-metadata (literal {}))\n", quote(dir)?));
+    }
     p.push_str(&format!(
         "(allow file-read* file-write* (subpath {}))(allow file-write-data (literal \"/dev/null\"))\n",
         quote(&scratch)?
@@ -131,6 +139,17 @@ fn profile(program: &Path, policy: &Policy) -> Result<(String, PathBuf), String>
         }
         p.push_str(&format!(
             "(allow network-outbound (require-all (remote tcp \"127.0.0.1:{port}\")(socket-domain AF_INET)))\n"
+        ));
+    }
+    if let Some(port) = policy.app_port {
+        // the app must hold the port on loopback already, so no confined process can take it
+        let held = matches!(std::net::TcpListener::bind(("127.0.0.1", port)),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse);
+        if port == 0 || !held || policy.loopback_ports.contains(&port) || policy.listen_ports.contains(&port) {
+            return Err("invalid app port".into());
+        }
+        p.push_str(&format!(
+            "(allow network-outbound (require-all (remote tcp \"localhost:{port}\")(socket-domain AF_INET)))\n"
         ));
     }
     if !policy.listen_ports.is_empty() {
@@ -219,20 +238,11 @@ pub async fn self_test_async(policy: &Policy) -> Result<(), String> {
 }
 
 fn probe_command(policy: &Policy) -> Result<(std::net::TcpListener, Command), String> {
-    let perl = std::fs::read_dir("/usr/bin")
-        .map_err(|_| "missing probe runtime")?
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| {
-            p.file_name()
-                .and_then(|s| s.to_str())
-                .is_some_and(|s| s.starts_with("perl5.") && s[6..].bytes().all(|b| b.is_ascii_digit()))
-        })
-        .ok_or("missing probe runtime")?;
+    let perl = probe_runtime()?;
     let home = std::env::var_os("HOME").ok_or("missing HOME")?;
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|_| "probe listener failed")?;
     let port = listener.local_addr().map_err(|_| "probe listener failed")?.port();
-    if policy.loopback_ports.contains(&port) {
+    if policy.loopback_ports.contains(&port) || policy.app_port == Some(port) {
         return Err("probe port conflicts with allowed ports".into());
     }
     // O_EXCL prevents overwriting anything even on a failing host.
@@ -259,6 +269,20 @@ fn probe_command(policy: &Policy) -> Result<(std::net::TcpListener, Command), St
     ];
     args.extend(policy.listen_ports.iter().map(|p| OsString::from(p.to_string())));
     Ok((listener, command(&perl, &args, policy)?))
+}
+
+/// The system Perl binary itself (/usr/bin/perl only re-executes it).
+fn probe_runtime() -> Result<PathBuf, String> {
+    std::fs::read_dir("/usr/bin")
+        .map_err(|_| "missing probe runtime")?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| s.starts_with("perl5.") && s[6..].bytes().all(|b| b.is_ascii_digit()))
+        })
+        .ok_or_else(|| "missing probe runtime".into())
 }
 
 // Git processes repository-controlled config and attributes. Deny subprocesses, network,
@@ -304,7 +328,7 @@ mod tests {
         use std::os::unix::fs::DirBuilderExt;
         let scratch = std::env::temp_dir().join(format!("stickybot-llama-{}", crate::config::new_token()));
         std::fs::DirBuilder::new().mode(0o700).create(&scratch).unwrap();
-        Policy { scratch, read_only: vec![], loopback_ports: vec![], listen_ports: vec![] }
+        Policy { scratch, read_only: vec![], loopback_ports: vec![], listen_ports: vec![], app_port: None }
     }
     #[test]
     fn outbound_policy_never_widens_a_literal_address() {
@@ -326,6 +350,31 @@ mod tests {
         std::fs::remove_dir(p.scratch).unwrap();
     }
 
+    /// The relay port is reachable; another loopback port and a port the app doesn't hold are not.
+    #[test]
+    fn app_port_reaches_only_the_apps_listener() {
+        let mut p = policy();
+        let app = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let other = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let (ap, op) = (app.local_addr().unwrap().port(), other.local_addr().unwrap().port());
+        p.app_port = Some(ap);
+        self_test(&p).unwrap();
+        let probe = |port: u16| {
+            let code = format!(
+                "socket(my $s,2,1,6) or die; exit(connect($s,pack('C C n C4 x8',16,2,{port},127,0,0,1)) ? 0 : 9)"
+            );
+            let mut c = command(&probe_runtime().unwrap(), &["-e".into(), code.into()], &p).unwrap();
+            c.status().unwrap().code()
+        };
+        assert_eq!(probe(ap), Some(0));
+        assert_eq!(probe(op), Some(9));
+        // a port the app doesn't hold is refused outright
+        let free = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        p.app_port = Some(free);
+        assert!(confine(Path::new("/usr/bin/true"), &[], &p).is_err());
+        drop(other);
+        std::fs::remove_dir(p.scratch).unwrap();
+    }
     #[test]
     fn scratch_only() {
         let p = policy();

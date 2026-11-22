@@ -496,10 +496,10 @@ async fn handle_text_inner(st: Arc<AppState>, text: String, source: &str) {
     // Assistant turns must reach the broker: saved voice shortcuts can run shell/IR or launch URLs.
     let shortcuts = {
         let cfg = st.cfg.lock().unwrap();
-        let caller = if crate::brains::selected(&cfg) == "openrouter" {
-            crate::tool_policy::Caller::OpenRouter
-        } else {
-            crate::tool_policy::Caller::Claude
+        let caller = match crate::brains::selected(&cfg) {
+            "openrouter" => crate::tool_policy::Caller::OpenRouter,
+            "local" => crate::tool_policy::Caller::Local,
+            _ => crate::tool_policy::Caller::Claude,
         };
         crate::tool_policy::Profile::configured(&cfg, caller).allows("quick_command")
     };

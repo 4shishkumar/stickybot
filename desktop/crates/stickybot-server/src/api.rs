@@ -80,6 +80,7 @@ pub const PORTED: &[&str] = &[
     "DELETE /api/brain/openrouter/key",
     "GET /api/brain/openrouter/models",
     "POST /api/brain/test",
+    "POST /api/brain/local/install",
     "GET /api/pet",
     "POST /api/events/test",
     "GET /api/events/history",
@@ -340,6 +341,7 @@ fn session_router(state: Arc<AppState>) -> Router {
         .route("/api/brain/openrouter/key", put(brain_key_put).delete(brain_key_delete))
         .route("/api/brain/openrouter/models", get(brain_models))
         .route("/api/brain/test", post(brain_test))
+        .route("/api/brain/local/install", post(brain_local_install))
         .route("/static-rs/{*path}", get(rust_static))
         .route("/api/pet", get(pet_status))
         .route("/api/events/test", post(event_test))
@@ -391,10 +393,10 @@ async fn guard(State(st): State<Arc<AppState>>, mut req: Request, next: Next) ->
             .strip_prefix("/api/devices/")
             .and_then(|p| p.strip_suffix("/mcp"))
             .and_then(|id| st.devices.resolve(id))
-            .filter(|device| same(bearer, device.mcp.voice_token.as_bytes()));
+            .filter(|device| device.mcp.brain_caller(bearer).is_some());
         let forwarded_voice = req.uri().path() == "/mcp"
             && req.extensions().get::<VoiceCredential>().is_some_and(|v| v.0 == st.device_id)
-            && same(bearer, st.mcp.voice_token.as_bytes());
+            && st.mcp.brain_caller(bearer).is_some();
         let ok = voice.is_some()
             || forwarded_voice
             || same(h("x-stick-token"), st.token.as_bytes())
@@ -533,7 +535,21 @@ async fn brain_status(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
     axum::Json(json!({"brain": crate::brains::selected(&cfg), "choices": crate::brains::NAMES, "status": status,
         "openrouter": {"key": key_status(&st).await,
                        "model": cfg.get("openrouter_model").and_then(Value::as_str).unwrap_or(""),
-                       "max_tokens": cfg.get("openrouter_max_tokens").cloned().unwrap_or(Value::Null)}}))
+                       "max_tokens": cfg.get("openrouter_max_tokens").cloned().unwrap_or(Value::Null)},
+        "local": local_status(&st)}))
+}
+
+fn local_status(st: &AppState) -> Value {
+    let rt = &st.local_runtime;
+    let size: u64 = crate::local::runtime::ALL.iter().map(|a| a.size).sum();
+    json!({"installed": rt.installed(), "progress": rt.progress(), "download_bytes": size,
+           "model": crate::local::runtime::MODEL.label})
+}
+
+/// Downloads the local assistant's pinned parts (about 5.7 GB) in the background.
+async fn brain_local_install(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    let started = st.local_runtime.install();
+    axum::Json(json!({"ok": true, "started": started, "local": local_status(&st)}))
 }
 
 async fn brain_key_put(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
