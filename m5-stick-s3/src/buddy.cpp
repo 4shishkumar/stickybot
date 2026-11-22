@@ -254,8 +254,8 @@ static void sendSounds() {
 static void handleSound(JsonObject s) {
   if (s["set"].is<JsonObject>())
     for (JsonPair kv : s["set"].as<JsonObject>()) sound::setTune(kv.key().c_str(), kv.value().as<String>());
-  if (s["on"].is<bool>()) settings::saveSoundOn(s["on"].as<bool>());
-  if (s["volume"].is<int>()) settings::saveSoundVolume(constrain(s["volume"].as<int>(), 0, 255));
+  if (s["on"].is<bool>()) sound::setOn(s["on"].as<bool>());
+  if (s["volume"].is<int>()) sound::setVolume(constrain(s["volume"].as<int>(), 0, 255));
   if (s["play"].is<const char*>()) sound::play(String(s["play"].as<const char*>()));
   sendSounds();  // reply with the current settings
 }

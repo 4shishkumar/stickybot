@@ -584,7 +584,7 @@ void StickyWorld::draw(const Dash& d, bool wide, uint32_t now) {
     else if (p < 0.8f) {
       if (!munched_) {
         munched_ = true;
-        if (settings::soundOn()) sound::play(String("pop"));
+        sound::play(String("pop"));
       }
       food(w.merged, x_ + 7 * L.k, mouthY + 4, L.k, (p - 0.3f) / 0.5f);
       for (int i = 0; i < 4; i++) {  // crumbs

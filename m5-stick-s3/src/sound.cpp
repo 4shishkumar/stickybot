@@ -140,7 +140,13 @@ void clipPacket(const uint8_t* data, size_t len) {
 
 static void decodeFrame(const uint8_t* f, size_t len) { clipAsm.add(f, len); }
 
+static bool    on_ = true;  // Sound on (settings::soundOn(), kept here; changed only by setOn)
+static uint8_t vol_ = 140;  // settings::soundVolume(), kept here; changed only by setVolume
+// Silent with Sound off or volume 0: nothing starts, so the speaker and its amp stay off (no click).
+static bool audible() { return on_ && vol_ > 0; }
+
 static void startBuiltin(const BuiltinClip* c) {
+  if (!audible()) return;
   clipBegin(c->samples, 16000);
   for (size_t i = 0; i < c->bytes;) {
     size_t len = c->data[i++];
@@ -153,6 +159,10 @@ static void startBuiltin(const BuiltinClip* c) {
 // Handles queued packets in order: start / ADPCM frame / end (logic/clip.cpp).
 struct ClipQueueSink : clip::Sink {
   void begin(uint32_t samples, uint16_t rate) override {
+    if (!audible()) {  // muted: drop the clip without allocating or speeding up the link
+      cancelClip();
+      return;
+    }
     buddy::fastLink();
     clipBegin(samples, rate);
   }
@@ -185,6 +195,8 @@ static void amp(bool on) { board::speakerAmp(on); }  // the speaker amp's power
 
 void begin() {
   amp(false);
+  on_ = settings::soundOn();
+  vol_ = settings::soundVolume();
   prefs.begin("sounds", false);
   for (size_t i = 0; i < EVENT_COUNT; i++) choice[i] = prefs.getString(EVENTS[i].name, EVENTS[i].def);
 }
@@ -201,7 +213,7 @@ void cancelClip() {
 }
 
 static void start(const Tune* t) {
-  if (!t) return;
+  if (!t || !audible()) return;  // Sound off mutes everything: cues, games, the Mac's sounds
   cur = t;
   step = 0;
   stepEnd = 0;
@@ -219,7 +231,7 @@ static bool startNamed(const String& name) {
 }
 
 void playListen() {
-  if (!settings::soundOn()) return;  // no cue: don't interrupt the mic at all
+  if (!audible()) return;  // no cue: don't interrupt the mic at all
   mic::suspend(true);
   resumeMic = true;
   play(Cue::LISTEN);
@@ -229,8 +241,7 @@ void playListen() {
   }
 }
 
-void play(Cue c, bool force) {
-  if (!settings::soundOn() && !force && c != Cue::TEST) return;
+void play(Cue c) {
   for (size_t i = 0; i < EVENT_COUNT; i++)
     if (EVENTS[i].cue == c) {
       startNamed(choice[i]);
@@ -241,16 +252,16 @@ void play(Cue c, bool force) {
 bool play(const String& name) {
   int e = eventIndex(name);
   if (e >= 0) {
-    startNamed(choice[e]);  // asked for by name: always plays
+    startNamed(choice[e]);  // asked for by name
     return true;
   }
   return startNamed(name);
 }
 
-static void speakerOff();
+static void speakerOff(bool force = false);
 
 void effect(const char* name) {
-  if (!settings::soundOn() || mic::live()) return;
+  if (!audible() || mic::live()) return;
   for (auto& t : GAME_TUNES)
     if (!strcmp(name, t.name)) {
       if (cur) M5.Speaker.stop();
@@ -279,18 +290,19 @@ void describe(JsonObject out) {
   JsonObject map = out["map"].to<JsonObject>();
   for (size_t i = 0; i < EVENT_COUNT; i++)
     if (EVENTS[i].cue != Cue::TEST) map[EVENTS[i].name] = choice[i];
-  out["on"] = settings::soundOn();
-  out["volume"] = settings::soundVolume();
+  out["on"] = on_;
+  out["volume"] = vol_;
 }
 
-static void speakerOff() {
+// force: power down even during a game (keep_)
+static void speakerOff(bool force) {
   if (resumeMic) {  // the "speak now" cue is done: give the chip back to the mic
     resumeMic = false;
     mic::suspend(false);
   }
   if (!speakerOn) return;
   M5.Speaker.stop();
-  if (keep_) return;  // a game: stays up for the next effect
+  if (keep_ && !force) return;  // a game: stays up for the next effect
   M5.Speaker.end();
   amp(false);  // the amp draws power even when silent
   speakerOn = false;
@@ -301,11 +313,37 @@ static bool speakerUp() {
   if (!speakerOn) {
     amp(true);
     speakerOn = M5.Speaker.begin();
-    M5.Speaker.setVolume(settings::soundVolume());
+    M5.Speaker.setVolume(vol_);
     M5.In_I2C.writeRegister8(0x18, 0x32, DAC_GAIN, 400000);
     if (!speakerOn) Log.event(diagnostics::Event::SoundFailed);
   }
   return speakerOn;
+}
+
+bool on() { return on_; }
+
+uint8_t volume() { return vol_; }
+
+static void stopAll() {  // whatever plays now: a cue, a game effect, a clip
+  cur = nullptr;
+  pending = false;
+  cancelClip();
+  speakerOff(true);
+}
+
+void setOn(bool on) {
+  if (on == on_) return;
+  settings::saveSoundOn(on);
+  on_ = on;
+  if (!on) stopAll();
+}
+
+void setVolume(uint8_t v) {
+  if (v == vol_) return;
+  settings::saveSoundVolume(v);
+  vol_ = v;
+  if (!v) stopAll();
+  else if (speakerOn) M5.Speaker.setVolume(v);  // at once, also mid-game (the speaker stays up)
 }
 
 void loop() {
