@@ -189,6 +189,7 @@ struct Inner {
     idle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// writes the stick tools' `--mcp-config` file (set by the server)
     mcp: Mutex<Option<McpConfig>>,
+    tool_session: Mutex<Option<Arc<crate::tool_policy::Session>>>,
     /// one-shot mode: stops this request's process (cancel), and its pid
     oneshot_kill: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     oneshot_pid: Mutex<Option<u32>>,
@@ -237,6 +238,7 @@ impl ClaudeBrain {
                 req: AtomicU64::new(0),
                 idle: Mutex::new(None),
                 mcp: Mutex::new(None),
+                tool_session: Mutex::new(None),
                 oneshot_kill: Mutex::new(None),
                 oneshot_pid: Mutex::new(None),
             }),
@@ -277,8 +279,15 @@ impl ClaudeBrain {
     }
 
     fn signature(&self, cfg: &Map<String, Value>, claude: &Path) -> String {
-        json!([claude, cfg.get("model"), cfg.get("safe_tools"), self.inner.workspace, self.mcp(cfg).is_some()])
-            .to_string()
+        json!([
+            claude,
+            cfg.get("model"),
+            cfg.get("safe_tools"),
+            cfg.get("tool_profiles"),
+            self.inner.workspace,
+            self.mcp(cfg).is_some()
+        ])
+        .to_string()
     }
 
     /// The stick tools' `--mcp-config` file, when they're on (config `mcp_server`) and served.
@@ -290,6 +299,10 @@ impl ClaudeBrain {
     }
 
     /// The stick tools (`--mcp-config`): `f` writes the config file and returns its path.
+    pub fn set_tool_session(&self, session: Arc<crate::tool_policy::Session>) {
+        *self.inner.tool_session.lock().unwrap() = Some(session);
+    }
+
     pub fn set_mcp(&self, f: impl Fn() -> Option<PathBuf> + Send + Sync + 'static) {
         *self.inner.mcp.lock().unwrap() = Some(Box::new(f));
     }
@@ -308,9 +321,8 @@ impl ClaudeBrain {
                 .map(|s| s.to_string())
                 .collect();
         if let Some(mcp) = self.mcp(cfg) {
-            // the feedback tools run without asking; open_url / open_app / quick_command change the
-            // Mac, so Claude Code asks (our hook -> A / B on the stick). --mcp-config takes several
-            // values, so an option must follow it.
+            // The broker owns approval for our tools; built-in tools still use Claude permissions.
+            // --mcp-config takes several values, so an option must follow it.
             a.extend(["--mcp-config".to_string(), mcp.display().to_string()]);
             for t in crate::mcp::allowed_tool_names() {
                 if !tools.contains(&t) {
@@ -724,6 +736,7 @@ impl Brain for ClaudeBrain {
             }
             me.inner.cancelled.store(false, Ordering::Relaxed);
             me.inner.turn_no.fetch_add(1, Ordering::Relaxed);
+            let _turn = me.inner.tool_session.lock().unwrap().as_ref().map(|s| s.begin());
             let r = me.ask_inner(text, events).await;
             me.inner.busy.store(false, Ordering::Relaxed);
             r
@@ -731,6 +744,9 @@ impl Brain for ClaudeBrain {
     }
 
     fn cancel(&self) {
+        if let Some(s) = self.inner.tool_session.lock().unwrap().as_ref() {
+            s.cancel();
+        }
         if !self.busy() {
             return;
         }
@@ -765,6 +781,9 @@ impl Brain for ClaudeBrain {
     }
 
     fn forget(&self) {
+        if let Some(s) = self.inner.tool_session.lock().unwrap().as_ref() {
+            s.cancel();
+        }
         *self.inner.session.lock().unwrap() = None;
         self.inner.fresh.store(true, Ordering::Relaxed);
         if !self.busy() && self.session_alive() {
@@ -1202,7 +1221,7 @@ mod tests {
         assert_eq!(arg(args, "--mcp-config"), Some(file.to_str().unwrap()));
         let allowed = arg(args, "--allowedTools").unwrap();
         assert!(allowed.contains("mcp__stick__notify") && allowed.contains("WebSearch"));
-        assert!(!allowed.contains("mcp__stick__open_url"));
+        assert!(allowed.contains("mcp__stick__open_url"));
         // off in Settings: neither the config nor the tools; the session restarts for it
         f.set("mcp_server", json!(false));
         f.set("brain_mode", json!("oneshot"));

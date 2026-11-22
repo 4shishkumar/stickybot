@@ -69,6 +69,7 @@ pub const PORTED: &[&str] = &[
     "POST /api/switch-over",
     "GET /static-rs/*",
     "POST /mcp",
+    "DELETE /mcp",
     "GET /api/mcp",
     "POST /api/mcp/terminal/{action}",
     "POST /api/mcp/answer",
@@ -284,7 +285,7 @@ fn session_router(state: Arc<AppState>) -> Router {
         .route("/api/import", get(import_info).post(import_run))
         .route("/api/login-item", get(login_item).put(set_login_item))
         .route("/api/switch-over", get(switch_info).post(switch_run))
-        .route("/mcp", post(mcp_post).get(mcp_405).delete(mcp_405))
+        .route("/mcp", post(mcp_post).get(mcp_405).delete(mcp_delete))
         .route("/api/mcp", get(mcp_status))
         .route("/api/mcp/terminal/{action}", post(mcp_terminal))
         .route("/api/mcp/answer", post(mcp_answer))
@@ -322,11 +323,14 @@ fn err(status: StatusCode, msg: &str) -> Response {
     (status, axum::Json(json!({"error": msg}))).into_response()
 }
 
-fn same(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-async fn guard(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+#[derive(Clone)]
+struct VoiceCredential(String);
+
+async fn guard(State(st): State<Arc<AppState>>, mut req: Request, next: Next) -> Response {
     let host = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("");
     if host != format!("localhost:{}", st.port) && host != format!("127.0.0.1:{}", st.port) {
         return err(StatusCode::FORBIDDEN, "bad host");
@@ -336,9 +340,25 @@ async fn guard(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Res
     if mcp || (req.method() != Method::GET && req.method() != Method::HEAD) {
         let h = |k: &str| req.headers().get(k).map(|v| v.as_bytes()).unwrap_or(b"");
         let bearer = h("authorization").strip_prefix(b"Bearer ").unwrap_or(b"");
-        let ok = same(h("x-stick-token"), st.token.as_bytes()) || (mcp && same(bearer, st.token.as_bytes()));
+        let voice = req
+            .uri()
+            .path()
+            .strip_prefix("/api/devices/")
+            .and_then(|p| p.strip_suffix("/mcp"))
+            .and_then(|id| st.devices.resolve(id))
+            .filter(|device| same(bearer, device.mcp.voice_token.as_bytes()));
+        let forwarded_voice = req.uri().path() == "/mcp"
+            && req.extensions().get::<VoiceCredential>().is_some_and(|v| v.0 == st.device_id)
+            && same(bearer, st.mcp.voice_token.as_bytes());
+        let ok = voice.is_some()
+            || forwarded_voice
+            || same(h("x-stick-token"), st.token.as_bytes())
+            || (mcp && same(bearer, st.token.as_bytes()));
         if !ok {
             return err(StatusCode::FORBIDDEN, "bad token");
+        }
+        if let Some(device) = voice {
+            req.extensions_mut().insert(VoiceCredential(device.device_id.clone()));
         }
     }
     let revalidate = req.uri().path() == "/" || req.uri().path().starts_with("/static/");
@@ -383,7 +403,11 @@ async fn mcp_post(State(st): State<Arc<AppState>>, headers: axum::http::HeaderMa
 }
 
 async fn mcp_405() -> Response {
-    (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "POST")]).into_response()
+    (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "POST, DELETE")]).into_response()
+}
+
+async fn mcp_delete(State(st): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> Response {
+    crate::mcp::delete(st, headers).await
 }
 
 /// The server switch, recent use, and whether terminal Claude Code sessions have the tools.
@@ -910,6 +934,14 @@ async fn new_chat(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
 /// `{"tool","hint","from","wait"}` -> `{"decision": "allow"|"deny"|null}`.
 async fn permission(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<Value> {
     let b = body_obj(&body);
+    if b.get("tool")
+        .and_then(Value::as_str)
+        .and_then(|t| t.strip_prefix("mcp__stick__"))
+        .is_some_and(|t| crate::mcp::tool(t).is_some())
+    {
+        // A capability response, not a grant. The authenticated MCP call must still pass the broker.
+        return axum::Json(json!({"decision":"broker","broker":"exact-stick-approval-v1"}));
+    }
     let s = |k: &str, d: &str| b.get(k).and_then(Value::as_str).unwrap_or(d).to_string();
     let wait = b.get("wait").and_then(Value::as_f64).unwrap_or(30.0).clamp(0.0, 120.0);
     let d = crate::approvals::ask_permission(
@@ -1132,6 +1164,20 @@ mod tests {
         let v =
             serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into()));
         (status, v, ctype)
+    }
+
+    #[tokio::test]
+    async fn permission_hook_capability_is_only_for_known_broker_tools() {
+        let (app, st, _) = app("permission-capability", false).await;
+        let (_, answer, _) =
+            call(&app, req("POST", "/api/permission", Some(json!({"tool":"mcp__stick__open_url"})), Some(&st.token)))
+                .await;
+        assert_eq!(answer, json!({"decision":"broker","broker":"exact-stick-approval-v1"}));
+        assert!(!st.approvals.pending());
+        let (_, answer, _) =
+            call(&app, req("POST", "/api/permission", Some(json!({"tool":"Bash","wait":0})), Some(&st.token))).await;
+        assert_eq!(answer["decision"], Value::Null);
+        assert!(answer.get("broker").is_none());
     }
 
     #[tokio::test]
@@ -2208,14 +2254,25 @@ mod tests {
     async fn ir_stick_tools() {
         let (_app, st, fake) = app("ir-mcp", true).await;
         remotes(&fake, &[("ac", "cool 24", "raw:38:1,2,3", false), ("ac", "off", "nec:1:2", false)]);
-        let (text, err, res) = crate::mcp::call(&st, "ir_list", &json!({}), "test").await;
+        let (text, err, res) =
+            crate::mcp::call(&st, "ir_list", &json!({}), &crate::tool_policy::Context::internal("test")).await;
         assert!(!err && text.contains("ac: cool 24, off"), "{text}");
         assert_eq!(res.unwrap()["devices"]["ac"], json!(["cool 24", "off"]));
-        let (text, err, _) =
-            crate::mcp::call(&st, "ir_send", &json!({"device": "ac", "button": "cool 24"}), "test").await;
+        let (text, err, _) = crate::mcp::call(
+            &st,
+            "ir_send",
+            &json!({"device": "ac", "button": "cool 24"}),
+            &crate::tool_policy::Context::internal("test"),
+        )
+        .await;
         assert!(!err && text == "ac: cool 24 sent", "{text}");
-        let (text, err, _) =
-            crate::mcp::call(&st, "ir_send", &json!({"device": "ac", "button": "heat 30"}), "test").await;
+        let (text, err, _) = crate::mcp::call(
+            &st,
+            "ir_send",
+            &json!({"device": "ac", "button": "heat 30"}),
+            &crate::tool_policy::Context::internal("test"),
+        )
+        .await;
         assert!(err && text.contains("no 'heat 30' button"), "{text}");
         assert!(crate::mcp::allowed_tool_names().contains(&"mcp__stick__ir_send".to_string()));
         assert!(crate::mcp::openai_tools().iter().any(|t| t["function"]["name"] == "ir_list"));

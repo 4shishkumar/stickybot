@@ -13,6 +13,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 ## [Unreleased]
 
 ### Added
+- Optional assistant tool profiles hide and refuse commands, infrared controls and other mutating
+  tools. App and link launches require a fresh approval on the stick, showing the actual destination.
 - **Several sticks, several Macs.** StickyBot.app's Devices page adds, selects, pauses and removes
   sticks independently, with a separate default for hooks and tools. On supported firmware,
   opt into shared mode to pair up to three Macs with one stick; choose the input Mac on the
@@ -22,6 +24,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
   asking for an approval. Name changes keep the existing pairing.
 
 ### Fixed
+- MCP clients can no longer bypass stick approval for Mac actions. Each approval is single-use,
+  tied to its exact destination, Mac, stick connection and request; stale answers cannot run it.
 - Permission prompts survive stick reconnects; choosing no approval devices returns immediately.
   Removing a stick cleans its notification destinations, and a bad saved entry no longer stops
   other sticks from loading.

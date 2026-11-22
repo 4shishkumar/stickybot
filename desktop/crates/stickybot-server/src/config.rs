@@ -107,6 +107,7 @@ pub fn new_token() -> String {
 /// The Python agent's `DEFAULT_CONFIG` (config.py), so the Settings page finds every key it shows.
 /// Most of them do nothing in the Rust app yet (Phase 2+).
 pub fn defaults() -> Map<String, Value> {
+    let tool_profiles = json!({"mcp":"default","claude":"default","openrouter":"default","internal":"default"});
     let v = json!({
         "stick": null,
         "model": "sonnet",
@@ -152,6 +153,7 @@ pub fn defaults() -> Map<String, Value> {
     });
     match v {
         Value::Object(mut m) => {
+            m.insert("tool_profiles".into(), tool_profiles);
             m.insert("approval_devices".into(), Value::Null);
             m.insert("notification_devices".into(), Value::Null);
             // the IR remote (stick 2.5.0; ir.rs): remotes mapped to built-in code sets
@@ -204,6 +206,16 @@ pub fn save(paths: &Paths, cfg: &Map<String, Value>) -> std::io::Result<()> {
 
 /// What's wrong with a `PUT /api/config` body (brain_api.valid_config, plus the stick's shape), or "".
 pub fn invalid(body: &Map<String, Value>) -> String {
+    if let Some(profiles) = body.get("tool_profiles")
+        && !profiles.as_object().is_some_and(|p| {
+            p.iter().all(|(k, v)| {
+                matches!(k.as_str(), "mcp" | "claude" | "openrouter" | "internal")
+                    && matches!(v.as_str(), Some("default" | "assistant"))
+            })
+        })
+    {
+        return "tool_profiles must map mcp, claude, openrouter or internal to default or assistant".into();
+    }
     if let Some(b) = body.get("brain")
         && !matches!(b.as_str(), Some("claude" | "openrouter"))
     {

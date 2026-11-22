@@ -27,6 +27,7 @@ const SCOPED: &[&str] = &[
     "stream_interval_ms",
     "speak_stream",
     "safe_tools",
+    "tool_profiles",
     "ir_brands",
     "wireless_mic",
     "wireless_mic_carrier",
@@ -193,7 +194,7 @@ impl DeviceManager {
         cfg.insert("stick".into(), json!({"address":address,"name":name}));
         let opts = Options { port: root.port, home: root.paths.home.clone(), fake_stick: root.fake, import_from: None };
         let backend = if root.fake { Backend::Fake(stick_link::fake::FakeStick::new()) } else { root.backend.clone() };
-        let child = AppState::new_session(&opts, backend, Some(root), id.clone(), Some(cfg))?;
+        let child = AppState::new_session(&opts, backend, Some(root), id.clone(), Some(cfg), root.apps.clone())?;
         if persist {
             let mut cfg = root.cfg.lock().unwrap();
             let mut entries = cfg.get("devices").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -572,8 +573,13 @@ mod tests {
         let Backend::Fake(a_fake) = &root.backend else { panic!("fake only") };
         let Backend::Fake(b_fake) = &b.backend else { panic!("fake only") };
         let (a_before, b_before) = (a_fake.writes().len(), b_fake.writes().len());
-        let outcome =
-            crate::mcp::call(&root, "notify", &json!({"device_id":"primary","text":"Only primary MCP"}), "test").await;
+        let outcome = crate::mcp::call(
+            &root,
+            "notify",
+            &json!({"device_id":"primary","text":"Only primary MCP"}),
+            &crate::tool_policy::Context::internal("test"),
+        )
+        .await;
         assert!(!outcome.1, "{outcome:?}");
         let (code, _) = request(&root, "POST", "/api/devices/primary/api/events/test", json!({"kind":"test"})).await;
         assert_eq!(code, StatusCode::OK);
