@@ -173,6 +173,8 @@ pub fn defaults() -> Map<String, Value> {
             // the Rust app's own: a Dock icon even with the window closed; the "Report an issue"
             // web app ("" = the compiled-in one, feedback.rs)
             m.insert("dock_always".into(), json!(false));
+            m.insert("mac_voice_enabled".into(), json!(false));
+            m.insert("mac_voice_shortcut".into(), json!(crate::appctl::DEFAULT_VOICE_SHORTCUT));
             // install an app update by itself when idle (selfupdate.rs)
             m.insert("update_auto".into(), json!(false));
             m.insert("feedback_url".into(), json!(""));
@@ -207,6 +209,9 @@ pub fn save(paths: &Paths, cfg: &Map<String, Value>) -> std::io::Result<()> {
 
 /// What's wrong with a `PUT /api/config` body (brain_api.valid_config, plus the stick's shape), or "".
 pub fn invalid(body: &Map<String, Value>) -> String {
+    if body.contains_key("mac_voice_enabled") || body.contains_key("mac_voice_shortcut") {
+        return "Use the Mac keyboard shortcut settings".into();
+    }
     if let Some(profiles) = body.get("tool_profiles")
         && !profiles.as_object().is_some_and(|p| {
             p.iter().all(|(k, v)| {

@@ -16,7 +16,7 @@
 //! `followup_minutes`; cancel kills it. Both modes get the stick tools (`--mcp-config`, see
 //! `mcp.rs`) when `mcp_server` is on.
 
-use crate::talk::{Brain, BrainEvent, plain};
+use crate::talk::{Brain, BrainEvent};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use std::collections::VecDeque;
@@ -439,12 +439,12 @@ impl ClaudeBrain {
             }
         }
         match turn.result.clone() {
-            Some(r) => (turn.ok, plain(&r)),
+            Some(r) => (turn.ok, crate::talk::brain_reply(&r)),
             None => {
                 let err = stderr.await.unwrap_or_default();
                 let err = err.trim();
                 log::error!("claude failed: {}", tail(err, 500));
-                (false, plain(err.lines().last().unwrap_or("Claude Code failed.")))
+                (false, crate::talk::brain_reply(err.lines().last().unwrap_or("Claude Code failed.")))
             }
         }
     }
@@ -693,7 +693,7 @@ impl ClaudeBrain {
                 if let Some(s) = turn.session.clone() {
                     *self.inner.session.lock().unwrap() = Some(s);
                 }
-                return (turn.ok, plain(&result));
+                return (turn.ok, crate::talk::brain_reply(&result));
             }
             // the process ended without a result: killed (cancel), or it crashed
             let stderr = self.inner.proc.lock().unwrap().as_ref().map(|p| (p.stderr.clone(), p.stderr_done.clone()));
@@ -717,7 +717,7 @@ impl ClaudeBrain {
                 continue; // it had died while idle: start again (same conversation) and resend
             }
             let last = err.lines().last().unwrap_or("Claude Code stopped unexpectedly.");
-            return (false, plain(last));
+            return (false, crate::talk::brain_reply(last));
         }
         (false, "Claude Code stopped unexpectedly.".into())
     }

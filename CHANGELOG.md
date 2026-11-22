@@ -12,6 +12,10 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- Hold a configurable Mac keyboard shortcut to talk to the selected StickyBot agent. A floating
+  panel shows what it heard and keeps the reply visible. Enable it in Settings → Speech & replies.
+
 ### Changed
 - Adjust stick volume from 0–100% in the menu bar or dashboard. Click the speaker icon to mute or restore the previous level.
 

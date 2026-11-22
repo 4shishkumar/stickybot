@@ -50,6 +50,11 @@ STICKYBOT_VERSION=2.4.0 scripts/build-app.sh
 TAURI_SIGNING_PRIVATE_KEY=<key or path> TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<password> scripts/build-app.sh
 
 cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
+
+# Global hotkey registration, microphone conversion and the floating AppKit panel (logged-in Mac)
+scripts/test-mac-voice.sh
+# Full offline keyboard turn using the installed Parakeet, Goose and local model, with synthetic speech
+cargo test -p stickybot-server --test talk_e2e mac_keyboard_with_real_local_agent_offline -- --ignored
 cargo run -p stick-link --example scan        # read-only scan for sticks (never connects)
 
 # the wireless mic end to end with real Core Audio (a temporary tap + aggregate, inaudible; see Testing)

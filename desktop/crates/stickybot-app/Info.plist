@@ -7,6 +7,8 @@
   <true/>
   <key>NSBluetoothAlwaysUsageDescription</key>
   <string>StickyBot talks to your stick over Bluetooth: its settings, approvals, alerts and voice requests.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>StickyBot uses your Mac microphone while you hold your talk shortcut to ask the agent a question.</string>
   <key>NSAudioCaptureUsageDescription</key>
   <string>StickyBot taps only its own sound to make the stick's Bluetooth mic.</string>
   <!-- the Calendar connection (macOS 14 and later ask for the first, macOS 13 for the second) -->

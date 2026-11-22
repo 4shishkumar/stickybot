@@ -11,11 +11,12 @@ use crate::commands;
 use futures_util::future::BoxFuture;
 use regex::Regex;
 use serde_json::{Value, json};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 use stick_link::FromStick;
 use stick_link::adpcm::{RATE, Recording};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 /// Characters the stick's fonts have beyond ASCII (m5-stick-s3/tools/make_fonts.py).
 const STICK_EXTRA: &str = "°’‘“”–—…•·×";
@@ -36,6 +37,13 @@ pub fn stick_text(s: &str) -> String {
 
 fn cut(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
+}
+
+// Brain adapters compact results for the stick. Scope formatting to the actual ask future so a
+// native reply keeps Unicode, paragraphs and its complete text, even during concurrent device turns.
+tokio::task_local! { static MAC_REPLY: bool; }
+pub(crate) fn brain_reply(text: &str) -> String {
+    if MAC_REPLY.try_with(|mac| *mac).unwrap_or(false) { text.trim().to_owned() } else { plain(text) }
 }
 
 static NEW_CHAT: LazyLock<Regex> = LazyLock::new(|| {
@@ -154,7 +162,7 @@ impl StickStream {
                 count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 async move {
                     if st.link.generation() == generation {
-                        tell_stick(&st, "working", &heard, &text).await;
+                        st.link.with_generation(generation, tell_stick(&st, "working", &heard, &text)).await;
                     }
                 }
             };
@@ -301,22 +309,139 @@ pub async fn tell_stick(st: &AppState, state: &str, heard: &str, text: &str) -> 
     ok
 }
 
+/// A device's brain has one turn at a time, including the capture and transcription preceding ask().
+/// The owner stays reserved until that turn unwinds, even if the input is cancelled.
+pub(crate) struct Owner {
+    mac: bool,
+    cancelled: AtomicBool,
+    approval: watch::Sender<String>,
+}
+
+pub type MacDisplay = Arc<dyn Fn(&str, &str, &str) + Send + Sync>;
+
+struct VoiceTurn {
+    st: Arc<AppState>,
+    owner: Arc<Owner>,
+    generation: u64,
+    display: Option<MacDisplay>,
+}
+
+const BUSY: &str = "Still working on the last request.";
+
+impl VoiceTurn {
+    fn reserve(st: Arc<AppState>, display: Option<MacDisplay>, generation: u64) -> Result<Self, String> {
+        let mut slot = st.voice_owner.lock().unwrap();
+        if slot.is_some() || st.brain().busy() {
+            return Err(BUSY.into());
+        }
+        let owner = Arc::new(Owner {
+            mac: display.is_some(),
+            cancelled: AtomicBool::new(false),
+            approval: watch::channel(String::new()).0,
+        });
+        *slot = Some(owner.clone());
+        drop(slot);
+        Ok(Self { st, owner, generation, display })
+    }
+
+    fn active(&self) -> bool {
+        !self.owner.cancelled.load(Ordering::Acquire)
+            && (self.owner.mac || self.st.link.generation() == self.generation)
+    }
+
+    async fn show(&self, state: &str, heard: &str, text: &str) {
+        if !self.active() {
+            return;
+        }
+        if let Some(display) = &self.display {
+            let phase = match state {
+                "done" => "reply",
+                "cancelled" => "error",
+                phase => phase,
+            };
+            display(phase, heard, text);
+        } else {
+            tell_stick(&self.st, state, heard, text).await;
+        }
+    }
+}
+
+impl Drop for VoiceTurn {
+    fn drop(&mut self) {
+        let mut slot = self.st.voice_owner.lock().unwrap();
+        self.st.set_idle();
+        *slot = None;
+    }
+}
+
+/// An in-memory reservation for the selected device's agent. Dropping an unsubmitted turn
+/// discards the recording. No stick connection is required to ask the brain.
+pub struct MacTurn(VoiceTurn);
+
+impl MacTurn {
+    pub fn begin(st: Arc<AppState>, notify: MacDisplay) -> Result<Self, String> {
+        let generation = st.link.generation();
+        let turn = VoiceTurn::reserve(st, Some(notify), generation)?;
+        crate::speak::stop(&turn.st);
+        turn.st.set_activity("listening", "Mac microphone");
+        Ok(Self(turn))
+    }
+
+    /// Mono 16 kHz, captured by the native app. The callback remains scoped to this turn.
+    pub async fn submit(self, audio: Vec<f32>) {
+        self.0.show("transcribing", "", "Microphone off · processing your words").await;
+        if let Err(e) = handle_audio(&self.0, audio, 0).await {
+            self.0.show("error", "", &format!("Could not transcribe the recording: {e}")).await;
+        }
+    }
+}
+
+/// Identify the same live brain request across the native caller and its HTTP MCP connection.
+pub(crate) fn mac_agent_owner(st: &AppState, ctx: &crate::tool_policy::Context) -> Option<Arc<Owner>> {
+    let slot = st.voice_owner.lock().unwrap();
+    slot.as_ref()
+        .filter(|owner| {
+            owner.mac
+                && ctx.caller.brain()
+                && ctx.active()
+                && st.mcp.session.current().is_some_and(|s| s.turn == ctx.scope.turn)
+        })
+        .cloned()
+}
+
+impl Owner {
+    /// Display-only notification; the broker still requires the device's exact, one-use grant.
+    pub(crate) fn waiting_for_approval(&self, destination: &str) {
+        self.approval.send_replace(format!("Confirm on your stick: {destination}"));
+    }
+}
+
+fn cancel_stick_turn(st: &Arc<AppState>) {
+    let slot = st.voice_owner.lock().unwrap();
+    if let Some(owner) = slot.as_ref() {
+        if owner.mac {
+            return;
+        }
+        owner.cancelled.store(true, Ordering::Release);
+        st.brain().cancel();
+    }
+    crate::speak::stop_stick(st);
+}
+
 /// Listens to the link for talks and cancels. Runs for the life of the app.
 pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     let mut rx = st.link.incoming();
     let mut connection = st.link.watch_state();
     tokio::spawn(async move {
-        let mut rec: Option<(Recording, u64)> = None;
+        let mut rec: Option<(Recording, VoiceTurn)> = None;
         loop {
             let message = tokio::select! {
                 result = rx.recv() => result,
                 result = connection.changed() => {
                     if result.is_err() { return; }
                     if !st.link.connected() {
+                        cancel_stick_turn(&st);
                         rec = None;
-                        st.brain().cancel();
-                        crate::speak::stop(&st);
-                        st.set_idle();
                     }
                     continue;
                 }
@@ -324,8 +449,8 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
             match message {
                 Ok(FromStick::Audio(frame)) => {
                     // a Wispr stream's frames are the wireless mic's (wmic.rs), not a talk's
-                    if let Some((r, generation)) = rec.as_mut()
-                        && *generation == st.link.generation()
+                    if let Some((r, turn)) = rec.as_mut()
+                        && turn.active()
                         && !st.wmic.streaming()
                     {
                         r.add(&frame);
@@ -339,7 +464,7 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     })
 }
 
-fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<(Recording, u64)>) {
+fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<(Recording, VoiceTurn)>) {
     let evt = msg.get("evt").and_then(Value::as_str);
     let from_agent = msg.get("src").and_then(Value::as_str) == Some("agent");
     if msg.get("cmd").and_then(Value::as_str) == Some("permission")
@@ -362,20 +487,34 @@ fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<(Recording, u64)
     }
     match (msg.get("evt").and_then(Value::as_str), msg.get("state").and_then(Value::as_str)) {
         (Some("talk"), Some("start")) => {
+            if rec.is_some() {
+                return;
+            }
+            let generation = st.link.generation();
+            let Ok(turn) = VoiceTurn::reserve(st.clone(), None, generation) else {
+                let st = st.clone();
+                tokio::spawn(async move {
+                    st.link.with_generation(generation, tell_stick(&st, "error", "", BUSY)).await;
+                });
+                return;
+            };
             crate::speak::stop(st); // talking again interrupts a reply being read out
-            *rec = Some((Recording::new(), st.link.generation()));
+            *rec = Some((Recording::new(), turn));
             st.set_activity("listening", "");
         }
         (Some("talk"), Some("stop")) => {
-            if let Some((r, generation)) = rec.take() {
-                tokio::spawn(handle_talk_at(st.clone(), r, generation));
+            if let Some((r, turn)) = rec.take() {
+                tokio::spawn(handle_stick_recording(turn, r));
             }
         }
         (Some("speak"), _) => {
+            if st.voice_owner.lock().unwrap().as_ref().is_some_and(|o| o.mac) {
+                return;
+            }
             // the reply view's "listen" (firmware 2.6.0)
             if msg.get("what").and_then(Value::as_str) == Some("stop") {
                 log::info!("reading aloud: stopped on the stick");
-                crate::speak::stop(st);
+                crate::speak::stop_stick(st);
             } else {
                 st.pressed();
                 crate::speak::speak_last(st);
@@ -383,9 +522,8 @@ fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<(Recording, u64)
         }
         (Some("cancel"), _) => {
             log::info!("cancelled on the stick");
-            st.brain().cancel();
-            crate::speak::stop(st);
-            st.set_idle();
+            cancel_stick_turn(st);
+            *rec = None;
         }
         _ => {}
     }
@@ -402,47 +540,61 @@ fn handle_talk_at(st: Arc<AppState>, rec: Recording, generation: u64) -> impl st
         if link.generation() != generation {
             return;
         }
-        link.with_generation(generation, handle_talk_scoped(st, rec)).await;
-    }
-}
-async fn handle_talk_scoped(st: Arc<AppState>, rec: Recording) {
-    if let Err(e) = handle_talk_inner(&st, rec).await {
-        log::error!("talk failed: {e:#}");
-        tell_stick(&st, "error", "", &cut(&format!("Something went wrong: {e}"), 120)).await;
-        st.set_idle();
+        match VoiceTurn::reserve(st.clone(), None, generation) {
+            Ok(turn) => handle_stick_recording(turn, rec).await,
+            Err(e) => {
+                link.with_generation(generation, tell_stick(&st, "error", "", &e)).await;
+            }
+        }
     }
 }
 
-async fn handle_talk_inner(st: &Arc<AppState>, rec: Recording) -> anyhow::Result<()> {
-    let audio = rec.audio();
+async fn handle_stick_recording(turn: VoiceTurn, rec: Recording) {
+    let link = turn.st.link.clone();
+    link.with_generation(turn.generation, async {
+        if turn.active()
+            && let Err(e) = handle_audio(&turn, rec.audio(), rec.lost()).await
+        {
+            log::error!("talk failed: {e:#}");
+            turn.show("error", "", &cut(&format!("Something went wrong: {e}"), 120)).await;
+        }
+    })
+    .await;
+}
+
+async fn handle_audio(turn: &VoiceTurn, audio: Vec<f32>, lost: usize) -> anyhow::Result<()> {
+    let st = &turn.st;
     let secs = audio.len() as f64 / RATE as f64;
     if secs < 0.6 {
-        tell_stick(st, "error", "", "Too short - hold B while you speak.").await;
-        st.set_idle();
+        let msg = if turn.owner.mac {
+            "Too short — hold the shortcut while you speak."
+        } else {
+            "Too short - hold B while you speak."
+        };
+        turn.show("error", "", msg).await;
         return Ok(());
     }
     st.set_activity("transcribing", &format!("{secs:.1}s of audio"));
     if !st.speech.ready() {
-        tell_stick(st, "error", "", "Speech model still loading, try again in a moment.").await;
-        st.set_idle();
+        turn.show("error", "", "Speech model still loading, try again in a moment.").await;
         return Ok(());
     }
     let t = Instant::now();
-    let lost = rec.lost();
     let text = st.speech.transcribe(audio).await?;
-    log::info!("heard ({secs:.1}s audio, {:.2}s, {lost} lost): {text}", t.elapsed().as_secs_f64());
-    if text.is_empty() && secs < 2.5 {
-        // a quick press with no words: just close the screen quietly
-        tell_stick(st, "cancelled", "", "").await;
-        st.set_idle();
+    if !turn.active() {
         return Ok(());
     }
+    log::info!("heard ({secs:.1}s audio, {:.2}s, {lost} lost)", t.elapsed().as_secs_f64());
     if text.is_empty() {
-        tell_stick(st, "error", "", "Didn't catch that.").await;
-        st.set_idle();
+        if !turn.owner.mac && secs < 2.5 {
+            turn.show("cancelled", "", "").await;
+        } else {
+            turn.show("error", "", "Didn't catch that.").await;
+        }
         return Ok(());
     }
-    handle_text(st.clone(), text, "voice").await;
+    let source = if turn.owner.mac { "mac_voice" } else { "voice" };
+    handle_text_inner(turn, text, source).await;
     Ok(())
 }
 
@@ -463,10 +615,16 @@ pub fn handle_text(
         if link.generation() != generation {
             return;
         }
-        link.with_generation(generation, handle_text_inner(st, text, &source)).await;
+        match VoiceTurn::reserve(st.clone(), None, generation) {
+            Ok(turn) => link.with_generation(generation, handle_text_inner(&turn, text, &source)).await,
+            Err(e) => {
+                link.with_generation(generation, tell_stick(&st, "error", "", &e)).await;
+            }
+        }
     }
 }
-async fn handle_text_inner(st: Arc<AppState>, text: String, source: &str) {
+async fn handle_text_inner(turn: &VoiceTurn, text: String, source: &str) {
+    let st = turn.st.clone();
     st.count("requests");
     let started = Instant::now();
     st.hub.emit("heard", json!({"text": text, "source": source}));
@@ -486,14 +644,13 @@ async fn handle_text_inner(st: Arc<AppState>, text: String, source: &str) {
         if rest.is_empty() {
             let reply = "OK, new chat.";
             st.hub.emit("reply", json!({"text": reply, "via": "quick", "ms": ms_since(started)}));
-            tell_stick(&st, "done", &text, reply).await;
+            turn.show("done", &text, reply).await;
             st.history(&with(json!({"via": "new_chat", "reply": reply})));
-            st.set_idle();
             return;
         }
         text = rest;
     }
-    // Assistant turns must reach the broker: saved voice shortcuts can run shell/IR or launch URLs.
+    // Mac and assistant-profile turns go through the brain/broker. Legacy saved shortcuts can run commands.
     let shortcuts = {
         let cfg = st.cfg.lock().unwrap();
         let caller = match crate::brains::selected(&cfg) {
@@ -503,15 +660,17 @@ async fn handle_text_inner(st: Arc<AppState>, text: String, source: &str) {
         };
         crate::tool_policy::Profile::configured(&cfg, caller).allows("quick_command")
     };
-    if shortcuts && let Some((cmd, slots)) = st.commands.find(&text) {
+    if !turn.owner.mac
+        && shortcuts
+        && let Some((cmd, slots)) = st.commands.find(&text)
+    {
         if let Some(spec) = cmd.get("ir") {
             // an IR remote button (ir.rs): sent by the stick
             let (ok, result) = crate::ir::voice(&st, spec).await;
             st.count("quick");
             st.hub.emit("reply", json!({"text": result, "via": "quick", "ms": ms_since(started)}));
-            tell_stick(&st, if ok { "done" } else { "error" }, &text, &result).await;
+            turn.show(if ok { "done" } else { "error" }, &text, &result).await;
             st.history(&with(json!({"via": "quick", "command": cmd.get("name"), "reply": result})));
-            st.set_idle();
             return;
         }
         if let Some(what) = cmd.get("calendar").and_then(Value::as_str) {
@@ -519,10 +678,9 @@ async fn handle_text_inner(st: Arc<AppState>, text: String, source: &str) {
             let (ok, result) = crate::connections::calendar::voice(&st, what).await;
             st.count("quick");
             st.hub.emit("reply", json!({"text": result, "via": "quick", "ms": ms_since(started)}));
-            tell_stick(&st, if ok { "done" } else { "error" }, &text, &result).await;
+            turn.show(if ok { "done" } else { "error" }, &text, &result).await;
             // the Activity log is a file: it keeps that the question was asked, not the meetings in the answer
             st.history(&with(json!({"via": "quick", "command": cmd.get("name"), "reply": "(from your calendar)"})));
-            st.set_idle();
             if ok {
                 crate::speak::speak(&st, &result, true, false);
             }
@@ -535,46 +693,53 @@ async fn handle_text_inner(st: Arc<AppState>, text: String, source: &str) {
         if let Some(result) = result {
             st.count("quick");
             st.hub.emit("reply", json!({"text": result, "via": "quick", "ms": ms_since(started)}));
-            tell_stick(&st, "done", &text, &result).await;
+            turn.show("done", &text, &result).await;
             st.history(&with(json!({"via": "quick", "command": cmd.get("name"), "reply": result})));
-            st.set_idle();
             crate::speak::speak(&st, &result, true, false);
             return;
         }
     }
     let brain = st.brain();
     if brain.busy() {
-        tell_stick(&st, "error", &text, "Still working on the last request.").await;
+        turn.show("error", &text, "Still working on the last request.").await;
         return;
     }
     st.count("claude");
     st.set_activity("thinking", &text);
-    tell_stick(&st, "thinking", &text, "").await;
+    turn.show("thinking", &text, "").await;
     let (live, interval) = {
         let cfg = st.cfg.lock().unwrap();
         let live = cfg.get("stream_replies").and_then(Value::as_bool).unwrap_or(true);
         let ms = cfg.get("stream_interval_ms").and_then(Value::as_f64).unwrap_or(300.0);
         (live, Duration::from_secs_f64((ms / 1000.0).max(0.1)))
     };
-    let stream = StickStream::new(st.clone(), text.clone(), interval);
+    let stream = (!turn.owner.mac).then(|| StickStream::new(st.clone(), text.clone(), interval));
     // speech sentence by sentence as the answer is written (speak.rs)
     let speech_cap = crate::speak::stream_speech(&st.cfg.lock().unwrap());
-    let utter = speech_cap.map(|n| crate::speak::start(&st, Some(n)));
+    let utter = speech_cap.map(|n| crate::speak::start_for(&st, Some(n), turn.owner.mac));
     let sentences = Arc::new(std::sync::Mutex::new(crate::speak::Sentences::default()));
     let (utter_ref, sentences_ref) = (utter.clone(), sentences.clone());
     let (etx, mut erx) = mpsc::unbounded_channel();
-    let mut ask = brain.ask(text.clone(), etx);
-    let (st2, stream_ref) = (st.clone(), &stream);
+    let mut prompts = turn.owner.approval.subscribe();
+    let mut ask = Box::pin(MAC_REPLY.scope(turn.owner.mac, brain.ask(text.clone(), etx)));
+    let (st2, stream_ref, heard) = (st.clone(), &stream, text.as_str());
     let on_event = move |ev: BrainEvent| {
         let st = st2.clone();
         let stream = stream_ref;
         let (utter, sentences) = (utter_ref.clone(), sentences_ref.clone());
         async move {
+            if !turn.active() {
+                return;
+            }
             match ev {
                 BrainEvent::Progress(line) => {
                     st.set_activity("working", &line);
                     st.hub.emit("progress", json!({"text": line}));
-                    stream.send_now(line).await;
+                    if let Some(stream) = stream {
+                        stream.send_now(line).await;
+                    } else {
+                        turn.show("thinking", heard, &line).await;
+                    }
                 }
                 BrainEvent::Text(answer) => {
                     if let Some(u) = &utter {
@@ -583,9 +748,13 @@ async fn handle_text_inner(st: Arc<AppState>, text: String, source: &str) {
                             u.add(&s);
                         }
                     }
-                    let shown = plain(&answer);
-                    if live && !shown.is_empty() {
-                        stream.push(shown);
+                    if let Some(stream) = stream {
+                        let shown = plain(&answer);
+                        if live && !shown.is_empty() {
+                            stream.push(shown);
+                        }
+                    } else {
+                        turn.show(if answer.is_empty() { "thinking" } else { "answering" }, heard, &answer).await;
                     }
                 }
             }
@@ -594,6 +763,10 @@ async fn handle_text_inner(st: Arc<AppState>, text: String, source: &str) {
     let (ok, reply) = loop {
         tokio::select! {
             biased;
+            Ok(()) = prompts.changed(), if turn.owner.mac => {
+                let hint = prompts.borrow_and_update().clone();
+                turn.show("approval", &text, &hint).await;
+            }
             Some(ev) = erx.recv() => on_event(ev).await,
             r = &mut ask => break r,
         }
@@ -601,8 +774,14 @@ async fn handle_text_inner(st: Arc<AppState>, text: String, source: &str) {
     while let Ok(ev) = erx.try_recv() {
         on_event(ev).await;
     }
-    let sent = stream.close().await;
-    if brain.cancelled() {
+    let sent = match stream {
+        Some(stream) => stream.close().await,
+        None => 0,
+    };
+    if brain.cancelled() || !turn.active() {
+        if turn.owner.mac {
+            turn.show("error", &text, "The request was cancelled.").await;
+        }
         // dismissed on the stick: say nothing more
         if let Some(u) = &utter {
             u.cancel();
@@ -615,11 +794,10 @@ async fn handle_text_inner(st: Arc<AppState>, text: String, source: &str) {
     }
     st.hub.emit("reply", json!({"text": reply, "via": "claude", "ok": ok, "ms": ms_since(started)}));
     if ok {
-        *st.last_reply.lock().unwrap() = Some(json!({"t": crate::hub::now(), "text": reply}));
+        *st.last_reply.lock().unwrap() = Some(json!({"t": crate::hub::now(), "text": reply, "source": source}));
     }
-    tell_stick(&st, if ok { "done" } else { "error" }, &text, &reply).await;
+    turn.show(if ok { "done" } else { "error" }, &text, &reply).await;
     st.history(&with(json!({"via": "claude", "ok": ok, "reply": reply})));
-    st.set_idle();
     let started_speech = !sentences.lock().unwrap().text.is_empty();
     match utter {
         Some(u) if ok && started_speech && !u.cancelled() => {
@@ -637,7 +815,7 @@ async fn handle_text_inner(st: Arc<AppState>, text: String, source: &str) {
             if let Some(u) = u {
                 u.cancel();
             }
-            crate::speak::speak(&st, &reply, false, false);
+            crate::speak::speak_for(&st, &reply, false, false, turn.owner.mac);
         }
     }
 }
@@ -1022,6 +1200,168 @@ pub(crate) mod tests {
         task.await.unwrap();
         assert_eq!(states(&t).iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(), vec!["thinking"]);
         assert_eq!(t.st.agent_state(), "ready");
+    }
+
+    type DisplayLog = Arc<Mutex<Vec<(String, String, String)>>>;
+    fn mac_display() -> (MacDisplay, DisplayLog) {
+        let log = DisplayLog::default();
+        let events = log.clone();
+        (
+            Arc::new(move |phase, heard, detail| {
+                events.lock().unwrap().push((phase.into(), heard.into(), detail.into()));
+            }),
+            log,
+        )
+    }
+
+    #[tokio::test]
+    async fn mac_turn_uses_the_same_brain_without_a_stick_or_a_legacy_shortcut() {
+        let t = agent("mac-offline", true).await;
+        t.st.link.pause(true);
+        t.st.link.watch_state().wait_for(|s| *s == LinkState::Paused).await.unwrap();
+        t.st.commands
+            .save(
+                json!({"commands":[{"name":"Docs","phrases":["open docs"],"open_url":"https://example.com"}]})
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap();
+        *t.said.lock().unwrap() = Ok("open docs".into());
+        let answer = "A detailed answer. ".repeat(30);
+        let brain = Arc::new(FakeBrain::new(&["TOOL:Searching", answer.as_str()]));
+        t.st.set_brain(brain.clone());
+        let (display, events) = mac_display();
+        MacTurn::begin(t.st.clone(), display).unwrap().submit(vec![0.; RATE as usize]).await;
+        assert_eq!(&*brain.asked.lock().unwrap(), &["open docs"]);
+        assert!(t.ran.lock().unwrap().is_empty());
+        let ev = events.lock().unwrap();
+        assert_eq!(
+            ev.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(),
+            ["transcribing", "thinking", "thinking", "answering", "reply"]
+        );
+        assert_eq!(ev.last().unwrap().1, "open docs");
+        assert_eq!(ev.last().unwrap().2, answer.trim());
+        assert!(t.fake.screens().is_empty());
+        assert_eq!(history(&t)[0]["source"], "mac_voice");
+    }
+
+    #[tokio::test]
+    async fn stick_inputs_cannot_cancel_a_mac_recording_or_request() {
+        let t = agent("mac-own", true).await;
+        let mut brain = FakeBrain::new(&["Working", " on it"]);
+        brain.pause = Duration::from_millis(100);
+        let brain = Arc::new(brain);
+        t.st.set_brain(brain.clone());
+        let (notify, events) = mac_display();
+        let mac = MacTurn::begin(t.st.clone(), notify.clone()).unwrap();
+        assert!(MacTurn::begin(t.st.clone(), notify.clone()).is_err());
+        t.fake.talk(&frames(1.0));
+        assert_eq!(ended(&t).await, vec![pair("error", BUSY)]);
+        assert_eq!(t.st.agent_state(), "listening");
+        let task = tokio::spawn(mac.submit(vec![0.; RATE as usize]));
+        assert!(until(|| !brain.asked.lock().unwrap().is_empty()).await);
+        t.fake.notify(&json!({"src":"agent","evt":"cancel"}));
+        t.st.link.pause(true);
+        t.st.link.watch_state().wait_for(|s| *s == LinkState::Paused).await.unwrap();
+        task.await.unwrap();
+        assert!(!brain.cancelled());
+        assert_eq!(events.lock().unwrap().last().unwrap().0, "reply");
+        assert_eq!(t.calls.load(Ordering::Relaxed), 1);
+        let next = MacTurn::begin(t.st.clone(), notify.clone()).unwrap();
+        drop(next); // Escape before key-up must never submit
+        assert!(MacTurn::begin(t.st.clone(), notify).is_ok());
+        assert_eq!(brain.asked.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn mac_cannot_start_during_a_stick_recording_and_an_empty_mac_turn_finishes() {
+        let t = agent("mac-collision", true).await;
+        let (notify, events) = mac_display();
+        t.fake.notify(&json!({"src":"agent","evt":"talk","state":"start"}));
+        assert!(until(|| t.st.agent_state() == "listening").await);
+        assert!(MacTurn::begin(t.st.clone(), notify.clone()).is_err());
+        t.fake.notify(&json!({"src":"agent","evt":"cancel"}));
+        assert!(until(|| t.st.agent_state() == "ready").await);
+        MacTurn::begin(t.st.clone(), notify).unwrap().submit(vec![]).await;
+        assert_eq!(events.lock().unwrap().last().unwrap().0, "error");
+    }
+
+    #[tokio::test]
+    async fn keyboard_reply_speech_uses_mac_even_when_stick_output_is_selected() {
+        let t = agent("mac-speech-output", true).await;
+        let voice = Arc::new(crate::speak::tests::FakeVoice::default());
+        *t.st.speaker.voice.lock().unwrap() = Arc::new(voice.clone());
+        t.st.cfg.lock().unwrap().insert("speak_replies".into(), json!(true));
+        t.st.cfg.lock().unwrap().insert("speak_output".into(), json!("stick"));
+        t.st.set_brain(Arc::new(FakeBrain::new(&["A short answer."])));
+        let (notify, _) = mac_display();
+        MacTurn::begin(t.st.clone(), notify).unwrap().submit(vec![0.; RATE as usize]).await;
+        assert!(until(|| !voice.played.lock().unwrap().is_empty()).await);
+        assert_eq!(*voice.for_stick.lock().unwrap(), [false]);
+        assert!(speech_msgs(&t.fake).is_empty());
+    }
+
+    #[tokio::test]
+    async fn brain_adapter_keeps_full_mac_text_and_compact_stick_text() {
+        let text = format!("**First paragraph**\n\n{}", "下一行。 ".repeat(100));
+        let mac = MAC_REPLY.scope(true, async { brain_reply(&text) }).await;
+        assert_eq!(mac, text.trim());
+        assert_eq!(brain_reply(&text), plain(&text));
+        assert!(brain_reply(&text).chars().count() <= 280);
+    }
+
+    struct OpenTool(std::sync::Weak<AppState>);
+    impl Brain for OpenTool {
+        fn ask(&self, _text: String, _: mpsc::UnboundedSender<BrainEvent>) -> BoxFuture<'static, (bool, String)> {
+            let st = self.0.upgrade().unwrap();
+            Box::pin(async move {
+                let _scope = st.mcp.session.begin();
+                let ctx = crate::tool_policy::Context::brain(&st, crate::tool_policy::Caller::Local).unwrap();
+                let (answer, error, _) =
+                    crate::mcp::call(&st, "open_url", &json!({"url":"https://example.org/docs"}), &ctx).await;
+                (!error, answer)
+            })
+        }
+        fn busy(&self) -> bool {
+            false
+        }
+        fn cancel(&self) {}
+        fn cancelled(&self) -> bool {
+            false
+        }
+        fn forget(&self) {}
+    }
+
+    #[tokio::test]
+    async fn mac_tool_waits_for_exact_stick_approval_and_fails_closed_offline() {
+        let t = agent("mac-tool-approval", true).await;
+        t.st.set_brain(Arc::new(OpenTool(Arc::downgrade(&t.st))));
+        let (notify, events) = mac_display();
+        let task = tokio::spawn(MacTurn::begin(t.st.clone(), notify.clone()).unwrap().submit(vec![0.; RATE as usize]));
+        assert!(
+            until(|| events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(phase, _, hint)| phase == "approval" && hint.contains("https://example.org/docs")))
+            .await
+        );
+        assert!(t.ran.lock().unwrap().is_empty());
+        crate::approvals::approve_next(&t.st, "once").await;
+        task.await.unwrap();
+        {
+            let ev = events.lock().unwrap();
+            assert_eq!(ev.last().unwrap().0, "reply", "{ev:?}");
+        }
+        assert_eq!(t.ran.lock().unwrap().len(), 1);
+        t.st.link.pause(true);
+        t.st.link.watch_state().wait_for(|s| *s == LinkState::Paused).await.unwrap();
+        MacTurn::begin(t.st.clone(), notify).unwrap().submit(vec![0.; RATE as usize]).await;
+        let events = events.lock().unwrap();
+        let (phase, _, detail) = events.last().unwrap();
+        assert_eq!(phase, "error");
+        assert!(detail.contains("Connect your stick"), "{detail}");
+        assert_eq!(t.ran.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

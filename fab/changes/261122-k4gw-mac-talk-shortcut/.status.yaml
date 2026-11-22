@@ -1,0 +1,54 @@
+id: k4gw
+name: 261122-k4gw-mac-talk-shortcut
+created: 2026-11-22T19:29:31Z
+created_by: Ashish Kumar
+change_type: feat
+issues: []
+progress:
+    intake: done
+    apply: done
+    review: active
+    hydrate: pending
+    ship: pending
+    review-pr: pending
+plan:
+    generated: true
+    task_count: 6
+    acceptance_count: 4
+    acceptance_completed: 4
+confidence:
+    certain: 3
+    confident: 0
+    tentative: 0
+    unresolved: 0
+    score: 5.0
+    fuzzy: true
+    dimensions:
+        signal: 88.0
+        reversibility: 93.3
+        competence: 91.0
+        disambiguation: 86.0
+stage_metrics:
+    intake: {started_at: "2026-11-22T19:29:31Z", driver: fab-new, iterations: 1, completed_at: "2026-11-22T19:57:52Z"}
+    apply: {started_at: "2026-11-22T19:57:52Z", driver: fab-fff, iterations: 1, completed_at: "2026-11-22T20:08:51Z"}
+    review: {started_at: "2026-11-22T20:08:51Z", driver: fab-fff, iterations: 1}
+prs: []
+change_type_source: explicit
+base_branch: main
+true_impact:
+    added: 0
+    deleted: 0
+    net: 0
+    excluding:
+        added: 0
+        deleted: 0
+        net: 0
+    tests:
+        added: 0
+        deleted: 0
+        net: 0
+    computed_at: "2026-11-22T20:08:51Z"
+    computed_at_stage: apply
+# base_branch: written by /git-branch or /fab-new when the change's branch is created (no placeholder here).
+# true_impact: lazily created on first stage-finish that computes it (no placeholder here).
+last_updated: 2026-11-22T20:08:51Z

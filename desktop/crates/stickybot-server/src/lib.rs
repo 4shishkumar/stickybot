@@ -125,6 +125,7 @@ pub struct AppState {
     /// runs quick commands' `open` / shell (tests swap it)
     runner: Arc<Mutex<commands::Runner>>,
     brain: Mutex<Arc<dyn talk::Brain>>,
+    pub(crate) voice_owner: Mutex<Option<Arc<talk::Owner>>>,
     /// what the agent is doing beyond the link: `(state, detail)` while it listens, transcribes,
     /// thinks or works; `None` = idle
     activity: Mutex<Option<(String, String)>>,
@@ -263,6 +264,7 @@ impl AppState {
             apps,
             runner: parent.map(|p| p.runner.clone()).unwrap_or_else(|| Arc::new(Mutex::new(commands::system_runner()))),
             brain: Mutex::new(Arc::new(talk::NoBrain)),
+            voice_owner: Mutex::default(),
             activity: Mutex::new(None),
             stats: Mutex::new(
                 json!({"requests": 0, "quick": 0, "claude": 0, "started": started})

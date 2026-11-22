@@ -14,6 +14,8 @@ mod appctl;
 mod dock;
 mod icon;
 mod login;
+#[cfg(target_os = "macos")]
+mod mac_voice;
 mod tray;
 mod updater;
 mod window;
@@ -52,6 +54,8 @@ fn main() {
             *state.setup.app.lock().unwrap() = Arc::new(appctl::TauriApp(app.handle().clone()));
             state.updates.run.set_installer(updater::installer(app.handle())); // "Install and restart"
             app.manage(state.clone());
+            #[cfg(target_os = "macos")]
+            mac_voice::start(app.handle(), &state);
 
             let dock = Arc::new(dock::Dock::default());
             app.manage(dock.clone());
@@ -79,6 +83,8 @@ fn main() {
         RunEvent::Reopen { .. } => show_dashboard_at(app, ""),
         // the wireless mic's device and tap outlive the process: remove them on the way out
         RunEvent::Exit => {
+            #[cfg(target_os = "macos")]
+            mac_voice::shutdown();
             if let Some(st) = app.try_state::<Arc<AppState>>() {
                 st.shutdown();
             }

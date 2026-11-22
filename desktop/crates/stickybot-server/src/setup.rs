@@ -142,6 +142,8 @@ pub struct Setup {
     /// `{"code", "url", "job"}` while a gh login waits for the browser
     gh_login: Mutex<Option<Value>>,
     pub app: Mutex<Arc<dyn crate::appctl::AppControl>>,
+    /// Serialize registration with saving the shortcut without holding the config lock across AppKit.
+    voice_settings: Mutex<()>,
 }
 
 impl Setup {
@@ -152,6 +154,7 @@ impl Setup {
             running: Mutex::default(),
             gh_login: Mutex::default(),
             app: Mutex::new(Arc::new(crate::appctl::NoApp)),
+            voice_settings: Mutex::new(()),
         }
     }
 
@@ -195,6 +198,83 @@ impl Setup {
 
 fn err(status: StatusCode, msg: &str) -> Response {
     (status, axum::Json(json!({"error": msg}))).into_response()
+}
+
+pub(crate) async fn voice_get(State(st): State<Arc<AppState>>) -> Response {
+    voice_preferences(st, None).await
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VoiceSettings {
+    enabled: bool,
+    shortcut: String,
+}
+
+pub(crate) async fn voice_put(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    let Ok(settings) = serde_json::from_slice::<VoiceSettings>(&body) else {
+        return err(StatusCode::BAD_REQUEST, "Provide enabled and shortcut");
+    };
+    if !crate::appctl::valid_voice_shortcut(&settings.shortcut) {
+        return err(StatusCode::BAD_REQUEST, "Choose a letter, digit or Space with Control, Option or Command");
+    }
+    voice_preferences(st, Some(settings)).await
+}
+
+async fn voice_preferences(st: Arc<AppState>, change: Option<VoiceSettings>) -> Response {
+    tokio::task::spawn_blocking(move || {
+        let _transaction = st.setup.voice_settings.lock().unwrap();
+        let app = st.setup.app.lock().unwrap().clone();
+        let mut status = app.voice_status();
+        if !status.is_object() {
+            return if change.is_some() {
+                err(StatusCode::BAD_REQUEST, "The keyboard shortcut requires the StickyBot Mac app")
+            } else {
+                axum::Json(json!({"supported": false})).into_response()
+            };
+        }
+        let (mut enabled, mut shortcut) = {
+            let cfg = st.cfg.lock().unwrap();
+            (
+                cfg.get("mac_voice_enabled").and_then(Value::as_bool).unwrap_or(false),
+                cfg.get("mac_voice_shortcut")
+                    .and_then(Value::as_str)
+                    .unwrap_or(crate::appctl::DEFAULT_VOICE_SHORTCUT)
+                    .to_owned(),
+            )
+        };
+        if let Some(next) = change {
+            if let Err(message) = app.configure_voice(next.enabled, &next.shortcut) {
+                return err(StatusCode::CONFLICT, &message);
+            }
+            let saved = {
+                let mut cfg = st.cfg.lock().unwrap();
+                let mut candidate = cfg.clone();
+                candidate.insert("mac_voice_enabled".into(), json!(next.enabled));
+                candidate.insert("mac_voice_shortcut".into(), json!(next.shortcut));
+                crate::config::save(&st.paths, &candidate).map(|()| *cfg = candidate)
+            };
+            if saved.is_err() {
+                if let Err(message) = app.configure_voice(enabled, &shortcut) {
+                    return err(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &format!("Could not save or restore the shortcut: {message}"),
+                    );
+                }
+                return err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the keyboard shortcut");
+            }
+            enabled = next.enabled;
+            shortcut = next.shortcut;
+            status = app.voice_status();
+        }
+        axum::Json(
+            json!({"supported": true, "enabled": enabled, "shortcut": shortcut, "input_name": status["input_name"],
+                          "permission": status["permission"], "detail": status["error"]}),
+        )
+        .into_response()
+    })
+    .await
+    .unwrap_or_else(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not access Mac keyboard settings"))
 }
 
 fn body_obj(b: &Bytes) -> Map<String, Value> {

@@ -649,7 +649,7 @@ impl OpenRouterBrain {
                 let answer = r.text.trim().to_string();
                 turn.push(json!({"role": "assistant", "content": answer}));
                 self.remember(turn);
-                let p = plain(&answer);
+                let p = crate::talk::brain_reply(&answer);
                 return (true, if p.is_empty() { "(no answer)".into() } else { p });
             }
             out.set(""); // what it wrote before the tool calls wasn't the answer

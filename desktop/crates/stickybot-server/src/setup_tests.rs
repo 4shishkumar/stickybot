@@ -10,6 +10,89 @@ use stick_link::{Backend, LinkState, fake::FakeStick};
 use tower::ServiceExt;
 
 const PORT: u16 = 8670;
+
+#[derive(Default)]
+struct VoiceApp {
+    applied: Mutex<Vec<(bool, String)>>,
+}
+
+impl crate::appctl::AppControl for VoiceApp {
+    fn restart(&self) -> Result<(), String> {
+        unreachable!()
+    }
+    fn show_window(&self, _: &str) -> bool {
+        unreachable!()
+    }
+    fn configure_voice(&self, enabled: bool, shortcut: &str) -> Result<(), String> {
+        if shortcut == "Command+KeyC" {
+            return Err("Shortcut already in use".into());
+        }
+        self.applied.lock().unwrap().push((enabled, shortcut.to_owned()));
+        Ok(())
+    }
+    fn voice_status(&self) -> Value {
+        json!({"input_name":"System microphone", "permission":"authorized"})
+    }
+}
+
+#[tokio::test]
+async fn mac_voice_settings_require_dashboard_token_and_are_global() {
+    let t = app("mac-voice-settings", false).await;
+    let path = "/api/mac-voice";
+    let default = crate::appctl::DEFAULT_VOICE_SHORTCUT;
+    let body = json!({"enabled":true, "shortcut":"Option+Digit7"});
+    assert_eq!(t.get(path).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("PUT", path, Some(body.clone()), false).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("GET", path, None, true).await.1["supported"], false);
+    assert_eq!(t.call("PUT", path, Some(body.clone()), true).await.0, StatusCode::BAD_REQUEST);
+    let voice = Arc::new(VoiceApp::default());
+    *t.st.setup.app.lock().unwrap() = voice.clone();
+    let (_, initial) = t.call("GET", path, None, true).await;
+    assert_eq!((initial["enabled"].as_bool(), initial["shortcut"].as_str()), (Some(false), Some(default)));
+    let device = t.st.devices.add(&t.st, "FAKE-2", "Second").unwrap();
+    t.st.devices.default_to(&t.st, &device.device_id).unwrap();
+    let (code, saved) = t.call("PUT", path, Some(body), true).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(saved["permission"], "authorized");
+    assert_eq!(saved["input_name"], "System microphone");
+    assert_eq!(crate::config::load(&t.st.paths)["mac_voice_shortcut"], "Option+Digit7");
+    t.st.devices.default_to(&t.st, "primary").unwrap();
+    assert_eq!(t.call("GET", path, None, true).await.1["shortcut"], "Option+Digit7");
+    let gamepad = format!("/api/devices/{}/api/mac-voice", device.device_id);
+    assert_eq!(t.call("GET", &gamepad, None, true).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        t.call("PUT", "/api/config", Some(json!({"mac_voice_enabled":false})), true).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    for chord in ["Space", "Shift+Space", "Control+Control+Space", "Command+Shift+KeyA", "Control+F4"] {
+        assert_eq!(
+            t.call("PUT", path, Some(json!({"enabled":true,"shortcut":chord})), true).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        t.call("PUT", path, Some(json!({"enabled":true,"shortcut":"Command+KeyC"})), true).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(voice.applied.lock().unwrap().as_slice(), &[(true, "Option+Digit7".to_owned())]);
+    assert_eq!(t.call("GET", path, None, true).await.1["shortcut"], "Option+Digit7");
+}
+
+#[tokio::test]
+async fn mac_voice_rolls_back_shortcut_if_settings_cannot_be_saved() {
+    let t = app("mac-voice-save-failure", false).await;
+    let voice = Arc::new(VoiceApp::default());
+    *t.st.setup.app.lock().unwrap() = voice.clone();
+    std::fs::create_dir(t.st.paths.home.join("config.json.tmp")).unwrap();
+    let (code, _) =
+        t.call("PUT", "/api/mac-voice", Some(json!({"enabled":true,"shortcut":"Command+KeyB"})), true).await;
+    assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        voice.applied.lock().unwrap().as_slice(),
+        &[(true, "Command+KeyB".into()), (false, crate::appctl::DEFAULT_VOICE_SHORTCUT.into())]
+    );
+    assert_eq!(t.st.cfg.lock().unwrap()["mac_voice_enabled"], false);
+}
 const ORDER: [&str; 9] = ["welcome", "model", "claude", "hooks", "mcp", "github", "wispr", "stick", "done"];
 
 struct T {

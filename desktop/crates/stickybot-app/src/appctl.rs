@@ -6,6 +6,16 @@ use tauri::AppHandle;
 pub struct TauriApp(pub AppHandle);
 
 impl AppControl for TauriApp {
+    #[cfg(target_os = "macos")]
+    fn configure_voice(&self, enabled: bool, shortcut: &str) -> Result<(), String> {
+        crate::mac_voice::configure(&self.0, enabled, shortcut)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn voice_status(&self) -> serde_json::Value {
+        crate::mac_voice::status(&self.0)
+    }
+
     /// Restarts after the answer went out; the `Exit` event still runs (the wireless mic's device
     /// is removed first).
     fn restart(&self) -> Result<(), String> {

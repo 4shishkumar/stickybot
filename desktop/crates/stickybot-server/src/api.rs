@@ -35,6 +35,8 @@ pub const PORTED: &[&str] = &[
     "GET /api/events",
     "GET /api/config",
     "PUT /api/config",
+    "GET /api/mac-voice",
+    "PUT /api/mac-voice",
     "POST /api/stick/proto",
     "GET /api/scan",
     "POST /api/pause",
@@ -160,6 +162,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/devices/{id}/pause", post(device_pause))
         .route("/api/devices/{id}/{*path}", axum::routing::any(device_dispatch))
         .route("/api/host", get(host_get).put(host_put))
+        .route("/api/mac-voice", get(crate::setup::voice_get).put(crate::setup::voice_put))
         .fallback(default_dispatch)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -384,7 +387,7 @@ async fn guard(State(st): State<Arc<AppState>>, mut req: Request, next: Next) ->
     }
     let mcp = req.uri().path() == "/mcp"
         || (req.uri().path().starts_with("/api/devices/") && req.uri().path().ends_with("/mcp")); // every method; MCP clients send the token as a bearer token
-    if mcp || (req.method() != Method::GET && req.method() != Method::HEAD) {
+    if mcp || req.uri().path() == "/api/mac-voice" || (req.method() != Method::GET && req.method() != Method::HEAD) {
         let h = |k: &str| req.headers().get(k).map(|v| v.as_bytes()).unwrap_or(b"");
         let bearer = h("authorization").strip_prefix(b"Bearer ").unwrap_or(b"");
         let voice = req

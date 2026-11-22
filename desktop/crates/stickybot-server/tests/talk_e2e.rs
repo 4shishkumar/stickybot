@@ -38,6 +38,72 @@ fn say(text: &str, voice: &str, dir: &Path) -> Vec<i16> {
     r.samples::<i16>().map(Result::unwrap).collect()
 }
 
+/// Opt-in on a Mac with the app's verified Goose, llama.cpp, GGUF and Parakeet already installed.
+/// Uses synthetic speech and an isolated server with no connected device or cloud credentials.
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires the installed local assistant, speech model and Metal"]
+async fn mac_keyboard_with_real_local_agent_offline() {
+    use stickybot_server::local::{llama::tempdir::Dir, runtime};
+    let home = Dir::new("stickybot-keyboard-test").unwrap();
+    let installed = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".stickybot-rs/assistant");
+    let assets = home.path().join("assistant");
+    std::fs::create_dir(&assets).unwrap();
+    for item in runtime::ALL {
+        let marker = format!(".{}.ok", item.dir);
+        std::fs::copy(installed.join(&marker), assets.join(marker)).expect("install the local assistant first");
+        let dir = installed.join(item.dir);
+        if dir.is_dir() {
+            std::os::unix::fs::symlink(dir, assets.join(item.dir)).unwrap();
+        }
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let opts = Options {
+        port: listener.local_addr().unwrap().port(),
+        home: home.path().into(),
+        fake_stick: true,
+        import_from: None,
+    };
+    let st = AppState::new(&opts, Backend::Fake(FakeStick::new())).unwrap();
+    st.cfg.lock().unwrap().insert("brain".into(), json!("local"));
+    st.set_brain(Arc::new(st.local()));
+    let api = stickybot_server::api::router(st.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, api).await.unwrap() });
+    let model = model_dir().expect("install the speech model first");
+    st.speech.start(speech::parakeet(&model, &st.stt_hints()));
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while !st.speech.ready() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("Parakeet failed to start");
+
+    let phases = Arc::new(Mutex::new(Vec::new()));
+    let received = phases.clone();
+    let turn = talk::MacTurn::begin(
+        st.clone(),
+        Arc::new(move |phase, heard, text| {
+            received.lock().unwrap().push((phase.to_owned(), heard.to_owned(), text.to_owned()));
+        }),
+    )
+    .unwrap();
+    let samples = say("What color is a ripe banana? Answer with just the color.", "Samantha", home.path());
+    let audio = samples.into_iter().map(|s| f32::from(s) / 32768.).collect();
+    let finished = tokio::time::timeout(Duration::from_secs(180), turn.submit(audio)).await;
+    st.brain().forget();
+    st.local_model.stop().await;
+    server.abort();
+    finished.expect("local turn did not finish");
+    let phases = phases.lock().unwrap();
+    let (phase, heard, answer) = phases.last().expect("no Mac response");
+    assert_eq!(phase, "reply", "Mac panel events: {phases:?}");
+    assert!(heard.to_lowercase().contains("banana"), "{heard}");
+    assert!(answer.to_lowercase().contains("yellow"), "{answer}");
+    assert!(!st.link.connected());
+}
+
 async fn until_done(fake: &FakeStick) -> Vec<(String, String, String)> {
     for _ in 0..1500 {
         let s = fake.screens();

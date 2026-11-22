@@ -4,12 +4,15 @@ import {brainPanel, pickedModel} from "../brain.js";
 import {componentsPanel} from "../components.js";
 import {mcpPanel} from "../mcp.js";
 import {updatesPanel} from "../updates.js";
+import {macVoiceFields} from "../mac_voice.js";
 
 export const title = "Settings";
 export const subtitle = "How the agent behaves. Changes apply right away once you save.";
 
 const SOURCES = [["facts", "Fun facts"], ["hn", "Hacker News"], ["onthisday", "On this day"], ["wikipedia", "Wikipedia featured article"]];
 let root = null, cfg = null, unsub = null, unsubBrain = null;
+let macVoice = null;
+let renderVersion = 0;
 
 export function actions() {
   return [
@@ -23,13 +26,17 @@ export function actions() {
 }
 
 export async function render(el) {
+  const version = ++renderVersion;
   root = el;
   clear(root).appendChild(h("div", {class: "empty"}, "Loading…"));
-  cfg = await get("/api/config");
-  if (!root) return;
+  const settings = await get("/api/config");
+  if (!root || version !== renderVersion) return;
+  cfg = settings;
   clear(root);
   if (cfg.error) { root.appendChild(h("div", {class: "notice err"}, cfg.error)); return; }
   const c = cfg;
+  macVoice?.leave();
+  macVoice = Object.hasOwn(c, "mac_voice_enabled") ? macVoiceFields() : null;
   const voice = h("select", {id: "voice"}, h("option", {value: ""}, "System voice"));
   get("/api/voices").then(vs => {
     if (!Array.isArray(vs)) return;
@@ -47,6 +54,7 @@ export async function render(el) {
         .map(([v, l]) => h("option", {value: v, selected: (c.brain_mode || "session") === v}, l)))),
       field("Live replies", toggle("streamReplies", "Show the reply on the stick while it's written (both brains)", c.stream_replies !== false))),
     card("Speech & replies",
+      macVoice?.el,
       field("Read replies aloud", toggle("speak", "Short replies are spoken; long ones stay on the screen", c.speak_replies)),
       field("Play on", h("select", {id: "speakOut"}, [["stick", "the stick's speaker"], ["mac", "the Mac's speakers"]].map(([v, l]) => h("option", {value: v, selected: (c.speak_output || "stick") === v}, l)))),
       field("Short means", h("div", {class: "row"}, h("span", {class: "dim"}, "up to"), h("input", {type: "number", id: "speakMax", min: 5, max: 300, value: c.speak_max_words || 40, style: "width:90px"}), h("span", {class: "dim"}, "words"))),
@@ -100,6 +108,8 @@ export async function render(el) {
 
 export function leave() {
   root = null;
+  macVoice?.leave();
+  macVoice = null;
   if (unsub) unsub();
   if (unsubBrain) unsubBrain();
   unsub = unsubBrain = null;
