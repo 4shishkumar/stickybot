@@ -1028,6 +1028,7 @@ pub(crate) mod tests {
             match ev {
                 BrainEvent::Progress(p) => progress.push(p),
                 BrainEvent::Text(t) => texts.push(t),
+                BrainEvent::PermissionHook(_) => unreachable!("OpenRouter does not run Claude hooks"),
             }
         }
         Asked { ok, reply, progress, texts }

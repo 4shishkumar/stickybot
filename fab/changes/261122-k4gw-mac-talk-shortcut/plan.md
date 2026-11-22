@@ -20,6 +20,14 @@ The opt-in Mac shortcut and stick button reach the configured agent. A Mac turn 
 - [x] The overlay keeps focus in the front app, shows the correct logo and wording, respects Reduce Motion, and stays readable until dismissal or the next turn.
 - [x] Settings report registration and permission failures and preserve the last working shortcut.
 
+## Review fixes
+
+Keyboard answers stay out of the stick’s Home card and read-aloud history. Connection generations on incoming frames prevent old audio or buttons from reaching a reconnected turn. Claude permission-hook lifecycle events from the current request drive the Mac waiting panel when the installed CLI supports them. CLI hooks and their approval decisions stay with the existing broker and permissions handler.
+
 ## Verification
 
 The native harness exercised Carbon registration and collision rollback, synthetic stereo input, persistence, dimensions, focus and cancellation. A signed app bundle served the opt-in settings with capture disabled. A separate synthetic spoken question passed through real Parakeet, sandboxed Goose and llama.cpp and returned a full answer with the stick disconnected. The draft PR retains manual checks for a physical microphone, macOS permission prompt, a held shortcut over another app, and hold B on hardware.
+
+## Deletion Candidates
+
+None. The stick and keyboard still need their respective capture and presentation paths.

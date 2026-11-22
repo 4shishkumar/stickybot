@@ -19,7 +19,7 @@
 use crate::talk::{Brain, BrainEvent};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -68,6 +68,8 @@ struct Turn {
     result: Option<String>,
     ok: bool,
     session: Option<String>,
+    /// Only hooks started within this request can end its waiting state.
+    permission_hooks: HashSet<String>,
 }
 
 impl Turn {
@@ -81,6 +83,7 @@ impl Turn {
             result: None,
             ok: false,
             session: None,
+            permission_hooks: HashSet::new(),
         }
     }
 
@@ -95,6 +98,23 @@ impl Turn {
     fn feed(&mut self, ev: &Value) -> bool {
         self.events += 1;
         match ev.get("type").and_then(Value::as_str) {
+            Some("system") if ev["hook_event"] == "PermissionRequest" => {
+                if let Some(id) = ev["hook_id"].as_str().filter(|id| !id.is_empty()) {
+                    match ev["subtype"].as_str() {
+                        Some("hook_started")
+                            if self.permission_hooks.insert(id.to_owned()) && self.permission_hooks.len() == 1 =>
+                        {
+                            let _ = self.out.send(BrainEvent::PermissionHook(true));
+                        }
+                        Some("hook_response")
+                            if self.permission_hooks.remove(id) && self.permission_hooks.is_empty() =>
+                        {
+                            let _ = self.out.send(BrainEvent::PermissionHook(false));
+                        }
+                        _ => {}
+                    }
+                }
+            }
             Some("stream_event") if ev.get("parent_tool_use_id").is_none_or(Value::is_null) => {
                 let e = &ev["event"];
                 match e["type"].as_str() {
@@ -172,6 +192,7 @@ struct Inner {
     cfg: Config,
     workspace: PathBuf,
     timeout: Mutex<Duration>,
+    hook_events_supported: Mutex<Option<(PathBuf, bool)>>,
     interrupt_wait: Mutex<Duration>,
     proc: Mutex<Option<Proc>>,
     stdin: tokio::sync::Mutex<Option<ChildStdin>>,
@@ -223,6 +244,7 @@ impl ClaudeBrain {
                 cfg,
                 workspace,
                 timeout: Mutex::new(TIMEOUT),
+                hook_events_supported: Mutex::new(None),
                 interrupt_wait: Mutex::new(INTERRUPT_WAIT),
                 proc: Mutex::new(None),
                 stdin: tokio::sync::Mutex::new(None),
@@ -284,6 +306,7 @@ impl ClaudeBrain {
             cfg.get("model"),
             cfg.get("safe_tools"),
             cfg.get("tool_profiles"),
+            cfg.get("mac_voice_enabled"),
             self.inner.workspace,
             self.mcp(cfg).is_some()
         ])
@@ -334,6 +357,34 @@ impl ClaudeBrain {
         a
     }
 
+    // The installed CLI might predate hook lifecycle events. Probe without starting a conversation,
+    // once per chosen executable, only when the Mac UI needs them. Never change a permission decision.
+    async fn add_hook_events(&self, cfg: &Map<String, Value>, claude: &Path, args: &mut Vec<String>) {
+        if cfg.get("mac_voice_enabled").and_then(Value::as_bool) != Some(true) {
+            return;
+        }
+        let cached = self.inner.hook_events_supported.lock().unwrap().clone().filter(|(p, _)| p == claude);
+        let supported = if let Some((_, value)) = cached {
+            value
+        } else {
+            let output = Command::new(claude).arg("--help").stdin(Stdio::null()).kill_on_drop(true).output();
+            let supported =
+                tokio::time::timeout(Duration::from_secs(2), output).await.ok().and_then(Result::ok).is_some_and(
+                    |out| {
+                        out.status.success()
+                            && String::from_utf8_lossy(&out.stdout)
+                                .split_ascii_whitespace()
+                                .any(|word| word == "--include-hook-events")
+                    },
+                );
+            *self.inner.hook_events_supported.lock().unwrap() = Some((claude.into(), supported));
+            supported
+        };
+        if supported {
+            args.push("--include-hook-events".into());
+        }
+    }
+
     fn args(&self, cfg: &Map<String, Value>, session: Option<&str>) -> Vec<String> {
         let mut a: Vec<String> = ["-p", "--input-format", "stream-json"].iter().map(|s| s.to_string()).collect();
         a.extend(self.common_args(cfg));
@@ -371,7 +422,8 @@ impl ClaudeBrain {
         if !md.exists() {
             let _ = std::fs::write(&md, CLAUDE_MD);
         }
-        let args = self.oneshot_args(cfg, text);
+        let mut args = self.oneshot_args(cfg, text);
+        self.add_hook_events(cfg, claude, &mut args).await;
         log::info!(
             "claude {}",
             args.iter()
@@ -464,7 +516,8 @@ impl ClaudeBrain {
             let _ = std::fs::write(&md, CLAUDE_MD);
         }
         let session = self.session();
-        let args = self.args(cfg, session.as_deref());
+        let mut args = self.args(cfg, session.as_deref());
+        self.add_hook_events(cfg, claude, &mut args).await;
         log::info!("claude session: {}", args.join(" "));
         let t = Instant::now();
         let mut child = Command::new(claude)
@@ -827,6 +880,40 @@ mod tests {
 
     const FAKE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../mac-agent/tests/fake_claude.py");
 
+    #[test]
+    fn permission_hook_events_only_report_this_turns_outstanding_requests() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut turn = Turn::new(tx);
+        let mut hook = |kind: &str, event: &str, id: &str| {
+            turn.feed(&json!({"type":"system","subtype":kind,"hook_event":event,"hook_id":id}));
+        };
+        hook("hook_started", "PreToolUse", "other");
+        hook("hook_response", "PermissionRequest", "prior");
+        hook("hook_started", "PermissionRequest", "a");
+        hook("hook_started", "PermissionRequest", "b");
+        hook("hook_response", "PermissionRequest", "a");
+        assert_eq!(rx.try_recv().unwrap(), BrainEvent::PermissionHook(true));
+        assert!(rx.try_recv().is_err());
+        hook("hook_response", "PermissionRequest", "b");
+        assert_eq!(rx.try_recv().unwrap(), BrainEvent::PermissionHook(false));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn older_claude_runs_without_hook_events() {
+        let f = fake("old-hook-cli", "");
+        let modern = f.dir.join("new-cli");
+        let old = f.dir.join("old-cli");
+        use std::os::unix::fs::PermissionsExt;
+        for (cli, help, expected) in [(&modern, "--include-hook-events", true), (&old, "--verbose", false)] {
+            std::fs::write(cli, format!("#!/bin/sh\necho {help}\n")).unwrap();
+            std::fs::set_permissions(cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mut args = Vec::new();
+            f.brain.add_hook_events(json!({"mac_voice_enabled": true}).as_object().unwrap(), cli, &mut args).await;
+            assert_eq!(args.contains(&"--include-hook-events".into()), expected);
+        }
+    }
+
     struct Fake {
         brain: ClaudeBrain,
         dir: PathBuf,
@@ -903,6 +990,7 @@ mod tests {
             match ev {
                 BrainEvent::Progress(p) => progress.push(p),
                 BrainEvent::Text(t) => texts.push(t),
+                BrainEvent::PermissionHook(_) => {}
             }
         }
         Answer { ok, reply, progress, texts }

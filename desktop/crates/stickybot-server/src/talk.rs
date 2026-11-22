@@ -3,8 +3,8 @@
 //! them, transcribes, and answers on the stick's screen with
 //! `{"src":"agent","state":"thinking"|"working"|"done"|"error"|"cancelled","heard","text"}`.
 //!
-//! What it answers with: a "new chat" phrase, a quick command (commands.rs), or the brain
-//! ([`Brain`]; until Claude is ported, [`NoBrain`] says so on the stick).
+//! The Mac shortcut submits PCM directly through [`MacTurn`]. Both inputs share speech recognition
+//! and the selected [`Brain`]. The turn owner determines where progress and the answer go.
 
 use crate::AppState;
 use crate::commands;
@@ -87,6 +87,8 @@ pub fn plain(text: &str) -> String {
 /// What a brain reports while it works.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BrainEvent {
+    /// The current provider request is running one or more permission hooks.
+    PermissionHook(bool),
     /// a tool line ("Searching: weather"): every one is shown
     Progress(String),
     /// the answer so far ("" withdraws a preamble)
@@ -774,6 +776,15 @@ async fn handle_text_inner(turn: &VoiceTurn, text: String, source: &str) {
                 return;
             }
             match ev {
+                BrainEvent::PermissionHook(waiting) => {
+                    if turn.owner.mac {
+                        if waiting {
+                            turn.show("approval", heard, "Claude is requesting permission.").await;
+                        } else {
+                            turn.show("thinking", heard, "").await;
+                        }
+                    }
+                }
                 BrainEvent::Progress(line) => {
                     st.set_activity("working", &line);
                     st.hub.emit("progress", json!({"text": line}));
@@ -1169,6 +1180,9 @@ pub(crate) mod tests {
                         Some(c) if c.starts_with("TOOL:") => {
                             let _ = ev.send(BrainEvent::Progress(c[5..].to_string()));
                         }
+                        Some(c) if c == "PERMISSION" => {
+                            let _ = ev.send(BrainEvent::PermissionHook(true));
+                        }
                         Some(c) => {
                             acc.push_str(&c);
                             let _ = ev.send(BrainEvent::Text(acc.clone()));
@@ -1410,6 +1424,20 @@ pub(crate) mod tests {
         assert!(until(|| !voice.played.lock().unwrap().is_empty()).await);
         assert_eq!(*voice.for_stick.lock().unwrap(), [false]);
         assert!(speech_msgs(&t.fake).is_empty());
+    }
+
+    #[tokio::test]
+    async fn keyboard_provider_hook_reports_permission_without_claiming_a_stick_is_available() {
+        let t = agent("mac-provider-hook", true).await;
+        t.st.link.set_target(None);
+        t.st.set_brain(Arc::new(FakeBrain::new(&["PERMISSION", "Done"])));
+        let (notify, events) = mac_display();
+        MacTurn::begin(t.st.clone(), notify).unwrap().submit(vec![0.; RATE as usize]).await;
+        let events = events.lock().unwrap();
+        assert!(
+            events.iter().any(|(phase, _, detail)| phase == "approval" && detail == "Claude is requesting permission.")
+        );
+        assert_eq!(events.last().unwrap().0, "reply");
     }
 
     #[tokio::test]

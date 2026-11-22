@@ -252,9 +252,12 @@ async fn voice_preferences(st: Arc<AppState>, change: Option<VoiceSettings>) -> 
                 let mut candidate = cfg.clone();
                 candidate.insert("mac_voice_enabled".into(), json!(next.enabled));
                 candidate.insert("mac_voice_shortcut".into(), json!(next.shortcut));
-                crate::config::save(&st.paths, &candidate).map(|()| *cfg = candidate)
+                crate::config::save(&st.paths, &candidate).map(|()| {
+                    *cfg = candidate.clone();
+                    candidate
+                })
             };
-            if saved.is_err() {
+            let Ok(snapshot) = saved else {
                 if let Err(message) = app.configure_voice(enabled, &shortcut) {
                     return err(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -262,7 +265,8 @@ async fn voice_preferences(st: Arc<AppState>, change: Option<VoiceSettings>) -> 
                     );
                 }
                 return err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the keyboard shortcut");
-            }
+            };
+            st.devices.refresh_children(&snapshot);
             enabled = next.enabled;
             shortcut = next.shortcut;
             status = app.voice_status();

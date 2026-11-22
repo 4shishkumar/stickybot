@@ -30,25 +30,26 @@ confidence:
         disambiguation: 86.0
 stage_metrics:
     intake: {started_at: "2026-11-22T19:29:31Z", driver: fab-new, iterations: 1, completed_at: "2026-11-22T19:57:52Z"}
-    apply: {started_at: "2026-11-22T19:57:52Z", driver: fab-fff, iterations: 1, completed_at: "2026-11-22T20:08:51Z"}
-    review: {started_at: "2026-11-22T20:08:51Z", driver: fab-fff, iterations: 1}
-prs: []
+    apply: {started_at: "2026-11-22T20:10:04Z", driver: fab-fff, iterations: 2, completed_at: "2026-11-22T20:17:56Z"}
+    review: {started_at: "2026-11-22T20:17:56Z", driver: fab-fff, iterations: 2}
+prs:
+    - https://github.com/4shishkumar/stickybot/pull/19
 change_type_source: explicit
 base_branch: main
 true_impact:
-    added: 0
-    deleted: 0
-    net: 0
+    added: 2148
+    deleted: 121
+    net: 2027
     excluding:
-        added: 0
-        deleted: 0
-        net: 0
+        added: 2024
+        deleted: 121
+        net: 1903
     tests:
-        added: 0
+        added: 336
         deleted: 0
-        net: 0
-    computed_at: "2026-11-22T20:08:51Z"
+        net: 336
+    computed_at: "2026-11-22T20:17:56Z"
     computed_at_stage: apply
 # base_branch: written by /git-branch or /fab-new when the change's branch is created (no placeholder here).
 # true_impact: lazily created on first stage-finish that computes it (no placeholder here).
-last_updated: 2026-11-22T20:08:51Z
+last_updated: 2026-11-22T20:17:56Z
