@@ -9,7 +9,7 @@ progress:
     apply: done
     review: done
     hydrate: done
-    ship: active
+    ship: done
     review-pr: pending
 plan:
     generated: true
@@ -33,26 +33,26 @@ stage_metrics:
     apply: {started_at: "2026-11-22T19:29:52Z", driver: fab-continue, iterations: 3, completed_at: "2026-11-22T19:32:52Z"}
     review: {started_at: "2026-11-22T19:32:52Z", driver: fab-continue, iterations: 3, completed_at: "2026-11-22T19:33:31Z"}
     hydrate: {started_at: "2026-11-22T19:33:31Z", driver: fab-continue, iterations: 2, completed_at: "2026-11-22T19:34:32Z"}
-    ship: {started_at: "2026-11-22T19:34:32Z", driver: fab-continue, iterations: 2}
+    ship: {started_at: "2026-11-22T19:34:32Z", driver: fab-continue, iterations: 2, completed_at: "2026-11-22T19:35:09Z"}
 prs:
     - https://github.com/4shishkumar/stickybot/pull/18
 base_branch: main
 change_type_source: explicit
 summary: Control stick volume from the menu bar and dashboard with a 0–100% slider and mute that preserves the exact level
 true_impact:
-    added: 696
-    deleted: 164
-    net: 532
+    added: 764
+    deleted: 165
+    net: 599
     excluding:
-        added: 558
-        deleted: 162
-        net: 396
+        added: 618
+        deleted: 163
+        net: 455
     tests:
-        added: 140
+        added: 165
         deleted: 0
-        net: 140
-    computed_at: "2026-11-22T19:34:32Z"
-    computed_at_stage: hydrate
+        net: 165
+    computed_at: "2026-11-22T19:35:10Z"
+    computed_at_stage: ship
 # base_branch: written by /git-branch or /fab-new when the change's branch is created (no placeholder here).
 # true_impact: lazily created on first stage-finish that computes it (no placeholder here).
-last_updated: 2026-11-22T19:34:32Z
+last_updated: 2026-11-22T19:35:10Z
