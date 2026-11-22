@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 class Element extends EventTarget {
   constructor() { super(); this.children = []; }
   appendChild(node) { this.children.push(node); }
+  append(...nodes) { this.children.push(...nodes); }
+  remove() {}
   setAttribute(name, value) { this[name] = value; }
   fire(type) { this.dispatchEvent(new Event(type)); }
 }
@@ -62,4 +64,60 @@ test('a late HTTP acknowledgement preserves a newer hardware report', async () =
   resolve({on:false, volume:94});
   await settle();
   assert.equal(control.el.children[2].textContent, '63%');
+});
+
+test('releasing a stationary thumb shows a mute from another surface', async () => {
+  const writes = [];
+  const control = volumeControl({on:true, volume:94}, {async put(_, payload) { writes.push(payload); return payload; }}, 'vol');
+  const [mute, slider, out] = control.el.children;
+  slider.fire('pointerdown');
+  control.sync({on:false, volume:161});
+  assert.equal(out.textContent, '37%');
+  slider.fire('pointerup');
+  assert.equal(out.textContent, '0%');
+  assert.equal(mute.textContent, 'Unmute');
+  assert.equal(writes.length, 0);
+  mute.fire('click'); await settle();
+  assert.deepEqual(writes, [{on:true, volume:161}]);
+});
+
+test('a failed write during a drag restores the confirmed level on release', async t => {
+  document.querySelector = () => new Element();
+  t.mock.timers.enable({apis:['setTimeout']});
+  const control = volumeControl({on:true, volume:94}, {async put() { return {error:'No reply'}; }}, 'vol');
+  const [, slider, out] = control.el.children;
+  slider.fire('pointerdown');
+  slider.value = 70; slider.fire('input');
+  t.mock.timers.tick(200);
+  await settle();
+  assert.equal(out.textContent, '70%');
+  slider.fire('pointerup');
+  assert.equal(out.textContent, '37%');
+});
+
+test('a late Sounds response cannot attach a listener after a device switch', async t => {
+  const {render, leave} = await import('../../stick_agent/static/pages/sounds.js');
+  const {selectDevice, store} = await import('../../stick_agent/static/lib.js');
+  const replies = new Map();
+  document.getElementById = () => null;
+  t.mock.method(globalThis, 'fetch', async path => {
+    if (path === '/api/clips') return Response.json([]);
+    return new Promise(resolve => replies.set(path, () => resolve(Response.json({on:true, volume:94}))));
+  });
+  t.after(() => { leave(); selectDevice(null); });
+  const page = new Element();
+  selectDevice('one');
+  const first = render(page);
+  leave();
+  selectDevice('two');
+  const second = render(page);
+  replies.get('/api/devices/two/api/sounds')();
+  await second;
+  const [current] = store.listeners;
+  assert.ok(current);
+  replies.get('/api/devices/one/api/sounds')();
+  await first;
+  assert.deepEqual([...store.listeners], [current]);
+  leave();
+  assert.equal(store.listeners.size, 0);
 });

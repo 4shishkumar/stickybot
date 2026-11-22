@@ -15,7 +15,7 @@ const MOMENTS = [
   ["disconnected", "Mac disconnected", ""], ["unlock", "Unlock", "double-press B typed the password"],
   ["charging", "Charging", "USB plugged in"], ["lowbattery", "Low battery", "at 15%"],
 ];
-let root = null, unsub = null;
+let activePanel = null, unsub = null;
 
 export function actions() {
   return [h("button", {class: "btn", type: "button", onclick: () => post("/api/sounds/play", {name: "test"})}, "Play a test sound")];
@@ -23,13 +23,13 @@ export function actions() {
 
 export async function render(el) {
   const target = deviceApi(), {get, put, post} = target;
-  root = el;
   const top = h("div", null, h("div", {class: "empty"}, "Asking the stick…"));
+  activePanel = top;
   const lib = card("Sound library", h("p", {class: "lead"}, "Kenney's Interface Sounds and UI Audio (public domain). Press a number to hear it on the stick."), h("div", {class: "lib", id: "clipLib"}, h("div", {class: "empty"}, "Loading…")));
-  root.append(top, lib);
+  el.append(top, lib);
   loadClips();
   const s = await get("/api/sounds");
-  if (root !== el) return;
+  if (activePanel !== top) return;
   clear(top);
   if (s.error) { top.appendChild(h("div", {class: "notice warn"}, h("div", {class: "grow"}, h("b", null, "The stick didn't answer"), h("span", {class: "dim"}, s.error)))); return; }
   const volume = volumeControl(s, target, "sndVol");
@@ -52,7 +52,7 @@ export async function render(el) {
   top.appendChild(card("Moments", h("p", {class: "lead"}, "Clips come first in each list, then the synthesized beeps. ▶ plays it on the stick."), rows));
 }
 
-export function leave() { root = null; unsub?.(); unsub = null; }
+export function leave() { activePanel = null; unsub?.(); unsub = null; }
 
 async function loadClips() {
   const box = document.getElementById("clipLib");

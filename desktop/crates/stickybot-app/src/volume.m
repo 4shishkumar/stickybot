@@ -29,6 +29,9 @@ typedef void (^SBVolumeChange)(int on, int raw);
 @property(nonatomic) BOOL muted;
 @property(nonatomic, copy) NSString *device;
 @property(nonatomic) BOOL ignoreGesture;
+@property(nonatomic) BOOL hasReport;
+@property(nonatomic) BOOL reportedOn;
+@property(nonatomic) int reportedRaw;
 @property(nonatomic) NSTimeInterval lastSend;
 @end
 
@@ -57,13 +60,9 @@ typedef void (^SBVolumeChange)(int on, int raw);
     _slider.started = ^{ weakSelf.ignoreGesture = NO; };
     _slider.finished = ^{
         SBVolumeView *view = weakSelf;
-        if (view.ignoreGesture) {
-            view.slider.doubleValue = view.sent;
-            [view display:view.sent];
-            view.ignoreGesture = NO;
-        } else {
-            [view sendLevel];
-        }
+        if (!view.ignoreGesture) [view sendLevel];
+        if (view.hasReport || view.ignoreGesture) [view displayReport];
+        view.ignoreGesture = NO;
     };
     [self addSubview:_slider];
     return self;
@@ -76,10 +75,19 @@ typedef void (^SBVolumeChange)(int on, int raw);
 - (void)sendLevel {
     int pct = (int)lround(self.slider.doubleValue);
     if (!self.change || pct == self.sent) return;
+    self.hasReport = NO;
     self.sent = pct;
     self.lastSend = NSProcessInfo.processInfo.systemUptime;
     if (pct) self.stored = (pct * 255 + 50) / 100;
     self.change(pct != 0, self.stored);
+}
+- (void)displayReport {
+    self.hasReport = NO;
+    self.stored = self.reportedRaw;
+    self.sent = self.reportedOn && self.stored ? MAX(1, (self.stored * 100 + 127) / 255) : 0;
+    self.slider.doubleValue = self.sent;
+    [self display:self.sent];
+    if (!self.slider.enabled) self.level.stringValue = @"—";
 }
 - (void)slide:(id)sender {
     if (self.ignoreGesture) return;
@@ -106,14 +114,13 @@ void stickybot_volume_update(void *nativeMenu, const char *device, int enabled, 
     view.slider.enabled = view.mute.enabled = enabled;
     view.change = change;
     NSString *identifier = [NSString stringWithUTF8String:device];
+    view.reportedRaw = raw;
+    view.reportedOn = on;
+    view.hasReport = YES;
     if (view.slider.dragging) {
         if (![identifier isEqualToString:view.device] || !enabled) view.ignoreGesture = YES;
         if (!view.ignoreGesture) return;
     }
     view.device = identifier;
-    view.stored = raw;
-    view.sent = on && raw ? MAX(1, (raw * 100 + 127) / 255) : 0;
-    view.slider.doubleValue = view.sent;
-    [view display:view.sent];
-    if (!enabled) view.level.stringValue = @"—";
+    [view displayReport];
 }

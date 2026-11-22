@@ -46,11 +46,12 @@ export function volumeControl(initial, target, id) {
   }
   slider.addEventListener("pointerdown", () => { dragging = true; });
   slider.addEventListener("input", () => { select(+slider.value); schedule(); });
-  slider.addEventListener("change", () => {
+  const end = () => {
     dragging = false;
-    flush();
-  });
-  const end = () => { dragging = false; flush(); };
+    if (queued) flush();
+    else if (!writing) { desired = confirmed; paint(); }
+  };
+  slider.addEventListener("change", end);
   slider.addEventListener("pointerup", end);
   slider.addEventListener("pointercancel", end);
   mute.addEventListener("click", () => {
