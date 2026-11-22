@@ -28,3 +28,20 @@ def test_volume_and_mute_keep_the_sticks_level():
     menubar.Menu.toggle_sounds(menu, None)
     assert sent == [{"volume": 94, "on": True}, {"on": False}, {"on": False, "volume": 94},
                     {"on": True, "volume": 94}, {"on": True, "volume": 140}]
+
+
+def test_speaker_menu_item_follows_reported_mute_state(monkeypatch):
+    from unittest.mock import Mock
+
+    import AppKit
+
+    image = Mock()
+    monkeypatch.setattr(AppKit, "NSImage", image)
+    item = Mock()
+    for muted, symbol, action in ((False, "speaker.wave.2.fill", "Mute stick speaker"),
+                                  (True, "speaker.slash.fill", "Unmute stick speaker")):
+        menubar.show_speaker(item, muted)
+        image.imageWithSystemSymbolName_accessibilityDescription_.assert_called_with(symbol, None)
+        item.setImage_.assert_called_with(image.imageWithSystemSymbolName_accessibilityDescription_.return_value)
+        item.setToolTip_.assert_called_with(action)
+        item.setAccessibilityLabel_.assert_called_with(action)

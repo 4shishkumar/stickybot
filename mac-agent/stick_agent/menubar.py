@@ -75,6 +75,19 @@ SETUP = "Finish setup…"
 SETUP_EVERY_S = 30
 
 
+def show_speaker(item, muted):
+    """Update the native image and the action announced by VoiceOver together."""
+    from AppKit import NSImage
+
+    action = "Unmute stick speaker" if muted else "Mute stick speaker"
+    if item.toolTip() == action:
+        return
+    symbol = "speaker.slash.fill" if muted else "speaker.wave.2.fill"
+    item.setImage_(NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, None))
+    item.setToolTip_(action)
+    item.setAccessibilityLabel_(action)
+
+
 def check_result(s):
     """An update check's status() -> what the menu item says."""
     if s.get("available"):
@@ -115,7 +128,8 @@ class Menu(rumps.App):
         self.volume_slider = rumps.SliderMenuItem(value=0, callback=self.set_volume)
         self.volume_slider._slider.setAccessibilityLabel_("Stick volume")
         self.volume_slider._slider.setContinuous_(False)  # one saved level when the thumb is released
-        self.sounds_item = rumps.MenuItem("Mute", callback=self.toggle_sounds)
+        self.sounds_item = rumps.MenuItem("", callback=self.toggle_sounds)
+        show_speaker(self.sounds_item._menuitem, muted=True)
         self.volume_menu.add(self.volume_slider)
         self.volume_menu.add(self.sounds_item)
         # "Finish setup…" (the setup page) while the speech model or the stick isn't set up yet
@@ -174,7 +188,7 @@ class Menu(rumps.App):
         self.volume_slider.value = vol
         self.volume_slider._slider.setEnabled_(available)
         self.volume_menu.title = f"Stick volume · {vol}%" if available else "Stick volume"
-        self.sounds_item.title = "Mute" if vol else "Unmute"
+        show_speaker(self.sounds_item._menuitem, muted=vol == 0)
         self.sounds_item.set_callback(self.toggle_sounds if available else None)
         self.show_update()
         self.show_setup()

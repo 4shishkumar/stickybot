@@ -23,9 +23,11 @@ builds, embedded in release builds). A dashboard change therefore changes both a
 MUST cope with an endpoint one app lacks (the API helper resolves with `missing: true`).
 
 ### Requirement: Menu and dashboard control the stick speaker
-Both Mac apps provide a 0–100% slider and a mute button in the menu bar and on the dashboard's
-Sounds and Stick pages. The Rust menu controls the default stick. The dashboard controls the
-stick selected in that view. Muting with the button or by sliding to zero preserves the stick's
+Both Mac apps provide a 0–100% slider and a speaker button in the menu bar and on the dashboard's
+Sounds and Stick pages. The native menus use Apple’s speaker-with-waves and slashed-speaker symbols.
+The dashboard draws matching states. The tooltip and accessible label say “Mute stick speaker”
+when audible and “Unmute stick speaker” when muted. The Rust menu controls the default stick. The
+dashboard controls the stick selected in that view. Muting with the button or by sliding to zero preserves the stick's
 exact saved volume (0–255). Unmute restores that value, or uses 140 if the saved value is zero.
 
 Sound requests to each stick run one at a time. The Rust menu and dashboard coalesce drag updates

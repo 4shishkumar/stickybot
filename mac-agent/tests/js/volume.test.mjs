@@ -21,8 +21,16 @@ test('slider and mute round-trip exact levels, including legacy zero, across rep
   const control = volumeControl({on:true, volume:93}, target, 'volume');
   const [mute, slider, out] = control.el.children;
   assert.equal(out.textContent, '36%');
+  assert.equal(mute['aria-label'], 'Mute stick speaker');
+  assert.equal(mute.title, mute['aria-label']);
+  const audibleIcon = mute.innerHTML;
+  assert.match(audibleIcon, /<svg.*aria-hidden="true"/);
   mute.fire('click'); await settle();
+  assert.notEqual(mute.innerHTML, audibleIcon);
+  assert.equal(mute['aria-label'], 'Unmute stick speaker');
+  assert.equal(mute.title, mute['aria-label']);
   mute.fire('click'); await settle();
+  assert.equal(mute.innerHTML, audibleIcon);
   assert.deepEqual(writes, [{on:false, volume:93}, {on:true, volume:93}]);
   slider.value = 37; slider.fire('input'); slider.fire('change'); await settle();
   assert.deepEqual(writes.at(-1), {on:true, volume:94});
@@ -75,7 +83,7 @@ test('releasing a stationary thumb shows a mute from another surface', async () 
   assert.equal(out.textContent, '37%');
   slider.fire('pointerup');
   assert.equal(out.textContent, '0%');
-  assert.equal(mute.textContent, 'Unmute');
+  assert.equal(mute['aria-label'], 'Unmute stick speaker');
   assert.equal(writes.length, 0);
   mute.fire('click'); await settle();
   assert.deepEqual(writes, [{on:true, volume:161}]);

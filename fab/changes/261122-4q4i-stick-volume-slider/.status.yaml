@@ -9,11 +9,11 @@ progress:
     apply: done
     review: done
     hydrate: done
-    ship: done
+    ship: active
     review-pr: pending
 plan:
     generated: true
-    task_count: 2
+    task_count: 3
     acceptance_count: 2
     acceptance_completed: 2
 confidence:
@@ -30,19 +30,19 @@ confidence:
         disambiguation: 95.0
 stage_metrics:
     intake: {started_at: "2026-11-22T19:12:50Z", driver: fab-new, iterations: 1, completed_at: "2026-11-22T19:13:17Z"}
-    apply: {started_at: "2026-11-22T19:16:20Z", driver: fab-adopt, iterations: 2, completed_at: "2026-11-22T19:18:20Z"}
-    review: {started_at: "2026-11-22T19:18:20Z", driver: fab-adopt, iterations: 2, completed_at: "2026-11-22T19:19:09Z"}
-    hydrate: {started_at: "2026-11-22T19:19:09Z", driver: fab-adopt, iterations: 1, completed_at: "2026-11-22T19:19:56Z"}
-    ship: {started_at: "2026-11-22T19:19:56Z", driver: fab-adopt, iterations: 1, completed_at: "2026-11-22T19:21:27Z"}
+    apply: {started_at: "2026-11-22T19:29:52Z", driver: fab-continue, iterations: 3, completed_at: "2026-11-22T19:32:52Z"}
+    review: {started_at: "2026-11-22T19:32:52Z", driver: fab-continue, iterations: 3, completed_at: "2026-11-22T19:33:31Z"}
+    hydrate: {started_at: "2026-11-22T19:33:31Z", driver: fab-continue, iterations: 2, completed_at: "2026-11-22T19:34:32Z"}
+    ship: {started_at: "2026-11-22T19:34:32Z", driver: fab-continue, iterations: 2}
 prs:
     - https://github.com/4shishkumar/stickybot/pull/18
 base_branch: main
 change_type_source: explicit
 summary: Control stick volume from the menu bar and dashboard with a 0–100% slider and mute that preserves the exact level
 true_impact:
-    added: 695
+    added: 696
     deleted: 164
-    net: 531
+    net: 532
     excluding:
         added: 558
         deleted: 162
@@ -51,8 +51,8 @@ true_impact:
         added: 140
         deleted: 0
         net: 140
-    computed_at: "2026-11-22T19:21:27Z"
-    computed_at_stage: ship
+    computed_at: "2026-11-22T19:34:32Z"
+    computed_at_stage: hydrate
 # base_branch: written by /git-branch or /fab-new when the change's branch is created (no placeholder here).
 # true_impact: lazily created on first stage-finish that computes it (no placeholder here).
-last_updated: 2026-11-22T19:21:27Z
+last_updated: 2026-11-22T19:34:32Z

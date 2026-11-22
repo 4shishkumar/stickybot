@@ -8,3 +8,8 @@
 {"action":"enter","driver":"fab-adopt","event":"stage-transition","stage":"hydrate","ts":"2026-11-22T19:19:09Z"}
 {"event":"review","result":"passed","ts":"2026-11-22T19:19:09Z"}
 {"action":"enter","driver":"fab-adopt","event":"stage-transition","stage":"ship","ts":"2026-11-22T19:19:56Z"}
+{"action":"re-entry","driver":"fab-continue","event":"stage-transition","stage":"apply","ts":"2026-11-22T19:29:52Z"}
+{"action":"re-entry","driver":"fab-continue","event":"stage-transition","stage":"review","ts":"2026-11-22T19:32:52Z"}
+{"action":"re-entry","driver":"fab-continue","event":"stage-transition","stage":"hydrate","ts":"2026-11-22T19:33:31Z"}
+{"event":"review","result":"passed","ts":"2026-11-22T19:33:31Z"}
+{"action":"re-entry","driver":"fab-continue","event":"stage-transition","stage":"ship","ts":"2026-11-22T19:34:32Z"}

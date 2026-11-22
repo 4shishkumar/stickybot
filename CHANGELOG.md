@@ -13,7 +13,7 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 ## [Unreleased]
 
 ### Changed
-- Adjust stick volume from 0–100% in the menu bar or dashboard. Mute and unmute keep the previous level.
+- Adjust stick volume from 0–100% in the menu bar or dashboard. Click the speaker icon to mute or restore the previous level.
 
 ## [2.7.0] - 2026-11-22
 

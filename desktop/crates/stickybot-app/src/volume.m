@@ -46,10 +46,12 @@ typedef void (^SBVolumeChange)(int on, int raw);
     _level.frame = NSMakeRect(177, 28, 50, 18);
     _level.alignment = NSTextAlignmentRight;
     [self addSubview:_level];
-    _mute = [NSButton buttonWithTitle:@"Mute" target:self action:@selector(toggle:)];
-    _mute.frame = NSMakeRect(11, 2, 76, 26);
+    _mute = [NSButton buttonWithTitle:@"" target:self action:@selector(toggle:)];
+    _mute.imagePosition = NSImageOnly;
+    _mute.bordered = NO;
+    _mute.frame = NSMakeRect(11, 2, 34, 26);
     [self addSubview:_mute];
-    _slider = [[SBVolumeSlider alloc] initWithFrame:NSMakeRect(91, 5, 138, 22)];
+    _slider = [[SBVolumeSlider alloc] initWithFrame:NSMakeRect(49, 5, 180, 22)];
     _slider.minValue = 0;
     _slider.maxValue = 100;
     _slider.continuous = YES;
@@ -69,8 +71,14 @@ typedef void (^SBVolumeChange)(int on, int raw);
 }
 - (void)display:(int)pct {
     self.level.stringValue = [NSString stringWithFormat:@"%d%%", pct];
-    self.mute.title = pct ? @"Mute" : @"Unmute";
-    self.muted = pct == 0;
+    BOOL muted = pct == 0;
+    if (self.mute.toolTip && self.muted == muted) return;
+    self.muted = muted;
+    NSString *action = muted ? @"Unmute stick speaker" : @"Mute stick speaker";
+    NSString *symbol = muted ? @"speaker.slash.fill" : @"speaker.wave.2.fill";
+    self.mute.image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:nil];
+    self.mute.toolTip = action;
+    [self.mute setAccessibilityLabel:action];
 }
 - (void)sendLevel {
     int pct = (int)lround(self.slider.doubleValue);
