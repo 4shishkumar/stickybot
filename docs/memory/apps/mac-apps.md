@@ -1,6 +1,6 @@
 ---
 type: memory
-description: "Rust StickyBot.app and the legacy Python app: independent device sessions, scoped APIs/MCP/history/jobs, default routing, host labels, shared Mac services, source-bound approvals, shared dashboard compatibility, stick volume controls, permissions and in-app updates."
+description: "Rust StickyBot.app and the legacy Python app: independent device sessions, scoped APIs/MCP/history/jobs, default routing, host labels, Mac keyboard push-to-talk and reply panel, shared Mac services, source-bound approvals, shared dashboard compatibility, stick volume controls, permissions and in-app updates."
 ---
 # Mac Apps
 
@@ -81,6 +81,27 @@ connection generation. SSE events carry `device_id`; late results from a differe
 do not repaint the active view. Activity rows carry `device_id`; event rows also retain destination
 `device_ids`. Activity queries filter by source device and event-history queries by source or
 destination. Legacy rows without a source ID belong to `primary`.
+
+### Requirement: Talk from the Mac keyboard
+In StickyBot.app, **Settings → Speech & replies → Talk from Mac keyboard** enables a Mac-wide
+shortcut. It starts disabled. The suggested chord is Control–Shift–Space. A conflicting replacement
+leaves the working chord registered. Hold the chord in any app to record from the system microphone;
+release to send. Capture is limited to 60 seconds. Escape, sleep, screen lock or input loss discards
+an active recording. Hold B uses the stick microphone.
+
+The native panel leaves focus in the front app. Its 46 pt StickyBot icon pulses with a teal glow
+beside the 13 pt heading during active stages. Reduce Motion uses a steady glow. On release the
+meter stops, and **Listening** shows “Microphone off · processing your words”. The same panel shows
+the transcript, thinking, approval waits and the answer as available. The full reply stays readable
+until dismissed or the next question. Errors appear in the panel. Read-aloud, when enabled, plays
+keyboard replies on the Mac.
+
+Key-down pins the default device for the turn. Speech and the configured local or remote brain use
+that device's settings. Each device accepts one owner at a time. Competing input reports busy, and
+stale stick events cannot take over a subsequent turn. Keyboard answers stay in the Mac panel and
+out of the stick's reply history. Ordinary questions work with the stick disconnected. Tools that
+require stick approval still require the broker's exact, single-use approval from the pinned stick;
+those actions cannot proceed while it is offline. (261122-k4gw-mac-talk-shortcut)
 
 ### Requirement: People recognize the Mac without using its name as identity
 A persisted `host.json` holds the installation ID and custom short label. ComputerName comes through
@@ -229,5 +250,6 @@ fake Claude and temporary homes. Tests against real Core Audio or a real stick a
 
 `desktop/README.md`, `desktop/SWITCHOVER.md`, `docs/ARCHITECTURE.md`, `README.md`,
 `mac-agent/README.md`, `desktop/crates/stickybot-server/src/{lib,devices,hosts,api,approvals,selfupdate}.rs`,
+`desktop/crates/stickybot-server/src/talk.rs`, `desktop/crates/stickybot-app/src/mac_voice.{rs,m}`,
 `docs/MULTI_DEVICE.md`. Related: [Mac link](/link/mac-link.md), [wireless mic](/link/wireless-mic.md),
 [releases](/delivery/releases.md).
