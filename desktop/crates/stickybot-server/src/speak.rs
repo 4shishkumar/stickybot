@@ -516,7 +516,6 @@ pub fn speak_last(st: &Arc<AppState>) -> bool {
             .lock()
             .unwrap()
             .as_ref()
-            .filter(|r| r["source"] != "mac_voice")
             .and_then(|r| r.get("text"))
             .and_then(Value::as_str)
             .unwrap_or("")

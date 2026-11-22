@@ -130,7 +130,7 @@ pub struct AppState {
     /// thinks or works; `None` = idle
     activity: Mutex<Option<(String, String)>>,
     stats: Mutex<Map<String, Value>>,
-    /// the last good brain reply `{"t", "text"}` (the home card, later)
+    /// The last successful stick-destined brain reply `{"t", "text"}` for its Home card.
     pub last_reply: Mutex<Option<Value>>,
     /// the last answer the stick showed ("done"): what its "listen" reads (firmware 2.6.0)
     pub last_done: Mutex<String>,

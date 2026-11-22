@@ -313,6 +313,8 @@ pub async fn tell_stick(st: &AppState, state: &str, heard: &str, text: &str) -> 
 /// The owner stays reserved until that turn unwinds, even if the input is cancelled.
 pub(crate) struct Owner {
     mac: bool,
+    generation: u64,
+    recording: AtomicBool,
     cancelled: AtomicBool,
     approval: watch::Sender<String>,
 }
@@ -322,7 +324,6 @@ pub type MacDisplay = Arc<dyn Fn(&str, &str, &str) + Send + Sync>;
 struct VoiceTurn {
     st: Arc<AppState>,
     owner: Arc<Owner>,
-    generation: u64,
     display: Option<MacDisplay>,
 }
 
@@ -331,22 +332,31 @@ const BUSY: &str = "Still working on the last request.";
 impl VoiceTurn {
     fn reserve(st: Arc<AppState>, display: Option<MacDisplay>, generation: u64) -> Result<Self, String> {
         let mut slot = st.voice_owner.lock().unwrap();
+        // The event loop may not have observed a quick reconnect yet. A buffer still waiting
+        // for key-up from the old stick can never be submitted on the new connection.
+        if slot.as_ref().is_some_and(|old| {
+            !old.mac && old.generation != st.link.generation() && old.recording.load(Ordering::Acquire)
+        }) {
+            *slot = None;
+        }
         if slot.is_some() || st.brain().busy() {
             return Err(BUSY.into());
         }
         let owner = Arc::new(Owner {
             mac: display.is_some(),
+            generation,
+            recording: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
             approval: watch::channel(String::new()).0,
         });
         *slot = Some(owner.clone());
         drop(slot);
-        Ok(Self { st, owner, generation, display })
+        Ok(Self { st, owner, display })
     }
 
     fn active(&self) -> bool {
         !self.owner.cancelled.load(Ordering::Acquire)
-            && (self.owner.mac || self.st.link.generation() == self.generation)
+            && (self.owner.mac || self.st.link.generation() == self.owner.generation)
     }
 
     async fn show(&self, state: &str, heard: &str, text: &str) {
@@ -369,8 +379,10 @@ impl VoiceTurn {
 impl Drop for VoiceTurn {
     fn drop(&mut self) {
         let mut slot = self.st.voice_owner.lock().unwrap();
-        self.st.set_idle();
-        *slot = None;
+        if slot.as_ref().is_some_and(|owner| Arc::ptr_eq(owner, &self.owner)) {
+            self.st.set_idle();
+            *slot = None;
+        }
     }
 }
 
@@ -416,16 +428,32 @@ impl Owner {
     }
 }
 
-fn cancel_stick_turn(st: &Arc<AppState>) {
+/// A button can cancel only its generation. A connection change can cancel only a
+/// previous generation. Either way a Mac-originated turn keeps its reservation.
+fn cancel_stick_turn(st: &Arc<AppState>, button: Option<u64>) {
     let slot = st.voice_owner.lock().unwrap();
     if let Some(owner) = slot.as_ref() {
-        if owner.mac {
+        let matches = match button {
+            Some(generation) => owner.generation == generation,
+            None => owner.generation != st.link.generation() || !st.link.connected(),
+        };
+        if owner.mac || !matches {
             return;
         }
         owner.cancelled.store(true, Ordering::Release);
         st.brain().cancel();
+    } else if button.is_none() && st.link.connected() {
+        return;
     }
     crate::speak::stop_stick(st);
+}
+
+type StickRecording = Option<(Recording, VoiceTurn)>;
+
+fn discard_stale_recording(rec: &mut StickRecording) {
+    if rec.as_ref().is_some_and(|(_, turn)| !turn.active()) {
+        *rec = None;
+    }
 }
 
 /// Listens to the link for talks and cancels. Runs for the life of the app.
@@ -433,30 +461,19 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     let mut rx = st.link.incoming();
     let mut connection = st.link.watch_state();
     tokio::spawn(async move {
-        let mut rec: Option<(Recording, VoiceTurn)> = None;
+        let mut rec: StickRecording = None;
         loop {
             let message = tokio::select! {
                 result = rx.recv() => result,
                 result = connection.changed() => {
                     if result.is_err() { return; }
-                    if !st.link.connected() {
-                        cancel_stick_turn(&st);
-                        rec = None;
-                    }
+                    cancel_stick_turn(&st, None);
+                    discard_stale_recording(&mut rec);
                     continue;
                 }
             };
             match message {
-                Ok(FromStick::Audio(frame)) => {
-                    // a Wispr stream's frames are the wireless mic's (wmic.rs), not a talk's
-                    if let Some((r, turn)) = rec.as_mut()
-                        && turn.active()
-                        && !st.wmic.streaming()
-                    {
-                        r.add(&frame);
-                    }
-                }
-                Ok(FromStick::Message(msg)) => on_message(&st, &msg, &mut rec),
+                Ok((generation, message)) => receive(&st, generation, message, &mut rec).await,
                 Err(broadcast::error::RecvError::Lagged(n)) => log::warn!("talk: fell behind the stick by {n}"),
                 Err(_) => return,
             }
@@ -464,7 +481,30 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     })
 }
 
-fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<(Recording, VoiceTurn)>) {
+async fn receive(st: &Arc<AppState>, generation: u64, message: FromStick, rec: &mut StickRecording) {
+    discard_stale_recording(rec);
+    if generation != st.link.generation() {
+        return;
+    }
+    st.link
+        .with_generation(generation, async {
+            match message {
+                FromStick::Audio(frame) => {
+                    // Wispr frames go to the wireless microphone.
+                    if let Some((recording, turn)) = rec
+                        && turn.active()
+                        && !st.wmic.streaming()
+                    {
+                        recording.add(&frame);
+                    }
+                }
+                FromStick::Message(msg) => on_message(st, &msg, rec),
+            }
+        })
+        .await;
+}
+
+fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut StickRecording) {
     let evt = msg.get("evt").and_then(Value::as_str);
     let from_agent = msg.get("src").and_then(Value::as_str) == Some("agent");
     if msg.get("cmd").and_then(Value::as_str) == Some("permission")
@@ -490,7 +530,7 @@ fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<(Recording, Voic
             if rec.is_some() {
                 return;
             }
-            let generation = st.link.generation();
+            let generation = st.link.bound_generation();
             let Ok(turn) = VoiceTurn::reserve(st.clone(), None, generation) else {
                 let st = st.clone();
                 tokio::spawn(async move {
@@ -499,11 +539,13 @@ fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<(Recording, Voic
                 return;
             };
             crate::speak::stop(st); // talking again interrupts a reply being read out
+            turn.owner.recording.store(true, Ordering::Release);
             *rec = Some((Recording::new(), turn));
             st.set_activity("listening", "");
         }
         (Some("talk"), Some("stop")) => {
             if let Some((r, turn)) = rec.take() {
+                turn.owner.recording.store(false, Ordering::Release);
                 tokio::spawn(handle_stick_recording(turn, r));
             }
         }
@@ -522,7 +564,7 @@ fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut Option<(Recording, Voic
         }
         (Some("cancel"), _) => {
             log::info!("cancelled on the stick");
-            cancel_stick_turn(st);
+            cancel_stick_turn(st, Some(st.link.bound_generation()));
             *rec = None;
         }
         _ => {}
@@ -551,7 +593,7 @@ fn handle_talk_at(st: Arc<AppState>, rec: Recording, generation: u64) -> impl st
 
 async fn handle_stick_recording(turn: VoiceTurn, rec: Recording) {
     let link = turn.st.link.clone();
-    link.with_generation(turn.generation, async {
+    link.with_generation(turn.owner.generation, async {
         if turn.active()
             && let Err(e) = handle_audio(&turn, rec.audio(), rec.lost()).await
         {
@@ -793,8 +835,8 @@ async fn handle_text_inner(turn: &VoiceTurn, text: String, source: &str) {
         log::info!("reply streamed to the stick in {sent} update{}", if sent == 1 { "" } else { "s" });
     }
     st.hub.emit("reply", json!({"text": reply, "via": "claude", "ok": ok, "ms": ms_since(started)}));
-    if ok {
-        *st.last_reply.lock().unwrap() = Some(json!({"t": crate::hub::now(), "text": reply, "source": source}));
+    if ok && !turn.owner.mac {
+        *st.last_reply.lock().unwrap() = Some(json!({"t": crate::hub::now(), "text": reply}));
     }
     turn.show(if ok { "done" } else { "error" }, &text, &reply).await;
     st.history(&with(json!({"via": "claude", "ok": ok, "reply": reply})));
@@ -892,6 +934,10 @@ pub(crate) mod tests {
     }
 
     pub async fn agent(name: &str, stt_ready: bool) -> T {
+        make_agent(name, stt_ready, true).await
+    }
+
+    async fn make_agent(name: &str, stt_ready: bool, watch_link: bool) -> T {
         let home = std::env::temp_dir().join(format!("stickybot-rs-talk-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         let opts = Options { port: 8670, home, fake_stick: true, import_from: None };
@@ -910,7 +956,9 @@ pub(crate) mod tests {
             String::new()
         }));
         st.link.spawn();
-        spawn(st.clone());
+        if watch_link {
+            spawn(st.clone());
+        }
         let said = Arc::new(Mutex::new(Ok("hello".to_string())));
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         if stt_ready {
@@ -1246,6 +1294,25 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn mac_reply_stays_out_of_the_stick_home_card_after_reconnect() {
+        let t = agent("mac-private-home-card", true).await;
+        t.st.cfg.lock().unwrap().insert("ticker".into(), json!(false));
+        t.st.set_brain(Arc::new(FakeBrain::new(&["Previous stick answer"])));
+        assert_eq!(talk(&t, 1.0).await.last().unwrap(), &pair("done", "Previous stick answer"));
+        t.st.link.pause(true);
+        t.st.link.watch_state().wait_for(|s| *s == LinkState::Paused).await.unwrap();
+        t.st.set_brain(Arc::new(FakeBrain::new(&["Private Mac answer"])));
+        let (display, events) = mac_display();
+        MacTurn::begin(t.st.clone(), display).unwrap().submit(vec![0.; RATE as usize]).await;
+        assert_eq!(events.lock().unwrap().last().unwrap().2, "Private Mac answer");
+        assert!(t.st.hub.subscribe(30).0.iter().any(|e| e["kind"] == "reply" && e["text"] == "Private Mac answer"));
+        t.st.link.pause(false);
+        t.st.link.watch_state().wait_for(|s| *s == LinkState::Connected).await.unwrap();
+        assert_eq!(crate::home::hello_extra(&t.st)["home"]["b"], "Previous stick answer");
+        assert_eq!(*t.st.last_done.lock().unwrap(), "Previous stick answer");
+    }
+
+    #[tokio::test]
     async fn stick_inputs_cannot_cancel_a_mac_recording_or_request() {
         let t = agent("mac-own", true).await;
         let mut brain = FakeBrain::new(&["Working", " on it"]);
@@ -1271,6 +1338,50 @@ pub(crate) mod tests {
         drop(next); // Escape before key-up must never submit
         assert!(MacTurn::begin(t.st.clone(), notify).is_ok());
         assert_eq!(brain.asked.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_coalesced_reconnect_discards_old_audio_stop_and_cancel_without_blocking_new_turns() {
+        // Drive the talk receiver ourselves so it sees only Connected after both link transitions.
+        let t = make_agent("mac-coalesced-link", true, false).await;
+        t.st.set_brain(Arc::new(FakeBrain::new(&["New generation answer"])));
+        let event = |evt: &str, state: &str| FromStick::Message(json!({"src":"agent","evt":evt,"state":state}));
+        let mut rec = None;
+        for via_stick in [true, false] {
+            let old = t.st.link.generation();
+            receive(&t.st, old, event("talk", "start"), &mut rec).await;
+            assert!(rec.is_some());
+            t.st.link.pause(true);
+            t.st.link.watch_state().wait_for(|s| *s == LinkState::Paused).await.unwrap();
+            t.st.link.pause(false);
+            t.st.link.watch_state().wait_for(|s| *s == LinkState::Connected).await.unwrap();
+            let new = t.st.link.generation();
+            assert_ne!(old, new);
+            if via_stick {
+                receive(&t.st, new, event("talk", "start"), &mut rec).await;
+                // Outdated events and a delayed watch notification arrive while the new owner records.
+                receive(&t.st, old, FromStick::Audio(frames(0.02).remove(0)), &mut rec).await;
+                assert!(rec.as_ref().unwrap().0.audio().is_empty());
+                receive(&t.st, old, event("talk", "stop"), &mut rec).await;
+                receive(&t.st, old, event("cancel", ""), &mut rec).await;
+                cancel_stick_turn(&t.st, None);
+                assert!(rec.as_ref().unwrap().1.active());
+                for frame in frames(1.0) {
+                    receive(&t.st, new, FromStick::Audio(frame), &mut rec).await;
+                }
+                receive(&t.st, new, event("talk", "stop"), &mut rec).await;
+                assert_eq!(ended(&t).await.last().unwrap(), &pair("done", "New generation answer"));
+                assert!(until(|| t.st.voice_owner.lock().unwrap().is_none()).await);
+            } else {
+                let (notify, _) = mac_display();
+                let mac = MacTurn::begin(t.st.clone(), notify.clone()).unwrap();
+                receive(&t.st, old, event("cancel", ""), &mut rec).await;
+                cancel_stick_turn(&t.st, None);
+                assert!(rec.is_none());
+                assert!(MacTurn::begin(t.st.clone(), notify).is_err());
+                assert!(mac.0.active());
+            }
+        }
     }
 
     #[tokio::test]

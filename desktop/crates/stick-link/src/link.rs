@@ -111,7 +111,7 @@ struct Inner<C: Connector> {
     state: watch::Sender<LinkState>,
     messages: broadcast::Sender<Value>,
     audio: broadcast::Sender<Vec<u8>>,
-    both: broadcast::Sender<FromStick>,
+    both: broadcast::Sender<(u64, FromStick)>,
     pending: Mutex<HashMap<String, oneshot::Sender<Option<Value>>>>,
     next_id: AtomicU64,
     mtu: AtomicUsize,
@@ -309,8 +309,8 @@ impl<C: Connector> Link<C> {
         self.inner.audio.subscribe()
     }
 
-    /// Messages and audio together, in order (what the talk flow needs).
-    pub fn incoming(&self) -> broadcast::Receiver<FromStick> {
+    /// Messages and audio in arrival order, stamped with their connection generation before queueing.
+    pub fn incoming(&self) -> broadcast::Receiver<(u64, FromStick)> {
         self.inner.both.subscribe()
     }
 
@@ -604,7 +604,7 @@ impl<C: Connector> Link<C> {
                         }
                     }
                     Some(Incoming::Audio(frame)) => {
-                        let _ = self.inner.both.send(FromStick::Audio(frame.clone()));
+                        let _ = self.inner.both.send((self.generation(), FromStick::Audio(frame.clone())));
                         let _ = self.inner.audio.send(frame);
                     }
                 },
@@ -641,7 +641,7 @@ impl<C: Connector> Link<C> {
         {
             let _ = tx.send(reply.cloned());
         }
-        let _ = self.inner.both.send(FromStick::Message(msg.clone()));
+        let _ = self.inner.both.send((self.generation(), FromStick::Message(msg.clone())));
         let _ = self.inner.messages.send(msg);
     }
 }
@@ -823,7 +823,9 @@ mod tests {
         fake.talk(&[vec![0, 0, 0, 0, 0, 1], vec![1, 0, 0, 0, 0, 2]]);
         let mut got = Vec::new();
         for _ in 0..4 {
-            got.push(match rx.recv().await.unwrap() {
+            let (generation, event) = rx.recv().await.unwrap();
+            assert_eq!(generation, link.generation());
+            got.push(match event {
                 FromStick::Message(m) => m["state"].as_str().unwrap().to_string(),
                 FromStick::Audio(a) => format!("audio{}", a[0]),
             });
