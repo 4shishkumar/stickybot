@@ -1,6 +1,8 @@
 // Sounds: which sound the stick plays for each moment, its volume, and the
 // sound library (Kenney's CC0 packs) to audition on the stick.
-import {h, clear, card, field, toggle, get, put, post, report, deviceApi} from "../lib.js";
+import {h, clear, card, field, get, post, report, deviceApi, store} from "../lib.js";
+
+import {volumeControl} from "../volume.js";
 
 export const title = "Sounds";
 export const subtitle = "What the stick plays and when. Saved on the stick, so they work without this agent.";
@@ -13,29 +15,29 @@ const MOMENTS = [
   ["disconnected", "Mac disconnected", ""], ["unlock", "Unlock", "double-press B typed the password"],
   ["charging", "Charging", "USB plugged in"], ["lowbattery", "Low battery", "at 15%"],
 ];
-let root = null;
+let activePanel = null, unsub = null;
 
 export function actions() {
   return [h("button", {class: "btn", type: "button", onclick: () => post("/api/sounds/play", {name: "test"})}, "Play a test sound")];
 }
 
 export async function render(el) {
-  const {get, put, post} = deviceApi();
-  root = el;
+  const target = deviceApi(), {get, put, post} = target;
   const top = h("div", null, h("div", {class: "empty"}, "Asking the stick…"));
+  activePanel = top;
   const lib = card("Sound library", h("p", {class: "lead"}, "Kenney's Interface Sounds and UI Audio (public domain). Press a number to hear it on the stick."), h("div", {class: "lib", id: "clipLib"}, h("div", {class: "empty"}, "Loading…")));
-  root.append(top, lib);
+  el.append(top, lib);
   loadClips();
   const s = await get("/api/sounds");
+  if (activePanel !== top) return;
   clear(top);
   if (s.error) { top.appendChild(h("div", {class: "notice warn"}, h("div", {class: "grow"}, h("b", null, "The stick didn't answer"), h("span", {class: "dim"}, s.error)))); return; }
-  const vol = h("input", {type: "range", id: "sndVol", min: 0, max: 255, value: s.volume});
-  const out = h("span", {class: "num small", style: "width:44px"}, Math.round(s.volume / 2.55) + "%");
-  vol.addEventListener("input", () => { out.textContent = Math.round(vol.value / 2.55) + "%"; });
-  vol.addEventListener("change", async () => { report(await put("/api/sounds", {volume: +vol.value})); post("/api/sounds/play", {name: "test"}); });
-  top.appendChild(card("Sound and volume",
-    field("Sounds", toggle("sndOn", "Play cues on the stick's speaker", s.on, async e => report(await put("/api/sounds", {on: e.target.checked}), "Saved"))),
-    field("Volume", h("div", {class: "row"}, vol, out))));
+  const volume = volumeControl(s, target, "sndVol");
+  top.appendChild(card("Sound and volume", field("Stick volume", volume.el)));
+  unsub = store.on((type, ev) => {
+    if (type === "event" && ev.kind === "sounds") volume.sync(ev.sounds);
+    if (type === "event" && ev.kind === "link") volume.link(ev.state === "connected");
+  });
   const rows = h("div", {class: "list"});
   for (const [ev, label, when] of MOMENTS) {
     const sel = h("select", {id: "snd-" + ev, "aria-label": label}, ["off", ...(s.tunes || [])].map(t => h("option", {value: t, selected: s.map && s.map[ev] === t}, t)));
@@ -50,7 +52,7 @@ export async function render(el) {
   top.appendChild(card("Moments", h("p", {class: "lead"}, "Clips come first in each list, then the synthesized beeps. ▶ plays it on the stick."), rows));
 }
 
-export function leave() { root = null; }
+export function leave() { activePanel = null; unsub?.(); unsub = null; }
 
 async function loadClips() {
   const box = document.getElementById("clipLib");

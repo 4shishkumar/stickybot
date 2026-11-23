@@ -172,6 +172,7 @@ pub struct AppState {
     last_input: Mutex<Option<f64>>,
     /// the stick's sound settings as it last reported them (`{"on", "volume", …}`; the menu bar)
     sounds: Mutex<Option<Value>>,
+    sound_request: tokio::sync::Mutex<()>,
     /// start at login (the menu bar app sets the real one)
     pub login_item: Arc<Mutex<Arc<dyn login::LoginItem>>>,
     /// API keys (the Keychain; in memory with the fake stick: tests never reach the Keychain)
@@ -300,6 +301,7 @@ impl AppState {
                 .unwrap_or_else(|| Arc::new(Mutex::new(mcp::system_claude_runner()))),
             last_input: Mutex::new(None),
             sounds: Mutex::new(None),
+            sound_request: tokio::sync::Mutex::new(()),
             login_item: parent
                 .map(|p| p.login_item.clone())
                 .unwrap_or_else(|| Arc::new(Mutex::new(Arc::new(login::NoLoginItem)))),
@@ -595,6 +597,8 @@ impl AppState {
     /// Sends `{"get":1}` / `{"set":{event: tune}}` / `{"play": name}` / `{"on"}` / `{"volume"}` to
     /// the stick and waits up to 3 s for its report (core.py `sound`) -> its sound settings.
     pub async fn sound(&self, payload: Value) -> Option<Value> {
+        // Sound replies have no request ID. Match one write/read at a time per stick.
+        let _request = self.sound_request.lock().await;
         let mut rx = self.link.messages();
         if !self.link.send(&stick_link::proto::sound(payload)).await {
             return None;
@@ -865,6 +869,9 @@ fn spawn_link_watcher(state: Arc<AppState>) -> Vec<tokio::task::AbortHandle> {
             why.borrow_and_update();
             if last != Some(s) {
                 st.hub.emit("link", json!({"state": s.as_str()}));
+                if s != LinkState::Connected {
+                    *st.sounds.lock().unwrap() = None;
+                }
                 if s == LinkState::Connected {
                     st.brain().prewarm(); // Claude Code ready before the first request (if picked)
                     let st2 = st.clone();

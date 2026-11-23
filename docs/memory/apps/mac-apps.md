@@ -1,6 +1,6 @@
 ---
 type: memory
-description: "Rust StickyBot.app and the legacy Python app: independent device sessions, scoped APIs/MCP/history/jobs, default routing, host labels, shared Mac services, source-bound approvals, shared dashboard compatibility, permissions and in-app updates."
+description: "Rust StickyBot.app and the legacy Python app: independent device sessions, scoped APIs/MCP/history/jobs, default routing, host labels, shared Mac services, source-bound approvals, shared dashboard compatibility, stick volume controls, permissions and in-app updates."
 ---
 # Mac Apps
 
@@ -21,6 +21,18 @@ The dashboard is `mac-agent/stick_agent/dashboard.html` and the vanilla JS modul
 `mac-agent/stick_agent/static/`. The Rust server serves those same files (from disk in debug
 builds, embedded in release builds). A dashboard change therefore changes both apps, and pages
 MUST cope with an endpoint one app lacks (the API helper resolves with `missing: true`).
+
+### Requirement: Menu and dashboard control the stick speaker
+Both Mac apps provide a 0–100% slider and a speaker button in the menu bar and on the dashboard's
+Sounds and Stick pages. The native menus use Apple’s speaker-with-waves and slashed-speaker symbols.
+The dashboard draws matching states. The tooltip and accessible label say “Mute stick speaker”
+when audible and “Unmute stick speaker” when muted. The Rust menu controls the default stick. The
+dashboard controls the stick selected in that view. Muting with the button or by sliding to zero preserves the stick's
+exact saved volume (0–255). Unmute restores that value, or uses 140 if the saved value is zero.
+
+Sound requests to each stick run one at a time. The Rust menu and dashboard coalesce drag updates
+and send the final level on release. If another control changes the volume while the thumb is held
+still, release displays the latest hardware report.
 
 ### Requirement: Each app keeps to its own home
 The Rust app's settings, token, models and data live in `~/.stickybot-rs/`; the Python app's in

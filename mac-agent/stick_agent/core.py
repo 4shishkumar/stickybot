@@ -156,6 +156,7 @@ class Agent:
         self._rid = 0           # the full reply's id (reply view, 2.6.0)
         self.weather = weather.Weather()
         self.sounds = None          # the stick's sound settings, as it last reported them
+        self._sound_lock = asyncio.Lock()  # sound replies have no request ID
         self._sounds_seen = None    # asyncio.Event, set when a report arrives
         self.feed = feed.Feed()
         self.notifier = events.Events(self)  # (self.events is the dashboard feed)
@@ -878,14 +879,15 @@ class Agent:
     async def sound(self, payload):
         """Sends {"get":1} / {"set":{event: tune}} / {"play": name} / {"on"} / {"volume"} to the
         stick and returns its sound settings (None if the stick didn't answer)."""
-        self._sounds_seen = asyncio.Event()
-        if not await self.link.send({"src": "agent", "sound": payload}):
-            return None
-        try:
-            await asyncio.wait_for(self._sounds_seen.wait(), 3)
-        except TimeoutError:
-            return None
-        return self.sounds
+        async with self._sound_lock:
+            self._sounds_seen = asyncio.Event()
+            if not await self.link.send({"src": "agent", "sound": payload}):
+                return None
+            try:
+                await asyncio.wait_for(self._sounds_seen.wait(), 3)
+            except TimeoutError:
+                return None
+            return self.sounds
 
     async def play_clip(self, pack, name):
         """Plays a sound-pack clip on the stick's speaker. Returns an error string or None."""

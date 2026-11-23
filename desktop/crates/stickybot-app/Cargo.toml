@@ -11,6 +11,7 @@ name = "stickybot-rs"
 path = "src/main.rs"
 
 [build-dependencies]
+cc = "1"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]

@@ -1383,6 +1383,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_menu_and_dashboard_changes_get_their_own_reports() {
+        let (app, st, _) = app("sound-controls", true).await;
+        let request = req("PUT", "/api/sounds", Some(json!({"on": true, "volume": 161})), Some(&st.token));
+        let (menu, (status, dashboard, _)) =
+            tokio::join!(st.sound(json!({"on": false, "volume": 94})), call(&app, request));
+        let menu = menu.unwrap();
+        assert_eq!((menu["on"].as_bool(), menu["volume"].as_u64()), (Some(false), Some(94)));
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!((dashboard["on"].as_bool(), dashboard["volume"].as_u64()), (Some(true), Some(161)));
+    }
+
+    #[tokio::test]
     async fn pause_scan_status_and_unported() {
         let (app, st, _) = app("misc", true).await;
         let tok = Some(st.token.as_str());
