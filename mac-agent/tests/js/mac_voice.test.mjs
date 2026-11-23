@@ -15,8 +15,8 @@ class Element extends EventTarget {
 }
 globalThis.window = new EventTarget();
 globalThis.HTMLElement = globalThis.Node = Element;
-globalThis.document = {createElement: () => new Element(), createTextNode: s => s};
-const {macVoiceFields, shortcutFromEvent} = await import("../../stick_agent/static/mac_voice.js");
+globalThis.document = Object.assign(new EventTarget(), {createElement: () => new Element(), createTextNode: s => s});
+const {macVoiceFields, shortcutFromEvent, microphoneOptions, microphoneNote} = await import("../../stick_agent/static/mac_voice.js");
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 test("shortcut capture uses physical key codes and canonical modifier order", () => {
@@ -53,8 +53,38 @@ test("unavailable hosts hide keyboard settings; conflict keeps the previous bind
   const press = Object.assign(new Event("keydown", {cancelable:true}), {key:"c", code:"KeyC", metaKey:true});
   record.dispatchEvent(press);
   await settle();
-  assert.deepEqual(writes, [{enabled:true, shortcut:"Command+KeyC"}]);
+  assert.deepEqual(writes, [{enabled:true, shortcut:"Command+KeyC", input:"", sounds:true}]);
   assert.equal(record.textContent, "Control + Shift + Space");
   assert.equal(fields.el.find(e => e.role === "status").textContent, "Shortcut already in use");
   fields.leave();
+});
+
+test("a clicked recorder hears keys even when the button didn't take focus", async () => {
+  const state = {supported:true, enabled:true, shortcut:"Control+Shift+Space", permission:"authorized", input:"", sounds:true};
+  const writes = [];
+  globalThis.fetch = async (path, opts) => {
+    if (opts.method === "PUT") { writes.push(JSON.parse(opts.body)); return Response.json({...state, ...JSON.parse(opts.body)}); }
+    return Response.json(state);
+  };
+  const fields = macVoiceFields();
+  await settle();
+  const record = fields.el.find(e => e.id === "macVoiceShortcut");
+  record.dispatchEvent(new Event("click"));
+  document.dispatchEvent(Object.assign(new Event("keydown", {cancelable:true}), {key:"k", code:"KeyK", altKey:true}));
+  await settle();
+  assert.equal(writes.at(-1).shortcut, "Option+KeyK");
+  fields.leave();
+});
+
+test("microphone list keeps the system default first and a saved device that went away", () => {
+  const inputs = {devices:[{uid:"usb-1", name:"Yeti", bluetooth:false}, {uid:"bt-2", name:"AirPods", bluetooth:true}],
+    default_name:"MacBook Pro Microphone", using:"MacBook Pro Microphone", fallback:false};
+  const opts = microphoneOptions({input:"", inputs});
+  assert.deepEqual(opts.map(o => o.label), ["System default (MacBook Pro Microphone)", "Yeti", "AirPods · Bluetooth"]);
+  assert.ok(opts[0].selected);
+  const gone = microphoneOptions({input:"usb-9", inputs});
+  assert.equal(gone.at(-1).value, "usb-9");
+  assert.ok(gone.at(-1).selected);
+  assert.match(microphoneNote({inputs:{...inputs, fallback:true}}), /isn't connected/);
+  assert.match(microphoneNote({inputs:{...inputs, using_bluetooth:true}}), /Bluetooth/);
 });

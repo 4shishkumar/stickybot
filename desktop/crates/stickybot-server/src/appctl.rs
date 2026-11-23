@@ -14,6 +14,16 @@ pub trait AppControl: Send + Sync {
         Err("The keyboard shortcut requires the StickyBot Mac app".into())
     }
 
+    /// The microphone (a Core Audio device UID, "" = the system default) and the start/stop sounds.
+    fn voice_options(&self, _input: &str, _sounds: bool) -> Result<(), String> {
+        Err("The keyboard shortcut requires the StickyBot Mac app".into())
+    }
+
+    /// Starts (or stops) a few seconds of listening so Settings can show the microphone's level.
+    fn voice_test(&self, _on: bool) -> Result<(), String> {
+        Err("The microphone test requires the StickyBot Mac app".into())
+    }
+
     /// Reports microphone permission, input name, and any native error. Null means unsupported.
     fn voice_status(&self) -> serde_json::Value {
         serde_json::Value::Null

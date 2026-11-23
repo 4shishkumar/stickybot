@@ -85,16 +85,29 @@ destination. Legacy rows without a source ID belong to `primary`.
 ### Requirement: Talk from the Mac keyboard
 In StickyBot.app, **Settings → Speech & replies → Talk from Mac keyboard** enables a Mac-wide
 shortcut. It starts disabled. The suggested chord is Control–Shift–Space. A conflicting replacement
-leaves the working chord registered. Hold the chord in any app to record from the system microphone;
-release to send. Capture is limited to 60 seconds. Escape, sleep, screen lock or input loss discards
-an active recording. Hold B uses the stick microphone.
+leaves the working chord registered. Hold the chord in any app and speak; release to send. A press
+shorter than 0.35 s is a tap and records nothing: a single tap shows a hint (at most three per
+session), and a second tap within 0.5 s locks hands-free listening until the next press sends.
+Capture is limited to 60 seconds, with a sound and a countdown for the last 10. Plain Esc (or Esc
+with the chord held, never Command–Option–Esc) cancels a recording; sleep and screen lock discard it.
+A recording whose loudest moment stays below the silence floor is not sent ("Didn't hear anything
+from <microphone>"). If the microphone disconnects, a recording of a second or more is still sent.
+Hold B uses the stick microphone.
+
+**Microphone:** the system default unless the user picks an input (saved by Core Audio UID as
+`mac_voice_input`). A saved microphone that is not connected falls back to the default and Settings
+says so. Bluetooth headset microphones carry a quality note. **Test** opens the chosen input for six
+seconds and shows its level; nothing is recorded. Start/stop sounds (`mac_voice_sounds`) are on by
+default.
 
 The native panel leaves focus in the front app. Its 46 pt StickyBot icon pulses with a teal glow
-beside the 13 pt heading during active stages. Reduce Motion uses a steady glow. On release the
-meter stops, and **Listening** shows “Microphone off · processing your words”. The same panel shows
-the transcript, thinking, approval waits and the answer as available. The full reply stays readable
-until dismissed or the next question. Errors appear in the panel. Read-aloud, when enabled, plays
-keyboard replies on the Mac.
+beside the 13 pt heading during active stages, and live level bars show while listening. Reduce
+Motion uses a steady glow. The same panel shows the transcript, thinking, approval waits and the
+answer as available. While a request runs, its × cancels it (only a keyboard-started request; a
+stick turn is the stick's to cancel). The full reply stays readable until dismissed or the next
+question. Errors and hints fade after a few seconds, except a microphone-permission error, which
+offers **Open Privacy Settings**. Pressing the chord while a request runs shows the panel instead
+of starting another. Read-aloud, when enabled, plays keyboard replies on the Mac.
 
 Key-down pins the default device for the turn. Speech and the configured local or remote brain use
 that device's settings. Each device accepts one owner at a time. Competing input reports busy, and

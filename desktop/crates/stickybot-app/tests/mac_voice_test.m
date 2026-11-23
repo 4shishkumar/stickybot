@@ -2,10 +2,11 @@
 #import "../src/mac_voice.m"
 #define CHECK(expr) do { if (!(expr)) { fprintf(stderr, "Failed at line %d: %s\n", __LINE__, #expr); exit(1); } } while (0)
 
-static int begins, cancels, sends;
+static int begins, cancels, sends, turnCancels;
 int sb_voice_begin(void) { begins++; return 1; }
 void sb_voice_audio(const float *pcm, size_t n) { sends++; }
 void sb_voice_cancel(void) { cancels++; }
+void sb_voice_cancel_turn(void) { turnCancels++; }
 void sb_voice_dashboard(void) {}
 
 static AVAudioPCMBuffer *stereo(AVAudioFrameCount count) {
@@ -28,7 +29,8 @@ static void testAudio(void) {
     [rec setValue:samples forKey:@"samples"];
     [rec setValue:converter forKey:@"converter"];
     for (int i=0; i<10; ++i) [rec append:input];
-    CHECK(rec.level > 0); // the right channel reached the mono buffer
+    CHECK(rec.level > 0 && rec.peak >= rec.level); // the right channel reached the mono buffer
+    CHECK(fabs(rec.seconds - 1.0) < .02);
     CHECK([rec finish].length / sizeof(float) == 16000);
     CHECK(!rec.failure);
     [rec append:input];
@@ -54,26 +56,36 @@ static void testPanel(void) {
         CHECK(panel.isVisible && !panel.canBecomeKeyWindow && !panel.canBecomeMainWindow && !panel.keyWindow);
         NSImageView *logo = [panel valueForKey:@"logo"];
         NSTextField *title = [panel valueForKey:@"_title"];
-        NSLevelIndicator *meter = [panel valueForKey:@"meter"];
+        SBWave *wave = [panel valueForKey:@"wave"];
+        NSButton *close = [panel valueForKey:@"cancel"];
         CHECK(logo.image == NSApp.applicationIconImage && NSWidth(logo.frame)==46 && title.font.pointSize==13);
-        CHECK(meter.hidden != [phase isEqual:@"listening"]);
+        CHECK(wave.hidden != [phase isEqual:@"listening"]);
+        CHECK(close.hidden == [phase isEqual:@"listening"]); // Esc cancels while listening, the button afterwards
         CHECK(logo.layer.shadowOpacity > 0 || [phase isEqual:@"reply"] || [phase isEqual:@"error"]);
         if ([phase isEqual:@"reply"] || [phase isEqual:@"error"]) {
             CHECK(![logo.layer animationForKey:@"voice-pulse"] && logo.layer.shadowOpacity == 0);
         } else if (!NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion) {
             CHECK([logo.layer animationForKey:@"voice-pulse"]);
         }
-        if ([phase isEqual:@"transcribing"]) {
-            CHECK([title.stringValue isEqual:@"Listening"]);
-            CHECK([[[panel valueForKey:@"text"] string] containsString:@"Microphone off"]);
-        }
+        if ([phase isEqual:@"transcribing"]) CHECK([title.stringValue isEqual:@"Transcribing"]);
     }
+    // The cancel button stops a running request; after the answer it only dismisses.
+    [panel showPhase:@"thinking" heard:@"q" detail:@""];
+    [[panel valueForKey:@"cancel"] performClick:nil];
+    CHECK(turnCancels == 1 && !panel.isVisible);
+    [panel showPhase:@"reply" heard:@"q" detail:@"a"];
+    [[panel valueForKey:@"cancel"] performClick:nil];
+    CHECK(turnCancels == 1 && !panel.isVisible);
+    // A permission error offers System Settings.
+    [panel showPhase:@"error" heard:@"" detail:SBMicDenied];
+    CHECK([[[panel valueForKey:@"action"] title] isEqual:@"Open Privacy Settings"] && ![[panel valueForKey:@"action"] isHidden]);
     NSString *longAnswer = [@"The full answer has several paragraphs.\n" stringByPaddingToLength:4200
                          withString:@"Another paragraph.\n" startingAtIndex:0];
     [panel showPhase:@"reply" heard:@"question" detail:longAnswer];
     CHECK([[[panel valueForKey:@"text"] string] isEqual:longAnswer]);
     CHECK([[panel valueForKey:@"scroll"] hasVerticalScroller]);
-    CHECK([[panel valueForKey:@"dashboard"] isHidden] == NO);
+    CHECK([[panel valueForKey:@"action"] isHidden] == NO);
+    CHECK([[[panel valueForKey:@"action"] title] isEqual:@"Open dashboard"]);
     CHECK(foreground == NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier);
     [panel orderOut:nil];
 }
@@ -93,6 +105,34 @@ static void testShortcutConflict(void) {
     CHECK(UnregisterEventHotKey(conflict) == noErr);
     CHECK(![controller registerCode:kVK_F18 modifiers:mods]);
     CHECK([[controller valueForKey:@"code"] unsignedIntegerValue] == kVK_F18);
+    [controller shutdown];
+}
+
+static void testInputs(void) {
+    // The device list is valid JSON, and an unknown saved microphone falls back to the default.
+    sb_voice_set_input("no-such-device-uid");
+    NSDictionary *inputs = [NSJSONSerialization JSONObjectWithData:[[NSString stringWithUTF8String:sb_voice_inputs()]
+        dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    CHECK([inputs[@"devices"] isKindOfClass:NSArray.class]);
+    CHECK([inputs[@"selected"] isEqual:@"no-such-device-uid"] && [inputs[@"fallback"] boolValue]);
+    CHECK(SBChosenInput() == SBDefaultInput());
+    sb_voice_set_input("");
+    inputs = [NSJSONSerialization JSONObjectWithData:[[NSString stringWithUTF8String:sb_voice_inputs()]
+        dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    CHECK([inputs[@"selected"] isEqual:@""] && ![inputs[@"fallback"] boolValue]);
+}
+
+static void testSilence(void) {
+    // A recording that never got louder than the silence floor is not sent.
+    SBVoice *controller = [SBVoice new];
+    SBRecording *quiet = [SBRecording new];
+    [quiet setValue:[NSMutableData dataWithLength:16000 * sizeof(float)] forKey:@"samples"];
+    [controller setValue:quiet forKey:@"recording"];
+    int before = sends, cancelled = cancels;
+    [controller finishRecording:YES error:nil];
+    CHECK(sends == before && cancels == cancelled + 1);
+    SBPanel *panel = [controller valueForKey:@"panel"];
+    CHECK([[[panel valueForKey:@"text"] string] hasPrefix:@"Didn't hear anything"]);
     [controller shutdown];
 }
 
@@ -118,6 +158,8 @@ int main(void) {
             testPanel();
             testShortcutConflict();
             testCancellation();
+            testInputs();
+            testSilence();
             puts("Mac voice audio, popup, focus and cancellation checks passed");
         } @catch (NSException *exception) {
             fprintf(stderr, "Native test failed: %s\n", exception.reason.UTF8String);

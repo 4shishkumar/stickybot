@@ -410,6 +410,18 @@ impl MacTurn {
     }
 }
 
+/// The Mac panel's cancel: stops only a keyboard-started turn (a stick turn is the stick's to cancel).
+pub fn cancel_mac_turn(st: &Arc<AppState>) -> bool {
+    let owner = st.voice_owner.lock().unwrap().clone();
+    let Some(owner) = owner.filter(|owner| owner.mac) else {
+        return false;
+    };
+    owner.cancelled.store(true, Ordering::Release);
+    st.brain().cancel();
+    crate::speak::stop(st);
+    true
+}
+
 /// Identify the same live brain request across the native caller and its HTTP MCP connection.
 pub(crate) fn mac_agent_owner(st: &AppState, ctx: &crate::tool_policy::Context) -> Option<Arc<Owner>> {
     let slot = st.voice_owner.lock().unwrap();
@@ -1352,6 +1364,28 @@ pub(crate) mod tests {
         drop(next); // Escape before key-up must never submit
         assert!(MacTurn::begin(t.st.clone(), notify).is_ok());
         assert_eq!(brain.asked.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_mac_panel_cancels_only_its_own_request() {
+        let t = agent("mac-cancel", true).await;
+        let mut brain = FakeBrain::new(&["Working", " on it"]);
+        brain.pause = Duration::from_millis(200);
+        let brain = Arc::new(brain);
+        t.st.set_brain(brain.clone());
+        assert!(!cancel_mac_turn(&t.st)); // nothing running
+        let (notify, events) = mac_display();
+        let task = tokio::spawn(MacTurn::begin(t.st.clone(), notify.clone()).unwrap().submit(vec![0.; RATE as usize]));
+        assert!(until(|| !brain.asked.lock().unwrap().is_empty()).await);
+        assert!(cancel_mac_turn(&t.st));
+        task.await.unwrap();
+        assert!(brain.cancelled());
+        assert!(events.lock().unwrap().iter().all(|(phase, _, _)| phase != "reply"));
+        // the reservation is free again, and a stick turn is not the panel's to cancel
+        assert!(MacTurn::begin(t.st.clone(), notify).is_ok());
+        let stick = VoiceTurn::reserve(t.st.clone(), None, t.st.link.generation()).unwrap();
+        assert!(!cancel_mac_turn(&t.st));
+        assert!(stick.active());
     }
 
     #[tokio::test]

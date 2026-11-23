@@ -175,6 +175,9 @@ pub fn defaults() -> Map<String, Value> {
             m.insert("dock_always".into(), json!(false));
             m.insert("mac_voice_enabled".into(), json!(false));
             m.insert("mac_voice_shortcut".into(), json!(crate::appctl::DEFAULT_VOICE_SHORTCUT));
+            // the Mac microphone's Core Audio UID ("" = the system default) and its start/stop sounds
+            m.insert("mac_voice_input".into(), json!(""));
+            m.insert("mac_voice_sounds".into(), json!(true));
             // install an app update by itself when idle (selfupdate.rs)
             m.insert("update_auto".into(), json!(false));
             m.insert("feedback_url".into(), json!(""));
@@ -209,7 +212,7 @@ pub fn save(paths: &Paths, cfg: &Map<String, Value>) -> std::io::Result<()> {
 
 /// What's wrong with a `PUT /api/config` body (brain_api.valid_config, plus the stick's shape), or "".
 pub fn invalid(body: &Map<String, Value>) -> String {
-    if body.contains_key("mac_voice_enabled") || body.contains_key("mac_voice_shortcut") {
+    if ["mac_voice_enabled", "mac_voice_shortcut", "mac_voice_input", "mac_voice_sounds"].iter().any(|k| body.contains_key(*k)) {
         return "Use the Mac keyboard shortcut settings".into();
     }
     if let Some(profiles) = body.get("tool_profiles")

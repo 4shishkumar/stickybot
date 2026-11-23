@@ -431,3 +431,8 @@ body.install-mode .page { max-width: 780px; margin: 0 auto; padding-top: 28px; }
   .inst-card { padding: 16px; min-height: 0; }
   .inst-code { font-size: 26px; }
 }
+
+/* Settings → Speech & replies: the Mac microphone picker and its test level */
+.mic-row { gap: 8px; align-items: center; flex-wrap: wrap; }
+.mic-level { flex: 1; min-width: 80px; height: 8px; border-radius: 4px; background: var(--line-strong); overflow: hidden; }
+.mic-level-bar { height: 100%; border-radius: 4px; background: var(--ok); transition: width .08s linear; }

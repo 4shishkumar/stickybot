@@ -14,6 +14,8 @@ const PORT: u16 = 8670;
 #[derive(Default)]
 struct VoiceApp {
     applied: Mutex<Vec<(bool, String)>>,
+    options: Mutex<Vec<(String, bool)>>,
+    testing: Mutex<bool>,
 }
 
 impl crate::appctl::AppControl for VoiceApp {
@@ -30,9 +32,51 @@ impl crate::appctl::AppControl for VoiceApp {
         self.applied.lock().unwrap().push((enabled, shortcut.to_owned()));
         Ok(())
     }
-    fn voice_status(&self) -> Value {
-        json!({"input_name":"System microphone", "permission":"authorized"})
+    fn voice_options(&self, input: &str, sounds: bool) -> Result<(), String> {
+        self.options.lock().unwrap().push((input.to_owned(), sounds));
+        Ok(())
     }
+    fn voice_test(&self, on: bool) -> Result<(), String> {
+        *self.testing.lock().unwrap() = on;
+        Ok(())
+    }
+    fn voice_status(&self) -> Value {
+        let level = self.testing.lock().unwrap().then_some(0.25);
+        json!({"input_name":"System microphone", "permission":"authorized", "test_level": level,
+               "inputs": {"devices": [{"uid":"usb-1","name":"Yeti","bluetooth":false}], "selected": "", "using": "System microphone"}})
+    }
+}
+
+#[tokio::test]
+async fn mac_voice_saves_the_microphone_and_sounds_and_tests_the_level() {
+    let t = app("mac-voice-microphone", false).await;
+    let voice = Arc::new(VoiceApp::default());
+    *t.st.setup.app.lock().unwrap() = voice.clone();
+    let path = "/api/mac-voice";
+    let (code, saved) = t
+        .call("PUT", path, Some(json!({"enabled":true, "shortcut":"Option+Digit7", "input":"usb-1", "sounds":false})), true)
+        .await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!((saved["input"].as_str(), saved["sounds"].as_bool()), (Some("usb-1"), Some(false)));
+    assert_eq!(saved["inputs"]["devices"][0]["name"], "Yeti");
+    let cfg = crate::config::load(&t.st.paths);
+    assert_eq!((cfg["mac_voice_input"].as_str(), cfg["mac_voice_sounds"].as_bool()), (Some("usb-1"), Some(false)));
+    // a later save without them keeps both
+    t.call("PUT", path, Some(json!({"enabled":false, "shortcut":"Option+Digit7"})), true).await;
+    assert_eq!(voice.options.lock().unwrap().last().cloned(), Some(("usb-1".to_owned(), false)));
+    assert_eq!(
+        t.call("PUT", path, Some(json!({"enabled":true, "shortcut":"Option+Digit7", "input":"bad\nuid"})), true).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(t.call("POST", "/api/mac-voice/test", Some(json!({"on":true})), false).await.0, StatusCode::FORBIDDEN);
+    let (code, testing) = t.call("POST", "/api/mac-voice/test", Some(json!({"on":true})), true).await;
+    assert_eq!((code, testing["test_level"].as_f64()), (StatusCode::OK, Some(0.25)));
+    let (_, stopped) = t.call("POST", "/api/mac-voice/test", Some(json!({"on":false})), true).await;
+    assert!(stopped["test_level"].is_null());
+    assert_eq!(
+        t.call("PUT", "/api/config", Some(json!({"mac_voice_input":"x"})), true).await.0,
+        StatusCode::BAD_REQUEST
+    );
 }
 
 #[tokio::test]
