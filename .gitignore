@@ -36,3 +36,4 @@ __pycache__/
 !fab/.fab-version
 .status.yaml.lock
 /.claude/settings.local.json
+eval-*.json
