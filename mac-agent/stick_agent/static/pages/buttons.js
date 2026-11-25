@@ -33,8 +33,7 @@ function readBindings(reply) {
   const bindings = reply?.buttons;
   for (const [key] of GESTURES) {
     if (typeof bindings?.[key] !== "string") return null;
-    const [kind, name] = split(bindings[key]);
-    if (!choices(key).some(([id]) => id === kind) || (named(kind) && nameError(name))) return null;
+    if (!bindings[key]) return null;
   }
   return Object.fromEntries(GESTURES.map(([key]) => [key, bindings[key]]));
 }
@@ -119,7 +118,7 @@ export function render(root) {
     });
     let busy = false;
     for (const [key, label] of GESTURES) {
-      const selector = h("select", {id: "gesture-" + key}, choices(key).map(([value, text]) => h("option", {value}, text)));
+      const selector = h("select", {id: "gesture-" + key});
       const name = h("input", {type: "text", autocomplete: "off", id: "gesture-name-" + key});
       const help = h("span", {}, "Choose a saved command that needs no arguments.");
       const extra = field("", name, help);
@@ -138,21 +137,34 @@ export function render(root) {
         else name.removeAttribute("list");
         const invalid = named(kind) && nameError(name.value);
         if (invalid) error ||= label + " — " + invalid;
-        dirty ||= binding(kind, name.value) !== saved[key];
+        dirty ||= binding(kind, name.value, key) !== saved[key];
         selector.disabled = name.disabled = busy;
       }
+      const reachable = ["b2", "b3", "ab"].some(key => ["launcher", "tile:settings"].includes(fields.get(key).selector.value));
+      if (!reachable) error ||= "Keep one gesture for Launcher or Settings so you can reach the stick’s settings.";
       save.disabled = busy || !dirty || !!error;
       message.textContent = error;
     }
-    function binding(kind, name) { return named(kind) ? kind + ":" + name.trim() : kind; }
+    function binding(kind, name, key) { return kind === "" ? saved[key] : named(kind) ? kind + ":" + name.trim() : kind; }
     function display(bindings) {
       saved = bindings;
-      for (const [key, {selector, name}] of fields) [selector.value, name.value] = split(saved[key]);
+      for (const [key, {selector, name}] of fields) {
+        selector.replaceChildren(...choices(key).map(([value, text]) => h("option", {value}, text)));
+        const [kind, arg] = split(saved[key]);
+        if (choices(key).some(([id]) => id === kind) && (!named(kind) || (saved[key].includes(":") && !nameError(arg)))) {
+          selector.value = kind;
+          name.value = arg;
+        } else {
+          selector.appendChild(h("option", {value: ""}, "Other (set on the stick)"));
+          selector.value = "";
+          name.value = "";
+        }
+      }
       adjust();
     }
     async function submit() {
       if (!current(version) || save.disabled) return;
-      const requested = Object.fromEntries([...fields].map(([key, {selector, name}]) => [key, binding(selector.value, name.value)]));
+      const requested = Object.fromEntries([...fields].map(([key, {selector, name}]) => [key, binding(selector.value, name.value, key)]));
       watch.invalidate();
       busy = true;
       adjust();
@@ -172,7 +184,8 @@ export function render(root) {
         "Saved to stick." : "The stick reported different bindings. Its current settings are shown.";
     }
     const rows = [...fields].flatMap(([key, {selector, extra, label}]) => [
-      field(label, selector, key === "ab" ? "Press together, or hold B briefly and add A." : null), extra]);
+      field(label, selector, key === "ab" ? "Press together, or press B first and add A before B becomes a hold." :
+        key === "b3" ? "When the screen is asleep, the first triple press wakes it. Triple-press again to run this action." : null), extra]);
     display(values);
     content.replaceChildren(card(store.status.stick?.name || "Stick buttons", ...rows, names,
       h("p", {class: "small dim"}, "Talk on a click starts recording. Press B again to send."),

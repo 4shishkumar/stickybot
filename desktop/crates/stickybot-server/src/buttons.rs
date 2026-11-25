@@ -21,17 +21,19 @@ pub(super) fn pressed(st: &Arc<AppState>, msg: &Value) {
                 if !current(&st, generation) {
                     return;
                 }
-                let (phase, text) = match result {
-                    Ok(Some(reply)) => ("done", reply),
+                let (title, text) = match result {
+                    Ok(Some(reply)) => ("Quick command", reply),
                     Ok(None) => return,
-                    Err(message) => ("error", message.to_string()),
+                    Err(message) => ("Button action unavailable", message.to_string()),
                 };
                 st.hub.emit("reply", json!({"via":"button", "text":text}));
                 if st.voice_owner.lock().unwrap().is_none()
                     && !st.approvals.pending_for(&st.device_id)
                     && !st.approvals.asking_for(&st.device_id)
                 {
-                    crate::talk::tell_stick(&st, phase, "", &text).await;
+                    let sub: String = text.chars().take(90).collect();
+                    st.link.send(&json!({"src":"agent","event":{"level":"nice","icon":"bell","sound":"off",
+                        "title":title,"sub":sub}})).await;
                 }
             })
             .await;
@@ -167,6 +169,23 @@ mod tests {
             [Action::Open(vec!["-a".into(), "/Applications/Fixture Editor.app".into()])]
         );
         t.st.devices.remove(&t.st, &child.device_id).unwrap();
+    }
+
+    #[tokio::test]
+    async fn button_result_is_a_toast_and_preserves_the_agent_reply() {
+        let t = agent("button-toast", false).await;
+        t.fake.set_stick("buttons", json!({"b2":"quick:Docs","b3":"launcher","ab":"reply","bh":"talk"}));
+        t.st.commands.save(json!({"commands":[{"name":"Docs","open_url":"https://example.org"}]}).as_object().unwrap()).unwrap();
+        crate::talk::tell_stick(&t.st, "done", "", "The last agent answer").await;
+        t.fake.notify(&json!({"src":"agent","evt":"button_action","gesture":"b2","action":"quick:Docs"}));
+        timeout(Duration::from_secs(3), async {
+            loop {
+                if String::from_utf8_lossy(&t.fake.writes().concat()).lines().filter_map(|s| serde_json::from_str::<Value>(s).ok())
+                    .any(|v| v["event"]["sub"] == "Opened Docs") { break; }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }).await.unwrap();
+        assert_eq!(t.fake.screens().last().unwrap().2, "The last agent answer");
     }
 
     #[tokio::test]

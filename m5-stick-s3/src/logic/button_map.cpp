@@ -30,7 +30,7 @@ const char* talkHint(const Table& map) {
   if (map[Slot::HOLD].action == Do::TALK) return "Hold B to ask";
   if (map[Slot::DOUBLE].action == Do::TALK) return "Double B to ask";
   if (map[Slot::TRIPLE].action == Do::TALK) return "Triple B to ask";
-  if (map[Slot::CHORD].action == Do::TALK) return "B+A to ask";
+  if (map[Slot::CHORD].action == Do::TALK) return "A+B to ask";
   return "Agent ready";
 }
 
@@ -72,12 +72,17 @@ static bool parseBinding(Slot s, const std::string& v, Binding& out) {
   return true;
 }
 
-bool parse(const std::string (&values)[COUNT], Table& out) {
+ParseError parse(const std::string (&values)[COUNT], Table& out) {
   Table next;
-  for (int i = 0; i < COUNT; ++i)
-    if (!parseBinding(static_cast<Slot>(i), values[i], next.rows[i])) return false;
+  bool canOpenSettings = false;
+  for (int i = 0; i < COUNT; ++i) {
+    Binding& binding = next.rows[i];
+    if (!parseBinding(static_cast<Slot>(i), values[i], binding)) return ParseError::BINDING;
+    if (binding.action == Do::LAUNCHER || binding.tile == launcher::Tile::SETTINGS) canOpenSettings = true;
+  }
+  if (!canOpenSettings) return ParseError::NO_SETTINGS;
   out = std::move(next);
-  return true;
+  return ParseError::NONE;
 }
 
 std::string pack(const Table& t) {
@@ -99,7 +104,7 @@ bool unpack(const std::string& record, Table& out) {
     rows[i] = record.substr(start, end - start);
     if (end != std::string::npos) start = end + 1;
   }
-  return parse(rows, out);
+  return parse(rows, out) == ParseError::NONE;
 }
 
 ChordStep Chord::update(bool eligible, bool aDown, bool aHeld, bool bHeld, bool bHoldReached) {

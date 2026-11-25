@@ -46,6 +46,16 @@ class Assembly {
   std::string text_;
 };
 
+// The same overlay shows live turn updates or a manually reopened answer. A new
+// turn, a close, and a timeout must all leave recall mode before the next input.
+struct Overlay {
+  uint32_t until = 0;
+  bool recalled = false;
+  void show(uint32_t deadline) { until = deadline; recalled = false; }
+  void recall(uint32_t deadline) { until = deadline; recalled = true; }
+  void close() { show(0); }
+};
+
 struct Pager {
   int total = 0;    // lines in the text
   int visible = 1;  // lines on the screen

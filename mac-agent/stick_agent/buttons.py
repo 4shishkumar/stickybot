@@ -34,7 +34,7 @@ async def run(agent, msg, source, target):
     if not current() or not isinstance(bindings, dict) or bindings.get(gesture) != action:
         return
     reply = None
-    phase = "done"
+    title = "Quick command"
     try:
         if kind == "app":
             app = commands.list_apps().get(name.lower())
@@ -57,8 +57,9 @@ async def run(agent, msg, source, target):
                     raise ValueError("The saved quick command is unavailable")
     except (KeyError, ValueError, OSError, subprocess.SubprocessError) as exc:
         log.info("Button action unavailable: %s", type(exc).__name__)
-        phase, reply = "error", "Button action unavailable. Check its name and any required arguments."
+        title, reply = "Button action unavailable", "Button action unavailable. Check its name and any required arguments."
     if reply and current():
         agent.emit("reply", via="button", text=reply)
         if agent.state == "ready" and not (agent.brain.busy or agent.rec or agent.asks or agent.prompts):
-            await agent.tell_stick(phase, text=reply)
+            await link.send({"src": "agent", "event": {"level": "nice", "title": title, "sub": reply[:90],
+                                                      "icon": "bell", "sound": "off"}})

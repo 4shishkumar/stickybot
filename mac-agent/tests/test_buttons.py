@@ -135,3 +135,13 @@ async def test_button_feedback_during_transcription_stays_in_dashboard(wired, mo
     await press(wired, "quick:Desk", "ab")
     assert any(e.get("via") == "button" for e in wired.events)
     assert not wired.link.sent
+
+async def test_quick_action_feedback_preserves_last_agent_answer(wired, monkeypatch):
+    wired.state = "ready"
+    wired.last_done = "The last agent answer"
+    monkeypatch.setattr(commands, "load", lambda: [{"name": "Desk", "open_app": "Notes"}])
+    monkeypatch.setattr(commands, "run", Mock(return_value="Opened Notes."))
+    wired.stick_api.ble.return_value = {"ok": True, "buttons": {"ab": "quick:Desk"}}
+    await press(wired, "quick:Desk", "ab")
+    assert wired.link.sent[-1]["event"]["sub"] == "Opened Notes."
+    assert wired.last_done == "The last agent answer"

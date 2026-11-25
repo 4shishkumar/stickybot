@@ -27,8 +27,9 @@ struct Table {
 
 const Table& defaults();
 const char* talkHint(const Table& map);
-// All four required. The previous table survives a failed parse.
-bool parse(const std::string (&values)[COUNT], Table& out);
+// Invalid writes leave the previous table intact, including the route to on-stick settings.
+enum class ParseError { NONE, BINDING, NO_SETTINGS };
+ParseError parse(const std::string (&values)[COUNT], Table& out);
 std::string pack(const Table& t);
 bool unpack(const std::string& record, Table& out);
 

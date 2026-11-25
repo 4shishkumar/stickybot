@@ -595,6 +595,9 @@ fn run_line(st: &mut Value, line: &str) -> Value {
                 };
                 next.insert(gesture.into(), json!(action));
             }
+            if !next.values().any(|v| matches!(v.as_str(), Some("launcher" | "tile:settings"))) {
+                return json!({"ok":false, "error":"Keep a gesture for Launcher or Settings"});
+            }
             st["buttons"] = Value::Object(next);
             json!({"ok": true, "buttons": st["buttons"]})
         }
@@ -1155,8 +1158,13 @@ mod tests {
         assert_eq!(st["buttons"], json!({"b2":"unlock","b3":"launcher","ab":"reply","bh":"talk"}));
         let reply = run_line(&mut st, "@buttons b2=launcher&b3=unlock&ab=app%3AA%26B%20Studio&bh=dictation");
         assert_eq!(reply["buttons"], json!({"b2":"launcher","b3":"unlock","ab":"app:A&B Studio","bh":"dictation"}));
+        let stranded = "@buttons b2=unlock&b3=tile:games&ab=reply&bh=talk";
+        assert_eq!(run_line(&mut st, stranded)["ok"], false);
+        assert_eq!(st["buttons"], reply["buttons"]);
+        let mut direct_settings = st.clone();
+        assert_eq!(run_line(&mut direct_settings, "@buttons b2=unlock&b3=tile:games&ab=tile:settings&bh=talk")["ok"], true);
         for input in ["bh=none", "bh=app:Test", "unrelated=yes", "bh=talk&", "bh=talk&ab=none", "bh=talk&x=y"] {
-            assert_eq!(run_line(&mut st, &format!("@buttons b2=reply&b3=none&ab=talk&{input}"))["ok"], false);
+            assert_eq!(run_line(&mut st, &format!("@buttons b2=launcher&b3=none&ab=talk&{input}"))["ok"], false);
             assert_eq!(run_line(&mut st, "@state")["buttons"], reply["buttons"]);
         }
         for action in [
@@ -1171,7 +1179,7 @@ mod tests {
             "app:%20name",
             "quick:1234567890123456789012345678901é",
         ] {
-            assert_eq!(run_line(&mut st, &format!("@buttons b2={action}&b3=none&ab=talk&bh=talk"))["ok"], false);
+            assert_eq!(run_line(&mut st, &format!("@buttons b2={action}&b3=launcher&ab=talk&bh=talk"))["ok"], false);
             assert_eq!(st["buttons"], reply["buttons"]);
         }
     }

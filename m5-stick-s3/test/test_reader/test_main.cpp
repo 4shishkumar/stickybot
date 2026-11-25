@@ -210,8 +210,22 @@ void test_tilt_follows_a_slow_change_of_grip() {
   TEST_ASSERT_TRUE(t.offset() < reader::TiltScroll::DEAD_DEG);
 }
 
+static void recalled_reply_ends_on_close_timeout_or_new_turn() {
+  reader::Overlay view;
+  view.recall(15);
+  TEST_ASSERT_TRUE(view.recalled);
+  view.close();  // B/Shake close and idle expiry
+  TEST_ASSERT_FALSE(view.recalled);
+  TEST_ASSERT_EQUAL_UINT32(0, view.until);
+  view.recall(30);
+  view.show(90);  // a new live turn owns the screen
+  TEST_ASSERT_FALSE(view.recalled);
+  TEST_ASSERT_EQUAL_UINT32(90, view.until);
+}
+
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(recalled_reply_ends_on_close_timeout_or_new_turn);
   RUN_TEST(test_cap_keeps_characters_whole);
   RUN_TEST(test_wrap_paragraphs_and_blank_lines);
   RUN_TEST(test_wrap_no_leading_or_trailing_blank);

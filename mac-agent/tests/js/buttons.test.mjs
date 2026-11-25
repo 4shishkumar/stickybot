@@ -130,3 +130,30 @@ test("a previous device's controls and delayed save never update the new stick",
   assert.deepEqual(writes, [["/api/devices/stick%20A/api/stick/proto", "A"]]);
   assert.equal(id(second, "gesture-b2").value, "unlock"); assert.equal(notice(second).textContent, "");
 });
+
+test("unknown actions round-trip while at least one gesture keeps settings reachable", async t => {
+  device(t);
+  const bindings = {...defaults, b2:"tile:future"};
+  const writes = [];
+  t.mock.method(globalThis, "fetch", async (path, opts) => {
+    if (path === "/api/commands") return Response.json({commands:[]});
+    const {line} = JSON.parse(opts.body);
+    if (line === "@state") return state(bindings);
+    writes.push(line);
+    return state({...bindings, b3:"tile:games", ab:"tile:settings"});
+  });
+  const root = new Element("div"); render(root); await settle();
+  const b2 = id(root, "gesture-b2"), b3 = id(root, "gesture-b3");
+  assert.equal(b2.value, "");
+  assert.ok(b2.children.some(el => el.textContent === "Other (set on the stick)"));
+  b3.fire("change", "tile:games");
+  saveButton(root).fire("click"); await settle();
+  assert.equal(saveButton(root).disabled, true);
+  assert.match(notice(root).textContent, /Launcher or Settings/);
+  assert.equal(writes.length, 0);
+  id(root, "gesture-ab").fire("change", "tile:settings");
+  saveButton(root).fire("click"); await settle();
+  assert.deepEqual(writes, ["@buttons b2=tile%3Afuture&b3=tile%3Agames&ab=tile%3Asettings&bh=talk"]);
+  assert.equal(notice(root).textContent, "Saved to stick.");
+  assert.match(root.textContent, /first triple press wakes/);
+});

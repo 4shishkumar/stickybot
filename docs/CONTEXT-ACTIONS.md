@@ -31,6 +31,8 @@ set **Double-press B** to **Launcher** and **Triple-press B** to **Unlock Mac**.
 | A+B | Reopen last reply | Same choices |
 | Hold B | Talk while held | Dictation while held |
 
+Keep at least one gesture for Launcher or Settings. When the display is asleep, triple B wakes it first; press triple B again to run its mapping.
+
 For A+B, press B and add A before B becomes a hold. You can also press them together.
 A on its own still starts dictation immediately. If Talk is assigned to a tap or chord,
 press B to finish recording. A hold ends when B is released.

@@ -162,6 +162,8 @@ The default is `{"b2":"unlock","b3":"launcher","ab":"reply","bh":"talk"}`.
 | `b2`, `b3`, `ab` | Double B, triple B, A+B | `unlock`, `launcher`, `reply`, `talk`, `none`, `tile:<id>`, `app:<name>`, `quick:<name>` |
 | `bh` | Hold B | `talk`, `dictation` |
 
+At least one discrete gesture must open `launcher` or `tile:settings`. Invalid tables leave the saved bindings intact.
+
 Tile IDs are the eight full IDs listed under `@launcher`. Named actions take a Mac application name
 or the exact name of a saved quick command that can run without arguments. A name is at most 32
 UTF-8 bytes. Path separators and control characters are invalid. For example, swapping the two

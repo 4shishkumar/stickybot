@@ -123,7 +123,9 @@ Result run(const String& action, const Args& arg) {
       values[i].assign(value.c_str(), value.length());
     }
     buttons::Table next;
-    if (!buttons::parse(values, next)) return fail("Invalid button binding");
+    const auto error = buttons::parse(values, next);
+    if (error == buttons::ParseError::NO_SETTINGS) return fail("Keep a shortcut to Launcher or Settings");
+    if (error != buttons::ParseError::NONE) return fail("Invalid button binding");
     if (!settings::saveButtonMap(next)) return fail("Could not save buttons", 500);
     return ok(buttonState());
   }
