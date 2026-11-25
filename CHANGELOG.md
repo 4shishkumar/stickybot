@@ -12,6 +12,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-11-25
+
 ### Added
 - Hold a configurable Mac keyboard shortcut to talk to the selected StickyBot agent. A floating
   panel shows what it heard and keeps the reply visible. Enable it in Settings → Speech & replies.
@@ -604,7 +606,8 @@ The first tagged release: everything on `main` so far. Firmware 1.8.0.
 - The PR / Devin quick commands ship with `<org>/<repo>` placeholders (the setup wizard
   fills in your repo) and GitHub alerts have no default repo.
 
-[Unreleased]: https://github.com/4shishkumar/stickybot/compare/v2.7.0...HEAD
+[Unreleased]: https://github.com/4shishkumar/stickybot/compare/v2.8.0...HEAD
+[2.8.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.8.0
 [2.7.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.7.0
 [2.6.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.6.0
 [2.5.0]: https://github.com/4shishkumar/stickybot/releases/tag/v2.5.0
