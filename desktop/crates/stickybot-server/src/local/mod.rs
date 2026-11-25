@@ -135,7 +135,12 @@ impl Inner {
         std::fs::create_dir_all(root.join("config/prompts")).map_err(|e| e.to_string())?;
         std::fs::write(root.join("config/config.yaml"), GOOSE_CONFIG).map_err(|e| e.to_string())?;
         let now = chrono::Local::now().format("%A %Y-%m-%d, %H:%M");
-        std::fs::write(root.join("config/prompts/system.md"), format!("{SYSTEM}\nToday is {now}."))
+        let folders = {
+            let owner = st.devices.root().unwrap_or_else(|| st.clone());
+            let cfg = owner.cfg.lock().unwrap().clone();
+            crate::assistant::folders_note(&cfg, crate::tool_policy::Caller::Local)
+        };
+        std::fs::write(root.join("config/prompts/system.md"), format!("{SYSTEM}\n{folders}\nToday is {now}."))
             .map_err(|e| e.to_string())?;
         let mcp = proxy::Mcp {
             port: st.port,
