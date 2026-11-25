@@ -156,7 +156,8 @@ A stick that supports favorites includes `launcherFav` in `@state`. It uses the 
 order within each group. To save both lists together, send
 `@launcher tiles=media,air,quick,settings&favorites=air,media`. Use `favorites=-` to clear favorites.
 A tiles-only save retains favorites that are still visible. Reset restores the original layout.
-The dashboard sends `expected_address` from its selected BLE stick with a favorites save or reset.
+The dashboard sends `expected_address` with launcher writes whenever it read the layout over BLE
+and received the peer address. This also protects tiles-only saves and resets on older firmware.
 
 `stickOpen:1` in `@state` advertises `@stick-open app=<id>`. Accepted IDs are `games`, `remote`,
 `air`, `presenter`, `media`, `faces`, `quick` and `settings`. The foreground Mac can request

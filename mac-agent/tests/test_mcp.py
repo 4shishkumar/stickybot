@@ -731,3 +731,13 @@ async def test_stick_open_turn_ending_during_capability_query(client, monkeypatc
     monkeypatch.setattr(agent.stick_api, "ble", ble)
     assert (await client.call("stick_open", {"app": "air"}, headers={"X-Stick-Client": "voice"}))[1]
     ble.assert_awaited_once_with("@state")
+
+
+async def test_agent_directory_is_an_external_mcp_caller(client, monkeypatch):
+    agent = client.agent
+    agent.link.client = SimpleNamespace(address="A")
+    agent.link.target = {"address": "A"}
+    ble = AsyncMock(side_effect=[{"stickOpen": 1}, {"ok": True, "app": "air"}])
+    monkeypatch.setattr(agent.stick_api, "ble", ble)
+    assert agent.brain_peer is None
+    assert not (await client.call("stick_open", {"app": "air"}, headers={"X-Stick-Cwd": "/projects/Agent"}))[1]

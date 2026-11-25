@@ -158,3 +158,21 @@ async def test_new_launcher_commands_stay_on_selected_ble_peer(wired, monkeypatc
     ble.assert_not_awaited()
     assert not (await api.run(line, "stick-a"))["ok"]
     ble.assert_awaited_once_with(line)
+
+
+@pytest.mark.parametrize("line", ["@launcher tiles=games,quick,settings", "@launcher reset=1"])
+async def test_old_launcher_editor_refuses_replacement_and_usb_retry(wired, monkeypatch, line):
+    api = firmware_api.Stick(wired)
+    ble = AsyncMock(return_value={"launcher": "grqs"})
+    monkeypatch.setattr(api, "ble", ble)
+    monkeypatch.setattr(flasher, "espressif_ports", lambda: pytest.fail("pinned save retried on USB"))
+    state = await api.run("@state")
+    assert "launcherFav" not in state["reply"]
+    address = state["device_address"]
+    ble.reset_mock()
+    ble.return_value = None
+    assert not (await api.run(line, address))["ok"]
+    wired.link.target = {"address": "replacement"}
+    wired.link.client = SimpleNamespace(address="replacement")
+    assert not (await api.run(line, address))["ok"]
+    ble.assert_awaited_once_with(line)

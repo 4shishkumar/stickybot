@@ -87,3 +87,17 @@ test("a mismatched acknowledgement keeps the draft and reports an error", async 
   assert.equal(byText(el, "Save").disabled, false);
   assert.match(el.textContent, /did not confirm/);
 });
+
+
+test("old firmware pins tiles-only saves and resets to the peer that supplied the layout", async t => {
+  const {el, writes, refreshes} = editor(t, {launcher:"grqs"}, "original", () =>
+    Response.json({ok:true, device_address:"replacement", reply:{ok:true}}));
+  byLabel(el, "Move Games down").fire("click");
+  byText(el, "Save").fire("click"); await settle();
+  byText(el, "Reset").fire("click"); await settle();
+  assert.deepEqual(writes.map(([, body]) => body), [
+    {line:"@launcher tiles=remote%2Cgames%2Cquick%2Csettings", expected_address:"original"},
+    {line:"@launcher reset=1", expected_address:"original"},
+  ]);
+  assert.deepEqual(refreshes, []);
+});

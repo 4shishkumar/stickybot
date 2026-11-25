@@ -7,15 +7,15 @@ issues: []
 progress:
     intake: done
     apply: done
-    review: active
-    hydrate: pending
+    review: done
+    hydrate: active
     ship: pending
     review-pr: pending
 plan:
     generated: true
     task_count: 6
     acceptance_count: 4
-    acceptance_completed: 0
+    acceptance_completed: 4
 confidence:
     certain: 3
     confident: 0
@@ -30,25 +30,27 @@ confidence:
         disambiguation: 96.7
 stage_metrics:
     intake: {started_at: "2026-11-25T18:47:39Z", driver: fab-new, iterations: 1, completed_at: "2026-11-25T18:48:28Z"}
-    apply: {started_at: "2026-11-25T18:48:28Z", driver: fab-ff, iterations: 1, completed_at: "2026-11-25T19:01:35Z"}
-    review: {started_at: "2026-11-25T19:01:35Z", driver: fab-ff, iterations: 1}
-prs: []
+    apply: {started_at: "2026-11-25T19:04:58Z", driver: fab-ff, iterations: 2, completed_at: "2026-11-25T19:05:18Z"}
+    review: {started_at: "2026-11-25T19:05:18Z", driver: fab-ff, iterations: 2, completed_at: "2026-11-25T19:06:06Z"}
+    hydrate: {started_at: "2026-11-25T19:06:06Z", driver: fab-ff, iterations: 1}
+prs:
+    - https://github.com/4shishkumar/stickybot/pull/23
 change_type_source: explicit
 base_branch: 261125-ezy9-configurable-stick-buttons
 true_impact:
-    added: 0
-    deleted: 0
-    net: 0
+    added: 1257
+    deleted: 209
+    net: 1048
     excluding:
-        added: 0
-        deleted: 0
-        net: 0
+        added: 1138
+        deleted: 209
+        net: 929
     tests:
-        added: 0
-        deleted: 0
-        net: 0
-    computed_at: "2026-11-25T19:01:35Z"
+        added: 314
+        deleted: 19
+        net: 295
+    computed_at: "2026-11-25T19:05:18Z"
     computed_at_stage: apply
 # base_branch: written by /git-branch or /fab-new when the change's branch is created (no placeholder here).
 # true_impact: lazily created on first stage-finish that computes it (no placeholder here).
-last_updated: 2026-11-25T19:01:35Z
+last_updated: 2026-11-25T19:06:06Z

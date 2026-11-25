@@ -5,7 +5,8 @@ import {TILES} from "./stick_layout.js";
 
 export function launcherEditor(state, target, address, refresh) {
   const capable = typeof state.launcherFav === "string";
-  const writable = !capable || (typeof address === "string" && !!address);
+  const peer = typeof address === "string" && address ? address : undefined;
+  const writable = !capable || !!peer;
   const shown = [...String(state.launcher || "")].map(letter => TILES.find(t => t[0] === letter)).filter(Boolean);
   const rows = [...shown, ...TILES.filter(t => !shown.includes(t))].map(tile => ({
     tile, shown: shown.includes(tile), favourite: capable && shown.includes(tile) && state.launcherFav.includes(tile[0]),
@@ -36,9 +37,9 @@ export function launcherEditor(state, target, address, refresh) {
     busy = true;
     paint();
     message.textContent = "Saving…";
-    const reply = await proto("launcher", resetting ? {reset: 1} : change, target, capable ? address : undefined);
+    const reply = await proto("launcher", resetting ? {reset: 1} : change, target, peer);
     if (!current()) return;
-    if (!reply.ok || reply.reply?.ok === false || (capable && reply.device_address !== address)) {
+    if (!reply.ok || reply.reply?.ok === false || (peer && reply.device_address !== peer)) {
       message.textContent = reply.error || reply.reply?.error || "The stick did not confirm the layout. Try again.";
       busy = false;
       paint();

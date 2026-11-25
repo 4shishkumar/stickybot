@@ -331,7 +331,7 @@ class StickTools:
         self.calls = 0
         self.last_call = None  # {"t", "tool", "from"} for the dashboard
 
-    async def call(self, name, args, who):
+    async def call(self, name, args, who, *, voice=False):
         """-> (text, is_error, structured or None)."""
         tool = BY_NAME[name]
         started = time.monotonic()
@@ -339,7 +339,10 @@ class StickTools:
             clean = check_args(tool["inputSchema"], args)
             if name != "stick_status" and not self.agent.link.connected:
                 raise ToolError(NOT_CONNECTED)
-            out = await getattr(self, f"t_{name}")(clean, who)
+            if name == "stick_open":
+                out = await self.t_stick_open(clean, voice=voice)
+            else:
+                out = await getattr(self, f"t_{name}")(clean, who)
             text, structured = out if isinstance(out, tuple) else (out, None)
             err = False
         except ToolError as e:
@@ -367,7 +370,7 @@ class StickTools:
                 log.info("%s: %s(%s) not run: %s", who, name, summarize(args, 40), why)
                 self.agent.emit("mcp", tool=name, origin=who, args=summarize(args), result=why, ok=False, ms=0)
                 return why, True, None
-        return await self.call(name, args, who)
+        return await self.call(name, args, who, voice=True)
 
     # --- feedback -----------------------------------------------------------------------
 
@@ -481,15 +484,15 @@ class StickTools:
         await self.agent.speak(text, force=True)
         return f"speaking on the {self.agent._speech_output()}"
 
-    async def t_stick_open(self, a, who):
+    async def t_stick_open(self, a, *, voice):
         api = self.agent.stick_api
         address = api.connected_address()
         if not address:
             raise ToolError(NOT_CONNECTED)
         transport = self.agent.link
         source, target = transport.client, transport.target
-        origin = self.agent.brain_peer if who == "Agent" else None
-        if who == "Agent" and (not origin or source is not origin[0] or target is not origin[1]):
+        origin = self.agent.brain_peer if voice else None
+        if voice and (not origin or source is not origin[0] or target is not origin[1]):
             raise ToolError("The stick for this voice request is no longer connected.")
         state = await api.run("@state", address)
         if not state["ok"] or state.get("device_address") != address:
@@ -687,7 +690,8 @@ def routes(agent):
                     raise RpcError(INVALID_PARAMS, f"Unknown tool: {name}")
                 if name == "ask" and "text/event-stream" in request.headers.get("Accept", ""):
                     return await _streamed(request, tools, params, who, reply, inflight, id_)
-                task = asyncio.ensure_future(tools.call(name, params.get("arguments"), who))
+                voice = request.headers.get("X-Stick-Client") == "voice"
+                task = asyncio.ensure_future(tools.call(name, params.get("arguments"), who, voice=voice))
                 inflight[(who, str(id_))] = task
                 try:
                     text, err, structured = await task

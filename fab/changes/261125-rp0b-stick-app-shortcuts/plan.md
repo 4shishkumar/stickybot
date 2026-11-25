@@ -15,10 +15,10 @@ On capable firmware, state includes `launcherFav` (favourite visible tile letter
 - [x] T006 Run desktop, dashboard and native gates, both board builds and a simulated-device integration check.
 
 ## Acceptance
-- [ ] Visible favourites lead the physical grid in stable order after save/reopen, and empty/default layouts retain prior behavior.
-- [ ] A tool call for each valid tile navigates the correct stick without a Mac or IR action and preserves protected interactions.
-- [ ] Older peers, bad input and a target switch cannot silently open or configure the wrong device.
-- [ ] Tests pass, both board binaries fit the flash budget, hardware coverage is stated.
+- [x] Visible favourites lead the physical grid in stable order after save/reopen, and empty/default layouts retain prior behavior.
+- [x] A tool call for each valid tile navigates the correct stick without a Mac or IR action and preserves protected interactions.
+- [x] Older peers, bad input and a target switch cannot silently open or configure the wrong device.
+- [x] Tests pass, both board binaries fit the flash budget, hardware coverage is stated.
 
 ## Verification
 
@@ -26,3 +26,7 @@ On capable firmware, state includes `launcherFav` (favourite visible tile letter
 - Python 894 passed, 1 skipped, 5 deselected. Dashboard 56 passed. Native firmware 314 passed.
 - StickS3 and StickC Plus2 built under the 85% flash budget. No physical stick was flashed.
 - Chromium on the simulated Rust device saved and reloaded Air mouse as the first favorite. HTTP MCP opened Air mouse and refused an unknown app.
+
+## Deletion Candidates
+
+None. The extracted Launcher editor replaced the previous inline implementation.
