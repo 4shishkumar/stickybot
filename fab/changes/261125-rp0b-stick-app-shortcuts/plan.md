@@ -23,7 +23,7 @@ On capable firmware, state includes `launcherFav` (favourite visible tile letter
 ## Verification
 
 - Rust workspace 761 passed. Clippy with warnings denied and Ruff passed.
-- Python 894 passed, 1 skipped, 5 deselected. Dashboard 56 passed. Native firmware 314 passed.
+- Python 897 passed, 1 skipped, 5 deselected. Dashboard 57 passed. Native firmware 314 passed.
 - StickS3 and StickC Plus2 built under the 85% flash budget. No physical stick was flashed.
 - Chromium on the simulated Rust device saved and reloaded Air mouse as the first favorite. HTTP MCP opened Air mouse and refused an unknown app.
 
