@@ -57,7 +57,8 @@ async def run(agent, msg, source, target):
                     raise ValueError("The saved quick command is unavailable")
     except (KeyError, ValueError, OSError, subprocess.SubprocessError) as exc:
         log.info("Button action unavailable: %s", type(exc).__name__)
-        title, reply = "Button action unavailable", "Button action unavailable. Check its name and any required arguments."
+        title = "Button action unavailable"
+        reply = "Button action unavailable. Check its name and any required arguments."
     if reply and current():
         agent.emit("reply", via="button", text=reply)
         if agent.state == "ready" and not (agent.brain.busy or agent.rec or agent.asks or agent.prompts):
