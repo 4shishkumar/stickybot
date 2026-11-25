@@ -599,7 +599,7 @@ static void openSettings() {
 
 // The apps it opens end at Home (as before). The B click that opened one isn't a click there
 // too (the IR remote reads B's click count; on Home a B click is Enter): it's swallowed.
-static void onLauncher(launcher::Action a, bool byHold) {
+static void onLauncher(launcher::Action a, bool byHold, bool fromAgent = false) {
   using A = launcher::Action;
   if (a == A::NONE) return;
   const bool leaves = a != A::REDRAW;
@@ -613,7 +613,7 @@ static void onLauncher(launcher::Action a, bool byHold) {
       ir::screenOpen();
       break;
     case A::AIR: case A::PRESENTER: case A::MEDIA:  // air.h; the loop takes over at its next pass
-      air::request(a == A::AIR ? air::Mode::MOUSE : a == A::PRESENTER ? air::Mode::PRESENTER : air::Mode::MEDIA);
+      air::request(a == A::AIR ? air::Mode::MOUSE : a == A::PRESENTER ? air::Mode::PRESENTER : air::Mode::MEDIA, fromAgent);
       mode = Mode::STATUS;
       break;
     case A::SETTINGS:
@@ -640,6 +640,31 @@ static bool leaveWebSettings() {
   else web::stop();
   mode = Mode::STATUS;
   dirty = true;
+  return true;
+}
+
+bool launcher::openFromAgent(Tile tile) {
+  // Only Home (including a pending voice reply) or the launcher grid can yield.
+  // Never cancel or answer a prompt, interrupt a physical input, or discard a settings draft.
+  OpenContext context;
+  context.yieldingScreen = mode == Mode::STATUS || (mode == Mode::LAUNCHER && onGrid());
+  context.physicalInput = comboDown || keyUpAt || enterAt || M5.BtnA.isPressed() || M5.BtnA.wasReleased() ||
+                          M5.BtnB.isPressed() || M5.BtnB.wasReleased();
+  context.recording = agentTalking || bDictating || mic::live() || buddy::agent().state == "listening";
+  context.confirmation = buddy::hasPrompt() || hid::pairingCode();
+  context.transfer = ota::active() || faces::pkg::install::receiving() || ir::sending() || web::busy();
+  context.overlay = air::active() || ir::screenActive() || faces::demoActive() ||
+                    events::active() || events::pending() || web::shown();
+  if (!context.available()) return false;
+
+  agentView.close();
+  talkEndedAt = 0;
+  messageUntil = 0;
+  docked = false;
+  swallowBUntil = millis() + 900;  // pending decisions for a B click made on the previous screen
+  mode = Mode::LAUNCHER;
+  ui::wake(B_SCREEN_MS);
+  onLauncher(openTile(tile, false), false, true);
   return true;
 }
 
@@ -1039,10 +1064,12 @@ void loop() {
   }
 
   // A remote mode (air mouse / presenter / media, air.h) owns the buttons, the motion and
-  // the screen; only a pairing request still shows (below, A accepts).
+  // the screen. Pairing and stick confirmations take priority, even if they arrive after entry.
   {
     static bool airWas = false;
-    if (air::active() && !hid::pairingCode()) {
+    if (air::active() && (hid::pairingCode() || buddy::hasPrompt())) {
+      air::suspendInput();
+    } else if (air::active()) {
       if (!airWas) {  // starting (from the menu or @mode): it takes over from whatever else is open
         if (mode == Mode::GAME) games::close();  // the CPU back to 80 MHz, the speaker released
         if (mode == Mode::MENU) ui::setBrightness(settings::brightnessPct());  // the menu's drafts are dropped
@@ -1073,7 +1100,8 @@ void loop() {
   // Escape: on an agent screen, a click of B (or a shake) dismisses it and cancels
   // the request; back to Home. That click doesn't send Enter.
   // (2.6.0: what B and a shake do comes from the screen's action map, logic/actions.cpp)
-  const bool agentScreen = mode == Mode::STATUS && agentView.until && millis() < agentView.until && !agentTalking;
+  const bool agentScreen = mode == Mode::STATUS && !ir::screenActive() && !air::active() &&
+                           agentView.until && millis() < agentView.until && !agentTalking;
   const bool agentBusy = agentScreen && !agentView.recalled && (agentSeenAt < talkEndedAt || buddy::agent().state == "thinking" ||
                                          buddy::agent().state == "working");
   const bool replyView = agentScreen && !agentBusy && !comboDown && !docked && (agentView.recalled || buddy::agent().state == "done");

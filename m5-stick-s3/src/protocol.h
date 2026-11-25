@@ -3,6 +3,7 @@
 #pragma once
 #include <Arduino.h>
 #include <functional>
+#include "logic/launcher.h"
 
 namespace protocol {
 
@@ -32,8 +33,10 @@ inline void humanReply(Print& reply, const String& json) { reply.println(json); 
 // used by the Mac agent over Bluetooth. If the result asks for a restart, call
 // finish() once the reply has been sent.
 // Every caller states its transport; Bluetooth cannot erase shared host records.
-enum class Source { Serial, Bluetooth };
-Result runLine(const String& line, Source source);
+enum class Source { Serial, Bluetooth, BackgroundBluetooth };
+// Only the selected Bluetooth connection supplies the main-loop navigation callback.
+using OpenTile = bool (*)(launcher::Tile);
+Result runLine(const String& line, Source source, OpenTile openTile = nullptr);
 void   finish(const Result& r);
 
 }  // namespace protocol

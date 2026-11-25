@@ -422,6 +422,18 @@ pub fn cancel_mac_turn(st: &Arc<AppState>) -> bool {
     true
 }
 
+/// HTTP tool calls from a stick-originated voice turn must retain the original BLE generation.
+pub(crate) fn voice_tool_generation(st: &AppState, ctx: &crate::tool_policy::Context) -> Option<u64> {
+    let slot = st.voice_owner.lock().unwrap();
+    slot.as_ref()
+        .filter(|owner| {
+            !owner.cancelled.load(Ordering::Acquire)
+                && ctx.active()
+                && st.mcp.session.current().is_some_and(|scope| scope.turn == ctx.scope.turn)
+        })
+        .map(|owner| owner.generation)
+}
+
 /// Identify the same live brain request across the native caller and its HTTP MCP connection.
 pub(crate) fn mac_agent_owner(st: &AppState, ctx: &crate::tool_policy::Context) -> Option<Arc<Owner>> {
     let slot = st.voice_owner.lock().unwrap();
@@ -1485,6 +1497,39 @@ pub(crate) mod tests {
         assert_eq!(mac, text.trim());
         assert_eq!(brain_reply(&text), plain(&text));
         assert!(brain_reply(&text).chars().count() <= 280);
+    }
+
+    #[tokio::test]
+    async fn stick_open_over_http_keeps_the_source_voice_generation() {
+        use axum::{body::Body, http::Request};
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+        let t = agent("stick-open-voice-generation", false).await;
+        let app = crate::api::router(t.st.clone());
+        t.st.devices.init(&t.st).unwrap();
+        let ask = || {
+            let request = Request::post("/api/devices/primary/mcp")
+                .header("host", "localhost:8670")
+                .header("authorization", format!("Bearer {}", t.st.mcp.local_token))
+                .body(Body::from(
+                    json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                    "params":{"name":"stick_open","arguments":{"app":"air"}}})
+                    .to_string(),
+                ))
+                .unwrap();
+            app.clone().oneshot(request)
+        };
+        let _scope = t.st.mcp.session.begin();
+        let live = t.st.link.generation();
+        for generation in [None, Some(live.wrapping_sub(1)), Some(live), None] {
+            let _turn = generation.map(|g| VoiceTurn::reserve(t.st.clone(), None, g).unwrap());
+            t.fake.set_stick("openTile", Value::Null);
+            let response = ask().await.unwrap();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let reply: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(reply["result"]["isError"], generation != Some(live), "{reply}");
+            assert_eq!(t.fake.stick_state()["openTile"] == "air", generation == Some(live));
+        }
     }
 
     struct OpenTool(std::sync::Weak<AppState>);

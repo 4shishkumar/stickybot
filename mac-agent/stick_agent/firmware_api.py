@@ -20,7 +20,7 @@ import uuid
 
 from aiohttp import web
 
-from . import config, flasher, ota
+from . import config, flasher, link, ota
 
 log = logging.getLogger("firmware")
 
@@ -104,23 +104,33 @@ class Stick:
         line = (line or "").strip()
         if not line.startswith("@"):
             return {"ok": False, "via": None, "reply": None, "error": "expected a line like @state"}
-        operation = line.split(maxsplit=1)[0]
-        address = self.connected_address() if operation in ("@buttons", "@state") else None
-        source = getattr(self.agent.link, "client", None)
-        if operation == "@buttons" and (not address or address != expected_address):
-            return {"ok": False, "via": "ble", "reply": None, "error": "Stick changed. Reload its button mappings."}
-        if self.agent.link.connected:
-            reply = await self.ble(line)
+        parts = line.split(maxsplit=1)
+        operation = parts[0]
+        keys = {arg.partition("=")[0] for arg in parts[1].split("&")} if len(parts) > 1 else set()
+        pinned = (operation in ("@buttons", "@stick-open") or expected_address is not None
+                  or (operation == "@launcher" and "favorites" in keys))
+        address = self.connected_address() if pinned or operation == "@state" else None
+        transport = self.agent.link
+        source = getattr(transport, "client", None)
+        target = transport.target
+        if pinned and (not address or address != expected_address):
+            return {"ok": False, "via": "ble", "reply": None, "error": "Stick changed. Reload the selected stick."}
+        if transport.connected:
+            if pinned:
+                with link.pin_peer(source, target):
+                    reply = await self.ble(line)
+            else:
+                reply = await self.ble(line)
             if reply is not None:
                 self._ble_cache = (0.0, None)  # settings may have changed
                 result = {"ok": bool(reply.get("ok", True)), "via": "ble", "reply": reply, "error": reply.get("error")}
-                same_link = source is getattr(self.agent.link, "client", None)
-                if address and same_link and address == self.connected_address():
+                same_peer = source is getattr(transport, "client", None) and target is transport.target
+                if address and same_peer and address == self.connected_address():
                     result["device_address"] = address
-                elif operation == "@buttons":
-                    return {"ok": False, "via": "ble", "reply": None, "error": "Stick changed during save."}
+                elif pinned:
+                    return {"ok": False, "via": "ble", "reply": None, "error": "Stick changed before it answered."}
                 return result
-        if operation == "@buttons":
+        if pinned:
             return {"ok": False, "via": "ble", "reply": None, "error": "The selected stick did not answer"}
         ports = [p for p in flasher.espressif_ports() if not flasher.in_bootloader(p)]
         if self.flashing:

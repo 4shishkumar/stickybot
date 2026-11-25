@@ -6,6 +6,8 @@ import base64
 import json
 import subprocess
 import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -141,7 +143,7 @@ async def test_legacy_requests(client):
     _, body = await client.rpc("tools/list", headers={"MCP-Protocol-Version": "2025-11-25"})
     names = [t["name"] for t in body["result"]["tools"]]
     assert names == ["notify", "ask", "celebrate", "progress", "pin_home", "open_url", "open_app", "quick_command",
-                     "stick_status", "speak", "ir_list", "ir_send"]
+                     "stick_open", "stick_status", "speak", "ir_list", "ir_send"]
     for t in body["result"]["tools"]:
         assert t["description"] and t["inputSchema"]["type"] == "object"
     status, body = await client.rpc("tools/list", headers={"MCP-Protocol-Version": "1999-01-01"})
@@ -654,3 +656,78 @@ def test_installer_component(fake_run):
     assert state == "missing" and "claude mcp add" in detail and config.token() not in detail
     c.install(installer.UI(interactive=False))
     assert fake_run.calls[-1][1:3] == ["mcp", "add"]
+
+
+@pytest.mark.parametrize("app", ["games", "remote", "air", "presenter", "media", "faces", "quick", "settings"])
+async def test_stick_open_navigates_selected_peer(client, monkeypatch, app):
+    agent = client.agent
+    agent.link.client = SimpleNamespace(address="A")
+    agent.link.target = {"address": "A"}
+    ble = AsyncMock(side_effect=[{"stickOpen": 1}, {"ok": True, "app": app}])
+    monkeypatch.setattr(agent.stick_api, "ble", ble)
+    text, err, _ = await client.call("stick_open", {"app": app})
+    assert not err and app in text
+    assert [call.args[0] for call in ble.await_args_list] == ["@state", f"@stick-open app={app}"]
+
+
+@pytest.mark.parametrize("answers,reason", [
+    ([{}], "firmware"),
+    ([{"stickOpen": 1}, {"ok": False, "error": "busy"}], "busy"),
+    ([{"stickOpen": 1}, {"ok": True, "app": "media"}], "confirm"),
+])
+async def test_stick_open_requires_capability_and_matching_ack(client, monkeypatch, answers, reason):
+    agent = client.agent
+    agent.link.client = SimpleNamespace(address="A")
+    agent.link.target = {"address": "A"}
+    monkeypatch.setattr(agent.stick_api, "ble", AsyncMock(side_effect=answers))
+    text, err, _ = await client.call("stick_open", {"app": "air"})
+    assert err and reason in text
+
+
+async def test_stick_open_refuses_invalid_and_reconnected_peer(client, monkeypatch):
+    agent = client.agent
+    agent.link.client = SimpleNamespace(address="A")
+    agent.link.target = {"address": "A"}
+
+    async def reconnect(_):
+        agent.link.client = SimpleNamespace(address="A")
+        return {"stickOpen": 1}
+
+    ble = AsyncMock(side_effect=reconnect)
+    monkeypatch.setattr(agent.stick_api, "ble", ble)
+    for args in ({"app": "Safari"}, {"app": "air", "url": "extra"}):
+        assert (await client.call("stick_open", args))[1]
+    ble.assert_not_awaited()
+    assert (await client.call("stick_open", {"app": "air"}))[1]
+    ble.assert_awaited_once_with("@state")
+
+
+async def test_stick_open_voice_stays_with_originating_turn(client, monkeypatch):
+    agent = client.agent
+    agent.link.client = SimpleNamespace(address="B")
+    agent.link.target = {"address": "B"}
+    ble = AsyncMock(side_effect=[{"stickOpen": 1}, {"ok": True, "app": "air"}])
+    monkeypatch.setattr(agent.stick_api, "ble", ble)
+    headers = {"X-Stick-Client": "voice"}
+    for origin in (None, (SimpleNamespace(address="A"), {"address": "A"})):
+        agent.brain_peer = origin
+        assert (await client.call("stick_open", {"app": "air"}, headers=headers))[1]
+    ble.assert_not_awaited()
+    agent.brain_peer = (agent.link.client, agent.link.target)
+    assert not (await client.call("stick_open", {"app": "air"}, headers=headers))[1]
+
+
+async def test_stick_open_turn_ending_during_capability_query(client, monkeypatch):
+    agent = client.agent
+    agent.link.client = SimpleNamespace(address="A")
+    agent.link.target = {"address": "A"}
+    agent.brain_peer = (agent.link.client, agent.link.target)
+
+    async def finish_turn(_):
+        agent.brain_peer = None
+        return {"stickOpen": 1}
+
+    ble = AsyncMock(side_effect=finish_turn)
+    monkeypatch.setattr(agent.stick_api, "ble", ble)
+    assert (await client.call("stick_open", {"app": "air"}, headers={"X-Stick-Client": "voice"}))[1]
+    ble.assert_awaited_once_with("@state")

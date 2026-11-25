@@ -129,6 +129,11 @@ pub fn tools() -> &'static [Value] {
                 "description": "The stick's state: connected, battery, on USB, what its screen shows, when a button was last pressed, and a hint whether the user is at their desk. Read-only.",
                 "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}},
                 "annotations": {"readOnlyHint": true, "openWorldHint": false}}),
+            json!({"name":"stick_open", "title":"Open a stick app",
+                "description":"Open a built-in app on the selected stick screen. Use air for Air mouse, remote for the IR remote, and quick for Quick settings. Opens the screen only; controls stay with the user.",
+                "inputSchema":{"type":"object", "additionalProperties":false, "required":["app"], "properties":{
+                    "app":{"type":"string", "enum":stick_link::proto::LAUNCHER_TILES.map(|tile| tile.0)}}},
+                "annotations":{"readOnlyHint":false, "destructiveHint":false, "openWorldHint":false}}),
             json!({"name": "speak", "title": "Speak on the stick",
                 "description": "Say a short sentence out loud (the stick's speaker or the Mac's, as the user set it). Use sparingly — only when a spoken word is worth it. Silent in quiet hours. At most one per second.",
                 "inputSchema": {"type": "object", "additionalProperties": false, "required": ["text"], "properties": {
@@ -734,6 +739,7 @@ async fn run_tool(st: &Arc<AppState>, name: &str, a: &Map<String, Value>, who: &
             Ok((format!("speaking on the {out}"), None))
         }
         "stick_status" => Ok(stick_status(st).await),
+        "stick_open" => stick_open(st, a["app"].as_str().unwrap()).await,
         "ir_list" => {
             let devices = crate::ir::listing(st).await?;
             if devices.is_empty() {
@@ -839,6 +845,67 @@ fn ago(s: u64) -> String {
     } else {
         format!("{} h", s / 3600)
     }
+}
+
+tokio::task_local! {
+    static NAVIGATION_TURN: Context;
+}
+
+/// Retain the voice owner across HTTP and native brain calls. Every tool still executes via the broker.
+pub(crate) async fn call_from_client(st: &Arc<AppState>, name: &str, args: &Value, ctx: &Context) -> Outcome {
+    let dispatch = call(st, name, args, ctx);
+    if name != "stick_open" || !(ctx.caller.brain() || ctx.caller == Caller::OpenRouter) {
+        return dispatch.await;
+    }
+    if args.get("device_id").and_then(Value::as_str).is_some_and(|id| id != st.device_id) {
+        return ("This voice turn belongs to a different device".into(), true, None);
+    }
+    let Some(generation) = crate::talk::voice_tool_generation(st, ctx) else {
+        return ("The voice turn has ended".into(), true, None);
+    };
+    NAVIGATION_TURN.scope(ctx.clone(), st.link.with_generation(generation, dispatch)).await
+}
+
+/// Pin the capability query and navigation to the same live BLE peer, including voice turns
+/// whose originating connection has already gone away. Never retry navigation over USB.
+async fn stick_open(st: &AppState, app: &str) -> ToolResult {
+    let link = &st.link;
+    let generation = link.bound_generation();
+    let selected = || {
+        let turn_active = NAVIGATION_TURN
+            .try_with(|ctx| crate::talk::voice_tool_generation(st, ctx) == Some(generation))
+            .unwrap_or(true);
+        turn_active
+            && link.connected_peer().is_some_and(|(live, address)| {
+                live == generation
+                    && !link.paused()
+                    && link.target().is_some_and(|target| target.address.eq_ignore_ascii_case(&address))
+            })
+    };
+    link.with_generation(generation, async {
+        if !selected() {
+            return Err(NOT_CONNECTED.into());
+        }
+        let state = link.request("@state").await.ok_or("The stick didn't answer")?;
+        if state["ok"] != true || state["stickOpen"] != 1 {
+            return Err("This stick firmware does not support opening apps".into());
+        }
+        if !selected() {
+            return Err(NOT_CONNECTED.into());
+        }
+        let line = stick_link::proto::proto_line("stick-open", &[("app", app)]);
+        let reply = link.request(&line).await.ok_or("The stick didn't confirm navigation")?;
+        if reply["ok"] == true && reply["app"] == app {
+            Ok((format!("Opened {app} on the stick"), Some(json!({"app":app}))))
+        } else if reply["error"] == "Select this Mac on the stick first" {
+            Err("Select this Mac on the stick first".into())
+        } else if reply["error"] == "Stick is busy" {
+            Err("The stick is busy; finish the current interaction first".into())
+        } else {
+            Err("The stick didn't confirm navigation".into())
+        }
+    })
+    .await
 }
 
 async fn stick_status(st: &Arc<AppState>) -> (String, Option<Value>) {
@@ -1127,11 +1194,8 @@ pub async fn post(st: Arc<AppState>, headers: HeaderMap, body: &[u8]) -> Respons
                 let explicit_target = crate::events::device_targeted();
                 let task = tokio::spawn(async move {
                     let _scope = (!identity.brain()).then(|| tool_policy::TurnGuard(ctx.scope.clone()));
-                    if explicit_target {
-                        crate::events::for_device(call(&st2, &name, &args, &ctx)).await
-                    } else {
-                        call(&st2, &name, &args, &ctx).await
-                    }
+                    let dispatch = call_from_client(&st2, &name, &args, &ctx);
+                    if explicit_target { crate::events::for_device(dispatch).await } else { dispatch.await }
                 });
                 inflight.insert(key.clone(), task.abort_handle());
                 task
@@ -1404,6 +1468,7 @@ mod tests {
                 "open_app",
                 "quick_command",
                 "stick_status",
+                "stick_open",
                 "speak",
                 "ir_list",
                 "ir_send",
@@ -1628,7 +1693,10 @@ mod tests {
             .await;
         assert_eq!(s, StatusCode::ACCEPTED);
         let (_, v) = c.rpc("tools/list", json!({}), &[("mcp-protocol-version", "2025-11-25")], false).await;
-        assert_eq!(v["result"]["tools"].as_array().unwrap().len(), 15);
+        let legacy = v["result"]["tools"].as_array().unwrap();
+        assert!(legacy.iter().any(|tool| tool["name"] == "stick_open"));
+        let (_, modern) = c.rpc("tools/list", json!({}), &[], true).await;
+        assert_eq!(modern["result"]["tools"], json!(legacy));
         let (s, v) = c.rpc("tools/list", json!({}), &[("mcp-protocol-version", "1999-01-01")], false).await;
         assert_eq!((s, v["error"]["code"].as_i64()), (StatusCode::BAD_REQUEST, Some(UNSUPPORTED_VERSION)));
         let (s, v) = c.rpc("nope/nope", json!({}), &[], false).await;
@@ -1752,6 +1820,70 @@ mod tests {
         assert!(!err && text.starts_with("stick not connected") && r["structuredContent"]["connected"] == false);
     }
 
+    #[tokio::test]
+    async fn stick_open_only_navigates_canonical_tiles_and_reports_failures() {
+        let mut c = C::new("stick-open").await;
+        c.t.st.cfg.lock().unwrap().insert("tool_profiles".into(), json!({"mcp":"assistant"}));
+        for (app, _, _) in stick_link::proto::LAUNCHER_TILES {
+            c.t.fake.set_stick("openTile", Value::Null); // the user returned to the Launcher
+            let (text, error, result) = c.call("stick_open", json!({"app":app}), &[]).await;
+            assert!(!error, "{text}");
+            assert_eq!(result["structuredContent"]["app"], app);
+            assert_eq!(c.t.fake.stick_state()["openTile"], app);
+        }
+        let open_count = |c: &C| {
+            c.sent().iter().filter(|m| m["proto"].as_str().is_some_and(|line| line.starts_with("@stick-open"))).count()
+        };
+        for args in [
+            json!({}),
+            json!({"app":"a"}),
+            json!({"app":"Slack"}),
+            json!({"app":"air&unlock=1"}),
+            json!({"app":"air","command":"send"}),
+            json!({"app":true}),
+        ] {
+            assert!(c.call("stick_open", args, &[]).await.1);
+        }
+        assert_eq!(open_count(&c), 8);
+        c.t.fake.set_old_firmware(true);
+        let (text, error, _) = c.call("stick_open", json!({"app":"air"}), &[]).await;
+        assert!(error && text.contains("firmware"), "{text}");
+        assert_eq!(open_count(&c), 8);
+        c.t.fake.set_old_firmware(false);
+        let (text, error, _) = c.call("stick_open", json!({"app":"remote"}), &[]).await;
+        assert!(error && text.contains("busy"), "{text}");
+        assert_eq!(c.t.fake.stick_state()["openTile"], "settings");
+        assert!(c.t.ran.lock().unwrap().is_empty());
+        assert!(c.t.fake.ir(|ir| ir.sent.is_empty()));
+        assert!(c.asks_on_stick().is_empty());
+    }
+
+    #[tokio::test]
+    async fn stick_open_targets_one_device_and_rejects_a_stale_generation() {
+        let mut c = C::new("stick-open-target").await;
+        let st = c.t.st.clone();
+        st.devices.init(&st).unwrap();
+        let other = st.devices.add(&st, "SECOND", "Second").unwrap();
+        let mut watch = other.link.watch_state();
+        tokio::time::timeout(Duration::from_secs(5), watch.wait_for(|s| *s == stick_link::LinkState::Connected))
+            .await
+            .unwrap()
+            .unwrap();
+        let stick_link::Backend::Fake(other_fake) = &other.backend else { panic!("fake only") };
+        let (text, err, _) = c.call("stick_open", json!({"app":"air","device_id":other.device_id}), &[]).await;
+        assert!(!err, "{text}");
+        assert_eq!(other_fake.stick_state()["openTile"], "air");
+        assert!(c.t.fake.stick_state()["openTile"].is_null());
+        let stale = st.link.generation().wrapping_sub(1);
+        let ctx = Context::internal("test");
+        let (_, err, _) = st.link.with_generation(stale, call(&st, "stick_open", &json!({"app":"remote"}), &ctx)).await;
+        assert!(err && c.t.fake.stick_state()["openTile"].is_null());
+        st.link.pause(true);
+        assert!(c.call("stick_open", json!({"app":"games"}), &[]).await.1);
+        assert_eq!(other_fake.stick_state()["openTile"], "air");
+        st.devices.remove(&st, &other.device_id).unwrap();
+    }
+
     async fn answer_when_shown(fake: &stick_link::fake::FakeStick, decision: &str, n: usize) {
         for _ in 0..200 {
             let sent: Vec<Value> = String::from_utf8(fake.writes().concat())
@@ -1861,6 +1993,7 @@ mod tests {
                 "open_url",
                 "open_app",
                 "stick_status",
+                "stick_open",
                 "ir_list",
                 "calendar_next",
                 "calendar_today",

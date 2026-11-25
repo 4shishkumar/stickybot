@@ -1,0 +1,4 @@
+{"action":"enter","driver":"fab-new","event":"stage-transition","stage":"intake","ts":"2026-11-25T18:47:39Z"}
+{"delta":"+5.0","event":"confidence","score":5,"trigger":"calc-score","ts":"2026-11-25T18:48:28Z"}
+{"action":"enter","driver":"fab-ff","event":"stage-transition","stage":"apply","ts":"2026-11-25T18:48:28Z"}
+{"action":"enter","driver":"fab-ff","event":"stage-transition","stage":"review","ts":"2026-11-25T19:01:35Z"}

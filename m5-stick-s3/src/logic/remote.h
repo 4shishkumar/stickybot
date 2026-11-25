@@ -26,6 +26,17 @@ enum class Btn : uint8_t {
 };
 const char* name(Btn b);
 
+// An agent may open a motion-controlled tile. Discard its motion and all button
+// events through the first physical A click, including that click itself.
+struct EntryPause {
+  bool waiting = false;
+  bool consume(Btn event) {
+    if (!waiting) return false;
+    if (event == Btn::A_CLICK) waiting = false;
+    return true;
+  }
+};
+
 struct ButtonTiming {
   uint16_t holdMsA = 300;
   uint16_t holdMsB = 300;

@@ -595,7 +595,7 @@ impl OpenRouterBrain {
             Ok(ctx) => ctx,
             Err(error) => return json!({"error":error}).to_string(),
         };
-        let (text, err, _) = crate::mcp::call(&st, name, &args, &ctx).await;
+        let (text, err, _) = crate::mcp::call_from_client(&st, name, &args, &ctx).await;
         format!("{}{text}", if err { "error: " } else { "" }).chars().take(TOOL_RESULT_CHARS).collect()
     }
 

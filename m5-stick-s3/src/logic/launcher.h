@@ -12,6 +12,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include <string>
 
 namespace launcher {
 
@@ -31,7 +32,7 @@ const TileInfo& info(Tile t);
 bool fromName(const char* s, size_t n, Tile& out);
 
 struct Layout {
-  Tile    tiles[TILE_COUNT];
+  Tile    tiles[TILE_COUNT]{};
   uint8_t n = 0;
   int  indexOf(Tile t) const;  // -1 if hidden
   bool operator==(const Layout& o) const;
@@ -47,6 +48,33 @@ ParseError parseLetters(const char* s, Layout& out);
 void letters(const Layout& l, char* out, size_t n);  // n >= TILE_COUNT + 1
 void ids(const Layout& l, char* out, size_t n);      // n >= 72 is always enough
 const char* errorText(ParseError e);                 // "unknown tile" ...
+
+// Store visible order and its favourite subset in a single NVS value. The old value
+// contains just visible letters. Favourites always follow visible order.
+struct Catalog {
+  Layout visible = defaults();
+  Layout favorites{};
+  Layout grid() const;
+  int openingSelection(Tile last) const;
+  bool operator==(const Catalog& o) const { return visible == o.visible && favorites == o.favorites; }
+  std::string pack() const;
+};
+bool unpack(const char* record, Catalog& out);
+bool setFavorites(Catalog& c, const char* ids);  // full visible IDs, or "-" to clear
+void retainVisibleFavorites(Catalog& c);
+
+// Allow remote navigation on Home (including a thinking voice agent) or the launcher grid.
+struct OpenContext {
+  bool yieldingScreen;
+  bool physicalInput;
+  bool recording;
+  bool confirmation;
+  bool transfer;
+  bool overlay;
+  bool available() const {
+    return yieldingScreen && !physicalInput && !recording && !confirmation && !transfer && !overlay;
+  }
+};
 
 // --- The grid --------------------------------------------------------------------------------
 // Portrait 2 x 3, landscape 3 x 2: six tiles a page either way, so a tile stays on its page

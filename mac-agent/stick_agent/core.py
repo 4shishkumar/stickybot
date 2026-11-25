@@ -172,6 +172,8 @@ class Agent:
         self.detail = ""
         self.stt_ready = False
         self.rec = None
+        self.recording_peer = None
+        self.brain_peer = None
         self.events = collections.deque(maxlen=300)   # for the dashboard
         self.subscribers = set()                       # SSE queues
         self.prompts = {}                              # id -> {"tool","hint","from","future"}
@@ -453,10 +455,12 @@ class Agent:
             if msg.get("state") == "start":
                 self.stop_speaking()  # talking again interrupts a reply being read out
                 self.rec = Recording()
+                self.recording_peer = (getattr(self.link, "client", None), self.link.target)
                 self.set_state("listening")
             elif msg.get("state") == "stop" and self.rec is not None:
                 rec, self.rec = self.rec, None
-                asyncio.ensure_future(self._handle_talk(rec))
+                peer, self.recording_peer = self.recording_peer, None
+                asyncio.ensure_future(self._handle_talk(rec, peer))
         elif msg.get("src") == "agent" and msg.get("evt") == "wispr":  # A held: the mic for Wispr, not a request
             if msg.get("state") == "prepare":  # 1.7.1+: the key waits for our "ready"
                 self.wispr.start(msg.get("rate") or wispr_mic.RATE)  # the output stream is open before "ready"
@@ -583,16 +587,16 @@ class Agent:
 
     # --- handling a request ---------------------------------------------------
 
-    async def _handle_talk(self, rec):
+    async def _handle_talk(self, rec, peer=None):
         """Always ends by telling the stick something (it waits on "Thinking...")."""
         try:
-            await self._handle_talk_inner(rec)
+            await self._handle_talk_inner(rec, peer)
         except Exception as e:  # noqa: BLE001
             log.exception("talk failed")
             await self.tell_stick("error", "", f"Something went wrong: {e}"[:120])
             self.set_state("ready" if self.link_state == "connected" else self.link_state)
 
-    async def _handle_talk_inner(self, rec):
+    async def _handle_talk_inner(self, rec, peer=None):
         audio = rec.audio()
         secs = len(audio) / 16000
         if secs < 0.6:
@@ -616,9 +620,11 @@ class Agent:
             await self.tell_stick("error", "", "Didn't catch that.")
             self.set_state("ready")
             return
-        await self.handle_text(text, source="voice")
+        await self.handle_text(text, source="voice", peer=peer)
 
-    async def handle_text(self, text, source="typed"):
+    async def handle_text(self, text, source="typed", peer=None):
+        if peer is None:
+            peer = (getattr(self.link, "client", None), self.link.target)
         self.stats["requests"] += 1
         started = time.time()
         self.emit("heard", text=text, source=source)
@@ -684,6 +690,7 @@ class Agent:
             if live and shown:
                 stream.push(shown)
 
+        self.brain_peer = peer
         try:
             ok, reply = await self.brain.ask(text, progress, on_text)
         except BaseException:
@@ -691,6 +698,8 @@ class Agent:
                 utter.cancel()
             raise
         finally:
+            if self.brain_peer is peer:
+                self.brain_peer = None
             await stream.close()
         if self.brain.cancelled:  # dismissed on the stick: say nothing more
             if utter:

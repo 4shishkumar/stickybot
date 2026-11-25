@@ -1,25 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-class Element extends EventTarget {
-  constructor(tag) { super(); this.tag = tag; this.children = []; this.value = ""; }
-  appendChild(child) { this.children.push(child); return child; }
-  replaceChildren(...children) { this.children = children; }
-  setAttribute(key, value) { this[key] = key === "hidden" ? true : value; }
-  removeAttribute(key) { delete this[key]; }
-  get firstChild() { return this.children[0]; }
-  set textContent(text) { this.children = [text]; }
-  get textContent() { return this.children.map(child => child.textContent ?? child).join(""); }
-  find(pred) {
-    if (pred(this)) return this;
-    for (const child of this.children) { const match = child.find?.(pred); if (match) return match; }
-  }
-  fire(type, value) { if (value !== undefined) this.value = value; this.dispatchEvent(new Event(type)); }
-}
+import {Element} from "./dom.mjs";
 
-globalThis.window = {};
-globalThis.Node = globalThis.HTMLElement = Element;
-globalThis.document = {createElement: tag => new Element(tag), createTextNode: text => text};
 const {render, leave, buttonSettingsLink} = await import("../../stick_agent/static/pages/buttons.js");
 const {selectDevice, store} = await import("../../stick_agent/static/lib.js");
 const defaults = {b2:"unlock", b3:"launcher", ab:"reply", bh:"talk"};

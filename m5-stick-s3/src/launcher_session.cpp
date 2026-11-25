@@ -13,7 +13,8 @@ constexpr uint32_t TIMEOUT_MS = 60000;
 
 enum class Screen : uint8_t { GRID, QUICK, FACES };
 
-static Layout   layout_ = defaults();
+static Catalog  catalog;
+static Layout   layout_ = catalog.grid();
 static Screen   screen_ = Screen::GRID;
 static int      sel = 0, qsel = 0, fsel = 0;
 static uint32_t lastInput = 0;
@@ -21,12 +22,9 @@ static uint32_t lastInput = 0;
 static void touch() { lastInput = millis(); }
 
 void begin() {
-  Layout l;
-  String saved = settings::launcherTiles();
-  if (saved.length() && parseLetters(saved.c_str(), l) == ParseError::NONE) layout_ = l;
+  unpack(settings::launcherRecord().c_str(), catalog);
+  layout_ = catalog.grid();
 }
-
-const Layout& layout() { return layout_; }
 
 static Tile lastTile() {
   Tile t;
@@ -36,7 +34,7 @@ static Tile lastTile() {
 
 void open() {
   screen_ = Screen::GRID;
-  sel = startAt(layout_, lastTile());
+  sel = catalog.openingSelection(lastTile());
   touch();
 }
 
@@ -153,10 +151,10 @@ Action clickB() {
   return openTile(layout_.tiles[sel < layout_.n ? sel : 0]);
 }
 
-Action openTile(Tile t) {
+Action openTile(Tile t, bool remember) {
   touch();
   sel = startAt(layout_, t);
-  settings::saveLauncherLast(info(t).letter);
+  if (remember) settings::saveLauncherLast(info(t).letter);
   Log.event(diagnostics::Event::Launcher);
   switch (t) {
     case Tile::GAMES: return Action::GAMES;
@@ -186,38 +184,43 @@ Action holdB() {
 // --- Protocol --------------------------------------------------------------------------------
 
 String stateJson() {
-  char l[TILE_COUNT + 1];
-  letters(layout_, l, sizeof l);
-  return String("\"launcher\":\"") + l + "\"";
+  char l[TILE_COUNT + 1], f[TILE_COUNT + 1];
+  letters(catalog.visible, l, sizeof l);
+  letters(catalog.favorites, f, sizeof f);
+  return String("\"launcher\":\"") + l + "\",\"launcherFav\":\"" + f + "\",\"stickOpen\":1";
 }
 
 protocol::Result command(const protocol::Args& arg) {
   protocol::Result r;
-  const String tiles = arg("tiles"), reset = arg("reset");
-  Layout l = layout_;
+  const String tiles = arg("tiles"), favorites = arg("favorites"), reset = arg("reset");
+  Catalog next = catalog;
   if (reset == "1" || reset == "true") {
-    l = defaults();
-  } else if (tiles.length()) {
-    char bad[16] = "";
-    const ParseError e = parse(tiles.c_str(), l, bad, sizeof bad);
-    if (e != ParseError::NONE) {
-      for (char* p = bad; *p; p++)
-        if (*p == '"' || *p == '\\' || (uint8_t)*p < 0x20) *p = '?';  // it goes back in JSON
-      r.status = 400;
-      r.json = String("{\"ok\":false,\"error\":\"") + errorText(e) + (bad[0] ? String(": ") + bad : String()) + "\"}";
-      return r;
+    next = Catalog{};
+  } else {
+    if (tiles.length()) {
+      char bad[16] = "";
+      const ParseError e = parse(tiles.c_str(), next.visible, bad, sizeof bad);
+      if (e != ParseError::NONE) {
+        for (char* p = bad; *p; ++p)
+          if (*p == '"' || *p == '\\' || (uint8_t)*p < 0x20) *p = '?';
+        return {400, String("{\"ok\":false,\"error\":\"") + errorText(e) + (bad[0] ? String(": ") + bad : String()) + "\"}"};
+      }
+    }
+    if (favorites.length()) {
+      if (!setFavorites(next, favorites.c_str())) return {400, "{\"ok\":false,\"error\":\"Invalid favorite tiles\"}"};
+    } else {
+      retainVisibleFavorites(next);
     }
   }
-  if (!(l == layout_)) {
-    layout_ = l;
-    char lt[TILE_COUNT + 1];
-    letters(l, lt, sizeof lt);
-    settings::saveLauncherTiles(l == defaults() ? String() : String(lt));
-    if (sel >= layout_.n) sel = 0;
+  if (!(next == catalog)) {
+    if (!settings::saveLauncherRecord(next.pack())) return {500, "{\"ok\":false,\"error\":\"Could not save launcher\"}"};
+    catalog = next;
+    layout_ = catalog.grid();
+    sel = 0;
     Log.event(diagnostics::Event::Launcher);
   }
   char ids_[80];
-  ids(layout_, ids_, sizeof ids_);
+  ids(catalog.visible, ids_, sizeof ids_);
   r.json = "{\"ok\":true," + stateJson() + ",\"tiles\":\"" + ids_ + "\"}";
   return r;
 }

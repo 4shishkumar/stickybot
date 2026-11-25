@@ -15,6 +15,8 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 ### Added
 - Choose what double B, triple B, A+B and hold B do in **Settings → Buttons & gestures**.
   Save a different layout on each stick, including shortcuts to stick apps, Mac apps and saved quick commands.
+- Put favorite stick apps first in the Launcher from the dashboard, or ask the agent to open one.
+  Air mouse and Media wait for a button press before enabling motion controls when opened by voice.
 
 ## [2.8.0] - 2026-11-25
 

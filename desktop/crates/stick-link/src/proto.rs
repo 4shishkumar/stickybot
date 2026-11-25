@@ -24,6 +24,18 @@ pub const AUDIO_IN: &str = "6e400005-b5a3-f393-e0a9-e50e24dcca9e";
 /// Mac -> stick, firmware image packets (Phase 2, stick 1.8.0+)
 pub const OTA_DATA: &str = "6e400006-b5a3-f393-e0a9-e50e24dcca9e";
 
+/// Built-in Launcher tiles: full protocol ID, compact layout letter and mandatory visibility.
+pub const LAUNCHER_TILES: [(&str, char, bool); 8] = [
+    ("games", 'g', false),
+    ("remote", 'r', false),
+    ("air", 'a', false),
+    ("presenter", 'p', false),
+    ("media", 'm', false),
+    ("faces", 'f', false),
+    ("quick", 'q', true),
+    ("settings", 's', true),
+];
+
 /// Largest RX write (link.py `CHUNK`): fits the stick's MTU with room to spare.
 pub const CHUNK: usize = 180;
 /// The agent's hello goes out this often (link.py `HELLO_EVERY_S`); the stick shows "agent ready" for 25 s.

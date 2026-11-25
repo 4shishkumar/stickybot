@@ -135,8 +135,10 @@ void saveClock24(bool on)     { prefs.putBool("clock24", on); }
 String face()                 { return getStr("face", "classic"); }
 void saveFace(const String& id) { prefs.putString("face", id); }
 
-String launcherTiles()                   { return getStr("lnch"); }
-void   saveLauncherTiles(const String& l) { prefs.putString("lnch", l); }
+String launcherRecord() { return prefs.isKey("lnch_layout") ? prefs.getString("lnch_layout") : getStr("lnch"); }
+bool saveLauncherRecord(const std::string& record) {
+  return prefs.putString("lnch_layout", record.c_str()) == record.size();
+}
 char   launcherLast()                    { return (char)prefs.getUChar("lnch_last", 'g'); }
 void   saveLauncherLast(char t)          { if (launcherLast() != t) prefs.putUChar("lnch_last", (uint8_t)t); }
 

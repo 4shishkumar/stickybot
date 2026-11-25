@@ -145,3 +145,16 @@ async def test_quick_action_feedback_preserves_last_agent_answer(wired, monkeypa
     await press(wired, "quick:Desk", "ab")
     assert wired.link.sent[-1]["event"]["sub"] == "Opened Notes."
     assert wired.last_done == "The last agent answer"
+
+
+@pytest.mark.parametrize("line", ["@launcher tiles=settings,air&favorites=air", "@stick-open app=air"])
+async def test_new_launcher_commands_stay_on_selected_ble_peer(wired, monkeypatch, line):
+    api = firmware_api.Stick(wired)
+    ble = AsyncMock(return_value=None)
+    monkeypatch.setattr(api, "ble", ble)
+    monkeypatch.setattr(flasher, "espressif_ports", lambda: pytest.fail("pinned command retried on USB"))
+    for address in (None, "other-stick"):
+        assert not (await api.run(line, address))["ok"]
+    ble.assert_not_awaited()
+    assert not (await api.run(line, "stick-a"))["ok"]
+    ble.assert_awaited_once_with(line)

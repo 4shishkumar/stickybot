@@ -1,6 +1,7 @@
 //! The fake stick's 2.5.0 parts: the IR remote (`@ir …` and `{"ir":{…}}`, like `src/ir/ir.cpp` and
 //! test_ir.py's `IRStick`), the games (`@games`) and the remote modes (`@air`, `@mode`).
 
+use crate::proto::LAUNCHER_TILES;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
@@ -191,18 +192,6 @@ pub fn state_extra(st: &mut Value, ir: &FakeIr) {
     }
 }
 
-/// The Launcher's tiles (firmware 2.5.1, logic/launcher.cpp): `(id, letter, always shown)`.
-const LAUNCHER_TILES: [(&str, char, bool); 8] = [
-    ("games", 'g', false),
-    ("remote", 'r', false),
-    ("air", 'a', false),
-    ("presenter", 'p', false),
-    ("media", 'm', false),
-    ("faces", 'f', false),
-    ("quick", 'q', true),
-    ("settings", 's', true),
-];
-
 pub(crate) fn is_launcher_tile(id: &str) -> bool {
     LAUNCHER_TILES.iter().any(|(name, _, _)| *name == id)
 }
@@ -232,6 +221,22 @@ fn launcher_parse(tiles: &str) -> Result<String, String> {
     Ok(out)
 }
 
+/// Favourite letters follow layout order, independent of the order in the save request.
+fn launcher_favorites(favorites: &str, visible: &str) -> Result<String, &'static str> {
+    if favorites == "-" {
+        return Ok(String::new());
+    }
+    let mut selected = String::new();
+    for id in favorites.split(',') {
+        let tile = LAUNCHER_TILES.iter().find(|tile| tile.0 == id).ok_or("unknown favorite")?;
+        if !visible.contains(tile.1) || selected.contains(tile.1) {
+            return Err("favorites must be visible and unique");
+        }
+        selected.push(tile.1);
+    }
+    Ok(visible.chars().filter(|c| selected.contains(*c)).collect())
+}
+
 /// `@air`, `@mode`, `@games` (StickS3 2.5.0), `@launcher` (2.5.1); `None` for other actions.
 pub fn run_25(st: &mut Value, action: &str, args: &[(String, String)]) -> Option<Value> {
     let get = |k: &str| args.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
@@ -254,19 +259,59 @@ pub fn run_25(st: &mut Value, action: &str, args: &[(String, String)]) -> Option
             _ => json!({"ok": false, "error": "name must be mouse, presenter, media or home"}),
         },
         "launcher" => {
-            let (tiles, reset) = (get("tiles").unwrap_or_default(), get("reset").unwrap_or_default());
-            if reset == "1" || reset == "true" {
-                st["launcher"] = json!(LAUNCHER_DEFAULT);
-            } else if !tiles.is_empty() {
-                match launcher_parse(&tiles) {
-                    Ok(l) => st["launcher"] = json!(l),
-                    Err(e) => return Some(json!({"ok": false, "error": e})),
-                }
+            let favorites = get("favorites");
+            let tiles = get("tiles");
+            let reset = matches!(get("reset").as_deref(), Some("1" | "true"));
+            let capable = st["launcherFav"].is_string();
+            if favorites.is_some() && !capable {
+                return Some(json!({"ok":false, "error":"unknown option: favorites"}));
             }
-            let letters = st["launcher"].as_str().unwrap_or(LAUNCHER_DEFAULT).to_string();
+            let letters = if reset {
+                LAUNCHER_DEFAULT.to_string()
+            } else if let Some(tiles) = tiles.filter(|s| !s.is_empty()) {
+                match launcher_parse(&tiles) {
+                    Ok(layout) => layout,
+                    Err(e) => return Some(json!({"ok":false, "error":e})),
+                }
+            } else {
+                st["launcher"].as_str().unwrap_or(LAUNCHER_DEFAULT).to_owned()
+            };
+            if capable {
+                let next = if reset {
+                    String::new()
+                } else if let Some(favorites) = favorites.filter(|s| !s.is_empty()) {
+                    match launcher_favorites(&favorites, &letters) {
+                        Ok(next) => next,
+                        Err(e) => return Some(json!({"ok":false, "error":e})),
+                    }
+                } else {
+                    let old = st["launcherFav"].as_str().unwrap_or_default();
+                    letters.chars().filter(|c| old.contains(*c)).collect()
+                };
+                st["launcherFav"] = json!(next);
+            }
+            st["launcher"] = json!(letters);
             let ids: Vec<&str> =
                 letters.chars().filter_map(|c| LAUNCHER_TILES.iter().find(|t| t.1 == c).map(|t| t.0)).collect();
-            json!({"ok": true, "launcher": letters, "tiles": ids.join(",")})
+            let mut reply = json!({"ok":true, "launcher":letters, "tiles":ids.join(",")});
+            if capable {
+                reply["launcherFav"] = st["launcherFav"].clone();
+                reply["stickOpen"] = st["stickOpen"].clone();
+            }
+            reply
+        }
+        "stick-open" => {
+            if st["stickOpen"] != 1 {
+                return Some(json!({"ok":false, "error":"unknown command: stick-open"}));
+            }
+            let Some(app) = get("app").filter(|id| args.len() == 1 && is_launcher_tile(id)) else {
+                return Some(json!({"ok":false, "error":"unknown app"}));
+            };
+            if !st["openTile"].is_null() {
+                return Some(json!({"ok":false, "error":"Stick is busy"}));
+            }
+            st["openTile"] = json!(app);
+            json!({"ok":true, "app":app})
         }
         "air" => {
             let a = &mut st["air"];

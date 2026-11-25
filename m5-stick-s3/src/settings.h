@@ -67,10 +67,9 @@ void   saveClock24(bool on);
 
 String face();                    // the Home screen's face id (faces/faces.h), default "classic"
 void   saveFace(const String& id);
-// The Launcher (2.5.1, logic/launcher.h): its tiles as letters ("grapmfqs", "" = the default)
-// and the last tile opened (a letter).
-String launcherTiles();
-void   saveLauncherTiles(const String& letters);
+// Visible tiles and favourites share one NVS record. Read old layout-only values on upgrade.
+String launcherRecord();
+bool   saveLauncherRecord(const std::string& record);
 char   launcherLast();
 void   saveLauncherLast(char tile);
 

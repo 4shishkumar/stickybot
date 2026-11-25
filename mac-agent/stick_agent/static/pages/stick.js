@@ -9,7 +9,8 @@ import {h, $, clear, card, field, toggle, proto, get, put, post, report, toast, 
 import {volumeControl} from "../volume.js";
 import {firmwarePanel} from "../firmware.js";
 import {airCard} from "./air.js";
-import {TILES, layout, structureKey, slicesOf, changedCards, openSections, summary} from "./stick_layout.js";
+import {launcherEditor} from "./launcher.js";
+import {layout, structureKey, slicesOf, changedCards, openSections, summary} from "./stick_layout.js";
 
 export const title = "Stick";
 export const subtitle = "The stick's own settings. They're saved on the stick, so they stay with it.";
@@ -19,7 +20,7 @@ const MODS = [["Ctrl", 1], ["Option", 4], ["Shift", 2], ["Cmd", 8]];
 const REFRESH_MS = 45000;  // battery and anything changed on the stick itself
 let root = null, wrap = null, st = null, keys = null, via = null, snd = null, petInfo = null, gamesInfo = null, lastRes = null;
 let structure = null, slices = {}, nodes = {}, secs = {}, jump = null, seq = 0, timer = null, lastCard = null;
-let volume = null;
+let volume = null, stateTarget = null;
 let headObs = null, onScroll = null, spyFrame = 0, unsub = null;
 
 export function actions() {
@@ -68,18 +69,18 @@ export function leave() {
 async function load(full = true) {
   if (!wrap) return;
   const my = ++seq;
+  const target = deviceApi();
   const none = Promise.resolve(undefined);
-  const [r, k, s, pt, gm] = await Promise.all([proto("state"), full && !keys ? proto("keys") : none,
+  const [r, k, s, pt, gm] = await Promise.all([proto("state", null, target), full && !keys ? proto("keys") : none,
     full ? get("/api/sounds") : none, full ? get("/api/pet").catch(() => null) : none,
     full ? proto("games").catch(() => null) : none]);
-  if (!wrap || my !== seq) return;  // left the page, or a newer answer is on its way
+  if (!wrap || my !== seq || target.id !== deviceId()) return;  // left the page, or a newer answer is on its way
   if (pt !== undefined) petInfo = pt && pt.pet ? pt.pet : null;
   if (gm !== undefined) gamesInfo = gm && gm.ok && gm.reply && Array.isArray(gm.reply.games) ? gm.reply.games : null;  // firmware 2.5.0+
   if (k && k.ok && k.reply) keys = k.reply;
   if (s !== undefined) snd = s && !s.error ? s : null;
-  const before = st;
+  stateTarget = target;
   st = r.ok && r.reply ? r.reply : null;
-  if (!st || !before || st.launcher !== before.launcher) launcherDraft = null;  // the stick's order again
   via = r.via;
   lastRes = r;
   update();
@@ -102,7 +103,7 @@ async function send(action, args, okText, restarts) {
 
 function context() {
   const s = store.status || {};
-  return {st, gamesInfo, snd, petInfo, keys, via, stickName: s.stick && s.stick.name};
+  return {st, gamesInfo, snd, petInfo, keys, via, deviceAddress: lastRes?.device_address, stickName: s.stick && s.stick.name};
 }
 
 // Redraws the cards whose data changed (plus `force`), or lays the page out again when
@@ -324,60 +325,17 @@ function faceCard() {
     facts, h("div", {class: "faces"}, tiles));
 }
 
-// Games (firmware 2.5.0+): the stick's best scores (`@games`, kept on the stick) and the XP
-// games earned StickyBot today (capped, pet.py).
-// The Launcher (firmware 2.5.1): triple-press B opens a grid of tiles. @state "launcher" holds
-// the tiles shown, in order, one letter each ("grapmfqs"); Quick settings and Settings always stay.
-let launcherDraft = null;  // [{tile, shown}] while editing
-
 function launcherCard() {
-  const saved = String(st.launcher || "");
-  if (!launcherDraft) {
-    const shown = saved.split("").map(c => TILES.find(t => t[0] === c)).filter(Boolean);
-    launcherDraft = [...shown.map(t => ({tile: t, shown: true})),
-      ...TILES.filter(t => !shown.includes(t)).map(t => ({tile: t, shown: false}))];
-  }
-  const box = h("div", {class: "list"});
-  const letters = () => launcherDraft.filter(x => x.shown).map(x => x.tile[0]).join("");
-  const save = h("button", {class: "btn primary", type: "button", onclick: async () => {
-    if (await send("launcher", {tiles: launcherDraft.filter(x => x.shown).map(x => x.tile[1]).join(",")}, "Launcher saved")) {
-      launcherDraft = null;
-      update(["launcher"]);
-    }
-  }}, "Save");
-  const reset = h("button", {class: "btn ghost", type: "button", onclick: async () => {
-    if (await send("launcher", {reset: 1}, "Launcher reset")) { launcherDraft = null; update(["launcher"]); }
-  }}, "Reset");
-  const move = (i, d) => {
-    const j = i + d;
-    if (j < 0 || j >= launcherDraft.length) return;
-    [launcherDraft[i], launcherDraft[j]] = [launcherDraft[j], launcherDraft[i]];
-    paintList();
-  };
-  function paintList() {
-    clear(box);
-    launcherDraft.forEach((x, i) => {
-      const [, , name, about, fixed] = x.tile;
-      box.appendChild(h("div", {class: "item" + (x.shown ? "" : " faint")},
-        h("label", {class: "switch", title: fixed ? "Always on the stick" : "Show this tile"},
-          h("input", {type: "checkbox", checked: x.shown, disabled: !!fixed, "aria-label": `Show ${name}`,
-            onchange: e => { x.shown = e.target.checked; paintList(); }}), h("span", null, "")),
-        h("div", {class: "what"}, h("b", null, name), h("span", {class: "sub"}, fixed ? `${about} · always shown` : about)),
-        h("div", {class: "row"},
-          h("button", {class: "btn sm ghost", type: "button", disabled: i === 0, "aria-label": `Move ${name} up`, onclick: () => move(i, -1)}, "↑"),
-          h("button", {class: "btn sm ghost", type: "button", disabled: i === launcherDraft.length - 1, "aria-label": `Move ${name} down`,
-            onclick: () => move(i, 1)}, "↓"))));
-    });
-    save.disabled = letters() === saved;
-  }
-  paintList();
-  return card("Launcher",
-    h("p", {class: "lead"}, "The Launcher shows a tile for each app, six a page. ",
-      "Put them in the order you like and hide the ones you don't use."),
-    box,
-    h("div", {class: "row", style: "margin-top:10px"}, save, reset));
+  const el = launcherEditor(st, stateTarget, via === "ble" ? lastRes.device_address : null, async resetting => {
+    toast(resetting ? "Launcher reset" : "Launcher saved");
+    await load(false);
+    // A reset may restore the saved layout while unsaved changes are still on screen.
+    if (nodes.launcher === el) update(["launcher"]);
+  });
+  return el;
 }
 
+// Games (firmware 2.5.0+): the stick's best scores and the XP games earned StickyBot today.
 function gamesCard() {
   const g = (petInfo && petInfo.games) || {};
   const plays = g.plays || {};

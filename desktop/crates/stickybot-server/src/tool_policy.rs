@@ -67,6 +67,7 @@ impl Profile {
                         tool,
                         "ask"
                             | "stick_status"
+                            | "stick_open"
                             | "ir_list"
                             | "calendar_next"
                             | "calendar_today"

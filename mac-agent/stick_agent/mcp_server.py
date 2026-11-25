@@ -157,6 +157,12 @@ TOOLS = [
      "inputSchema": {"type": "object", "additionalProperties": False, "required": ["phrase"], "properties": {
          "phrase": {"type": "string", "maxLength": 120, "description": "The phrase, as the user would say it."}}},
      "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True}},
+    {"name": "stick_open", "title": "Open a stick app",
+     "description": "Show a built-in app on the selected stick. Use air for Air mouse, quick for Quick settings.",
+     "inputSchema": {"type": "object", "additionalProperties": False, "required": ["app"], "properties": {
+         "app": {"type": "string",
+                 "enum": ["games", "remote", "air", "presenter", "media", "faces", "quick", "settings"]}}},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}},
     {"name": "stick_status", "title": "Stick status",
      "description": ("The stick's state: connected, battery, on USB, what its screen shows, when a button was "
                      "last pressed, and a hint whether the user is at their desk. Read-only."),
@@ -188,7 +194,7 @@ TOOLS = [
      "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True}},
 ]
 BY_NAME = {t["name"]: t for t in TOOLS}
-FEEDBACK_TOOLS = ("notify", "ask", "celebrate", "progress", "pin_home", "stick_status", "speak",
+FEEDBACK_TOOLS = ("notify", "ask", "celebrate", "progress", "pin_home", "stick_open", "stick_status", "speak",
                   "ir_list", "ir_send")  # pre-allowed (ir_send: the user asked for it by voice)
 MAC_TOOLS = ("open_url", "open_app", "quick_command")  # change the Mac: Claude Code asks first
 
@@ -474,6 +480,30 @@ class StickTools:
             raise ToolError(why)
         await self.agent.speak(text, force=True)
         return f"speaking on the {self.agent._speech_output()}"
+
+    async def t_stick_open(self, a, who):
+        api = self.agent.stick_api
+        address = api.connected_address()
+        if not address:
+            raise ToolError(NOT_CONNECTED)
+        transport = self.agent.link
+        source, target = transport.client, transport.target
+        origin = self.agent.brain_peer if who == "Agent" else None
+        if who == "Agent" and (not origin or source is not origin[0] or target is not origin[1]):
+            raise ToolError("The stick for this voice request is no longer connected.")
+        state = await api.run("@state", address)
+        if not state["ok"] or state.get("device_address") != address:
+            raise ToolError(state.get("error") or "Stick changed before it answered.")
+        if state["reply"].get("stickOpen") != 1:
+            raise ToolError("This stick's firmware does not support opening apps.")
+        same_peer = source is transport.client and target is transport.target
+        if not same_peer or (origin and origin is not self.agent.brain_peer):
+            raise ToolError("The stick or voice request changed before opening the app.")
+        app = a["app"]
+        result = await api.run(f"@stick-open app={app}", address)
+        if not result["ok"] or result.get("device_address") != address or result["reply"].get("app") != app:
+            raise ToolError(result.get("error") or "The stick did not confirm the requested app.")
+        return f"Opened {app} on the stick."
 
     async def t_stick_status(self, a, who):
         ag = self.agent

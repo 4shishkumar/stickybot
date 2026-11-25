@@ -24,9 +24,9 @@ namespace launcher {
 enum class Action : uint8_t { NONE, REDRAW, HOME, GAMES, REMOTE, AIR, PRESENTER, MEDIA, SETTINGS };
 
 void   begin();                  // loads the layout and the last tile from NVS
-void   open();                   // the grid, on the last tile opened
+void   open();                   // first favourite, otherwise the last tile opened
 void   draw();                   // the screen it's on (main.cpp's render())
-Action openTile(Tile tile);      // shared by the grid and a physical gesture shortcut
+Action openTile(Tile tile, bool remember = true);  // grid, physical shortcut or agent
 Action pressA();
 Action clickB();                 // B released before the hold time
 Action holdB();
@@ -34,8 +34,8 @@ Action flick(int dir);           // +1 right (next page), -1 left
 bool   timedOut();               // 60 s without input
 bool   onGrid();                 // (not Quick settings / Faces)
 
-const Layout& layout();
-// @launcher [tiles=<ids>] [reset=1]: sets (saved) and / or reports the tiles.
+bool openFromAgent(Tile tile);  // main-loop navigation, false while a protected interaction owns the screen
+// @launcher [tiles=<ids>&favorites=<ids|->] or [reset=1]: save or report the layout.
 protocol::Result command(const protocol::Args& arg);
 String stateJson();              // "launcher":"grapmfqs" for @state
 

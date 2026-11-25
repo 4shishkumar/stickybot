@@ -545,12 +545,26 @@ fn run_line_25(s: &mut State, line: &str) -> Value {
         match action {
             "state" => {
                 let mut reply = s.stick.clone();
-                reply.as_object_mut().unwrap().remove("buttons");
+                for key in ["buttons", "launcherFav", "stickOpen"] {
+                    reply.as_object_mut().unwrap().remove(key);
+                }
                 return reply;
             }
-            "buttons" => return json!({"ok": false, "error": "unknown command: buttons"}),
+            "buttons" | "stick-open" => return json!({"ok":false, "error":format!("unknown command: {action}")}),
+            "launcher" => {
+                if a.iter().any(|(k, _)| k == "favorites") {
+                    return json!({"ok":false, "error":"unknown option: favorites"});
+                }
+                let mut reply = crate::fake_ir::run_25(&mut s.stick, action, &a).unwrap();
+                reply.as_object_mut().unwrap().remove("launcherFav");
+                reply.as_object_mut().unwrap().remove("stickOpen");
+                return reply;
+            }
             _ => {}
         }
+    }
+    if action == "stick-open" && !q.strip_prefix("app=").is_some_and(crate::fake_ir::is_launcher_tile) {
+        return json!({"ok":false, "error":"Invalid stick app"});
     }
     if let Some(r) = crate::fake_ir::run_25(&mut s.stick, action, &a) {
         return r;
@@ -678,6 +692,7 @@ fn initial_state() -> Value {
         "autoRotate": true, "landscape": false, "devMode": false, "enterDelay": 0, "macPassSet": false,
         "motion": {"lift": true, "face": true, "shake": true},
         "wirelessMic": true, "usbMounted": false, "ota": 1, "otaPending": false,
+        "stickOpen": 1, "launcherFav": "",
         "buttons": {"b2": "unlock", "b3": "launcher", "ab": "reply", "bh": "talk"},
         "face": "stickyworld",
         "faces": [
@@ -1153,6 +1168,34 @@ mod tests {
     }
 
     #[test]
+    fn launcher_favorites_are_atomic_visible_and_compatible_with_older_editors() {
+        let fake = FakeStick::new();
+        fake.with(|s| {
+            let saved = run_line_25(s, "@launcher tiles=air,games,faces&favorites=faces,air");
+            assert_eq!(saved["launcher"], "agfqs");
+            assert_eq!(saved["launcherFav"], "af");
+            for bad in ["remote", "air,air", "a", "tv"] {
+                assert_eq!(run_line_25(s, &format!("@launcher tiles=games,air&favorites={bad}"))["ok"], false);
+                assert_eq!(run_line_25(s, "@launcher"), saved);
+            }
+            assert_eq!(run_line_25(s, "@launcher tiles=faces,games")["launcherFav"], "f");
+            assert_eq!(run_line_25(s, "@launcher tiles=faces,games&favorites=-")["launcherFav"], "");
+            run_line_25(s, "@launcher tiles=faces&favorites=faces");
+            assert_eq!(run_line_25(s, "@launcher reset=1")["launcherFav"], "");
+            for bad in ["a", "ai%72", "air&other=1"] {
+                assert_eq!(run_line_25(s, &format!("@stick-open app={bad}"))["ok"], false);
+            }
+        });
+        fake.set_old_firmware(true);
+        fake.with(|s| {
+            let state = run_line_25(s, "@state");
+            assert!(state.get("stickOpen").is_none() && state.get("launcherFav").is_none());
+            assert_eq!(run_line_25(s, "@launcher tiles=air")["launcher"], "aqs");
+            assert_eq!(run_line_25(s, "@stick-open app=air")["ok"], false);
+        });
+    }
+
+    #[test]
     fn button_table_changes_atomically_and_accepts_escaped_names() {
         let mut st = initial_state();
         assert_eq!(st["buttons"], json!({"b2":"unlock","b3":"launcher","ab":"reply","bh":"talk"}));
@@ -1162,7 +1205,10 @@ mod tests {
         assert_eq!(run_line(&mut st, stranded)["ok"], false);
         assert_eq!(st["buttons"], reply["buttons"]);
         let mut direct_settings = st.clone();
-        assert_eq!(run_line(&mut direct_settings, "@buttons b2=unlock&b3=tile:games&ab=tile:settings&bh=talk")["ok"], true);
+        assert_eq!(
+            run_line(&mut direct_settings, "@buttons b2=unlock&b3=tile:games&ab=tile:settings&bh=talk")["ok"],
+            true
+        );
         for input in ["bh=none", "bh=app:Test", "unrelated=yes", "bh=talk&", "bh=talk&ab=none", "bh=talk&x=y"] {
             assert_eq!(run_line(&mut st, &format!("@buttons b2=launcher&b3=none&ab=talk&{input}"))["ok"], false);
             assert_eq!(run_line(&mut st, "@state")["buttons"], reply["buttons"]);

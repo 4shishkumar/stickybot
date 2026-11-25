@@ -138,6 +138,70 @@ const char* errorText(ParseError e) {
   }
 }
 
+static Layout filter(const Layout& visible, const Layout& selected, bool include) {
+  Layout result{};
+  for (int i = 0; i < visible.n; ++i) {
+    const Tile t = visible.tiles[i];
+    if ((selected.indexOf(t) >= 0) == include) result.tiles[result.n++] = t;
+  }
+  return result;
+}
+
+Layout Catalog::grid() const {
+  Layout result = favorites;
+  const Layout others = filter(visible, favorites, false);
+  for (int i = 0; i < others.n; ++i) result.tiles[result.n++] = others.tiles[i];
+  return result;
+}
+
+int Catalog::openingSelection(Tile last) const { return favorites.n ? 0 : startAt(visible, last); }
+
+void retainVisibleFavorites(Catalog& c) {
+  c.favorites = filter(c.visible, c.favorites, true);
+}
+
+bool setFavorites(Catalog& c, const char* ids) {
+  Layout selected{};
+  if (strcmp(ids, "-") != 0) {
+    for (const char* id = ids;;) {
+      const char* end = strchr(id, ',');
+      size_t n = end ? static_cast<size_t>(end - id) : strlen(id);
+      Tile t;
+      if (n < 2 || !fromName(id, n, t) || c.visible.indexOf(t) < 0 || selected.indexOf(t) >= 0) return false;
+      selected.tiles[selected.n++] = t;
+      if (!end) break;
+      id = end + 1;
+    }
+  }
+  c.favorites = filter(c.visible, selected, true);
+  return true;
+}
+
+std::string Catalog::pack() const {
+  char visibleLetters[TILE_COUNT + 1], favoriteLetters[TILE_COUNT + 1];
+  letters(visible, visibleLetters, sizeof visibleLetters);
+  letters(favorites, favoriteLetters, sizeof favoriteLetters);
+  return std::string(visibleLetters) + ':' + favoriteLetters;
+}
+
+bool unpack(const char* record, Catalog& out) {
+  if (!record || strlen(record) > 2 * TILE_COUNT + 1) return false;
+  const char* sep = strchr(record, ':');
+  const std::string base(record, sep ? static_cast<size_t>(sep - record) : strlen(record));
+  Catalog c;
+  if (parseLetters(base.c_str(), c.visible) != ParseError::NONE) return false;
+  if (sep) {
+    for (const char* p = sep + 1; *p; ++p) {
+      Tile t;
+      if (!fromName(p, 1, t) || c.visible.indexOf(t) < 0 || c.favorites.indexOf(t) >= 0) return false;
+      c.favorites.tiles[c.favorites.n++] = t;
+    }
+    retainVisibleFavorites(c);
+  }
+  out = c;
+  return true;
+}
+
 // --- Grid ---------------------------------------------------------------------------------
 
 Grid gridFor(bool wide) { return wide ? Grid{3, 2} : Grid{2, 3}; }
