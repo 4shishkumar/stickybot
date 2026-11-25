@@ -12,10 +12,19 @@ Use an optional object named `buttons` in the state reply, with string keys `b2`
 - [x] T003 [P] Rust physical event consumption and fake-stick configuration, with isolated tests.
 - [x] T004 [P] Dashboard capability-based Buttons & gestures page with device-bound editing, validation and tests.
 - [x] T005 Document wire messages, controls, capability and Unreleased entry.
-- [ ] T006 Exercise dashboard, Rust and firmware gates including binary sizes; document hardware coverage.
+- [x] T006 Exercise dashboard, Rust and firmware gates including binary sizes; document hardware coverage.
 
 ## Acceptance
-- [ ] Defaults, a double/triple swap, all tiles and named actions round-trip; invalid changes leave the previous table intact.
-- [ ] Hints and dispatch follow the mapping, while modal controls, sleep and button release use the original input ownership.
-- [ ] The selected device owns its editor and events, unsupported devices hide the page, and Mac named actions use existing safe resolution.
-- [ ] Both board targets build and local tests exercise firmware, fake device, host events and dashboard.
+- [x] Defaults, a double/triple swap, all tiles and named actions round-trip; invalid changes leave the previous table intact.
+- [x] Hints and dispatch follow the mapping, while modal controls, sleep and button release use the original input ownership.
+- [x] The selected device owns its editor and events, unsupported devices hide the page, and Mac named actions use existing safe resolution.
+- [x] Both board targets build and local tests exercise firmware, fake device, host events and dashboard.
+
+## Notes
+On the final firmware builds, StickS3 used 2,456,563 bytes (73.5%) and StickC Plus2 used 2,387,571 bytes (71.4%) of each 3,342,336-byte app slot. Both are below the 85% budget. Native firmware tests passed (305). Desktop workspace tests passed (755), as did Clippy, 49 dashboard tests and 877 Python tests. On macOS the legacy launcher environment test ran last to isolate its subprocess environment.
+
+A real Chromium dashboard on the Rust fake-stick server confirmed factory values, the double/triple swap, the save acknowledgement and reload. Physical timing, visible hints and power-cycle persistence await a real-stick check before release. The PR carries the needs-hardware label.
+
+## Deletion Candidates
+
+No remaining candidates. Review removed the test-only global mapping argument from the firmware’s screen-action lookup.
