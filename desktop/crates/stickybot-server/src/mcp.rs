@@ -574,7 +574,11 @@ pub async fn call(st: &Arc<AppState>, name: &str, args: &Value, ctx: &Context) -
         Some(t) => match check_args(&t["inputSchema"], args) {
             Err(e) => Err(e),
             Ok(_) if name != "stick_status" && !CALENDAR_TOOLS.contains(&name) && !st.link.connected() => {
-                Err(NOT_CONNECTED.to_string())
+                if MAC_TOOLS.contains(&name) && crate::talk::mac_agent_owner(st, ctx).is_some() {
+                    Err("Stick approval is required. Connect your stick and try again.".into())
+                } else {
+                    Err(NOT_CONNECTED.to_string())
+                }
             }
             Ok(a) if MAC_TOOLS.contains(&name) => run_mac(&origin, st, name, &a, ctx).await,
             Ok(a) => {

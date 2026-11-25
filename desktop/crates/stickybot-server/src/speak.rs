@@ -246,6 +246,7 @@ pub async fn play_on_stick(st: &Arc<AppState>, batch: &[Clip]) -> usize {
 
 /// One reply being spoken: `add()` sentences, `close()` when there are no more.
 pub struct Utterance {
+    mac_turn: bool,
     max_words: Option<usize>,
     state: Mutex<UState>,
     cancelled: AtomicBool,
@@ -264,11 +265,11 @@ struct UState {
 }
 
 impl Utterance {
-    fn new(st: Arc<AppState>, voice: Arc<dyn Voice>, max_words: Option<usize>) -> Arc<Self> {
+    fn new(st: Arc<AppState>, voice: Arc<dyn Voice>, max_words: Option<usize>, mac_turn: bool) -> Arc<Self> {
         let (tx, mut rx) = mpsc::unbounded_channel::<Option<String>>();
         let (ready_tx, mut ready_rx) = mpsc::unbounded_channel::<Option<Clip>>();
         let name = || st.cfg.lock().unwrap().get("speak_voice").and_then(Value::as_str).unwrap_or("").to_string();
-        let for_stick = output(&st) == "stick";
+        let for_stick = !mac_turn && output(&st) == "stick";
         let (v1, v2, voice_name, st2) = (voice.clone(), voice, name(), st.clone());
         let vn2 = voice_name.clone();
         let generation = st.link.bound_generation();
@@ -313,13 +314,18 @@ impl Utterance {
                         }
                     }
                 }
-                if st2.link.generation() != generation {
-                    return;
+                if mac_turn {
+                    v2.play(st2.clone(), batch, vn2.clone()).await;
+                } else {
+                    if st2.link.generation() != generation {
+                        return;
+                    }
+                    st2.link.with_generation(generation, v2.play(st2.clone(), batch, vn2.clone())).await;
                 }
-                st2.link.with_generation(generation, v2.play(st2.clone(), batch, vn2.clone())).await;
             }
         });
         Arc::new(Self {
+            mac_turn,
             max_words,
             state: Mutex::default(),
             cancelled: AtomicBool::new(false),
@@ -432,12 +438,12 @@ impl Speaker {
 }
 
 /// Speech started / ended: the stick's reply view shows "Reading aloud".
-fn changed(st: &AppState, on: bool) {
+fn changed(st: &AppState, on: bool, notify_stick: bool) {
     if st.speaker.speaking.swap(on, Ordering::Relaxed) == on {
         return;
     }
     st.hub.emit("speech", json!({"on": on}));
-    if tokio::runtime::Handle::try_current().is_err() {
+    if !notify_stick || tokio::runtime::Handle::try_current().is_err() {
         return;
     }
     let link = st.link.clone();
@@ -454,13 +460,17 @@ pub fn output(st: &AppState) -> &'static str {
 
 /// A new reply to speak (stops the one before; no "off" in between).
 pub fn start(st: &Arc<AppState>, max_words: Option<usize>) -> Arc<Utterance> {
+    start_for(st, max_words, false)
+}
+
+pub(crate) fn start_for(st: &Arc<AppState>, max_words: Option<usize>, mac_turn: bool) -> Arc<Utterance> {
     if let Some(old) = st.speaker.current.lock().unwrap().take() {
         old.cancel();
     }
     let voice = st.speaker.voice.lock().unwrap().clone();
-    let u = Utterance::new(st.clone(), voice, max_words);
+    let u = Utterance::new(st.clone(), voice, max_words, mac_turn);
     *st.speaker.current.lock().unwrap() = Some(u.clone());
-    changed(st, true);
+    changed(st, true, !mac_turn);
     // ended (all of it played, or nothing to say): "off", unless another one took its place
     let (st2, u2) = (Arc::downgrade(st), u.clone());
     tokio::spawn(async move {
@@ -470,18 +480,30 @@ pub fn start(st: &Arc<AppState>, max_words: Option<usize>) -> Arc<Utterance> {
         if cur.as_ref().is_some_and(|c| Arc::ptr_eq(c, &u2)) {
             *cur = None;
             drop(cur);
-            changed(&st, false);
+            changed(&st, false, !mac_turn);
         }
     });
     u
 }
 
 pub fn stop(st: &AppState) {
-    let had = st.speaker.current.lock().unwrap().take();
-    if let Some(u) = had {
+    stop_current(st, false);
+}
+
+pub(crate) fn stop_stick(st: &AppState) {
+    stop_current(st, true);
+}
+
+fn stop_current(st: &AppState, only_stick: bool) {
+    let mut current = st.speaker.current.lock().unwrap();
+    if only_stick && current.as_ref().is_some_and(|u| u.mac_turn) {
+        return;
+    }
+    let notify_stick = current.as_ref().is_none_or(|u| !u.mac_turn);
+    if let Some(u) = current.take() {
         u.cancel();
     }
-    changed(st, false);
+    changed(st, false, notify_stick);
 }
 
 /// The stick's "listen" (its reply view, `{"evt":"speak","what":"last"}`): the last answer read
@@ -502,7 +524,7 @@ pub fn speak_last(st: &Arc<AppState>) -> bool {
     if speakable(&text).trim().is_empty() {
         log::info!("reading aloud: nothing to read");
         st.speaker.speaking.store(true, Ordering::Relaxed); // so the stick hears "off"
-        changed(st, false);
+        changed(st, false, true);
         return false;
     }
     log::info!("reading aloud: the last reply ({} words)", text.split_whitespace().count());
@@ -539,12 +561,16 @@ pub async fn say(st: &Arc<AppState>, text: &str, force: bool) -> bool {
 }
 
 pub fn speak(st: &Arc<AppState>, text: &str, quick: bool, force: bool) -> bool {
+    speak_for(st, text, quick, force, false)
+}
+
+pub(crate) fn speak_for(st: &Arc<AppState>, text: &str, quick: bool, force: bool, mac_turn: bool) -> bool {
     let cfg = st.cfg.lock().unwrap().clone();
     if !force && !should_speak(&cfg, text, quick) {
         return false;
     }
     // sentence by sentence: a long text plays in clips the stick can hold, the first one soon
-    let u = start(st, None);
+    let u = start_for(st, None, mac_turn);
     let mut cut = Sentences::default();
     let mut sentences = cut.feed(text);
     sentences.extend(cut.finish());
@@ -655,23 +681,20 @@ pub(crate) mod tests {
         pub synth_ms: u64,
         pub play_ms: u64,
         pub made: Mutex<Vec<String>>,
+        pub for_stick: Mutex<Vec<bool>>,
         pub played: Mutex<Vec<Vec<String>>>,
         pub fail: Option<String>,
     }
 
     impl Voice for Arc<FakeVoice> {
-        fn synth(
-            &self,
-            sentence: String,
-            _voice: String,
-            _for_stick: bool,
-        ) -> BoxFuture<'static, Result<Clip, String>> {
+        fn synth(&self, sentence: String, _voice: String, for_stick: bool) -> BoxFuture<'static, Result<Clip, String>> {
             let me = self.clone();
             Box::pin(async move {
                 tokio::time::sleep(Duration::from_millis(me.synth_ms)).await;
                 if me.fail.as_deref() == Some(sentence.as_str()) {
                     return Err("no such voice".into());
                 }
+                me.for_stick.lock().unwrap().push(for_stick);
                 me.made.lock().unwrap().push(sentence.clone());
                 Ok(Clip { pcm: vec![0; 160], path: None, text: sentence })
             })

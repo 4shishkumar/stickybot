@@ -10,6 +10,133 @@ use stick_link::{Backend, LinkState, fake::FakeStick};
 use tower::ServiceExt;
 
 const PORT: u16 = 8670;
+
+#[derive(Default)]
+struct VoiceApp {
+    applied: Mutex<Vec<(bool, String)>>,
+    options: Mutex<Vec<(String, bool)>>,
+    testing: Mutex<bool>,
+}
+
+impl crate::appctl::AppControl for VoiceApp {
+    fn restart(&self) -> Result<(), String> {
+        unreachable!()
+    }
+    fn show_window(&self, _: &str) -> bool {
+        unreachable!()
+    }
+    fn configure_voice(&self, enabled: bool, shortcut: &str) -> Result<(), String> {
+        if shortcut == "Command+KeyC" {
+            return Err("Shortcut already in use".into());
+        }
+        self.applied.lock().unwrap().push((enabled, shortcut.to_owned()));
+        Ok(())
+    }
+    fn voice_options(&self, input: &str, sounds: bool) -> Result<(), String> {
+        self.options.lock().unwrap().push((input.to_owned(), sounds));
+        Ok(())
+    }
+    fn voice_test(&self, on: bool) -> Result<(), String> {
+        *self.testing.lock().unwrap() = on;
+        Ok(())
+    }
+    fn voice_status(&self) -> Value {
+        let level = self.testing.lock().unwrap().then_some(0.25);
+        json!({"input_name":"System microphone", "permission":"authorized", "test_level": level,
+               "inputs": {"devices": [{"uid":"usb-1","name":"Yeti","bluetooth":false}], "selected": "", "using": "System microphone"}})
+    }
+}
+
+#[tokio::test]
+async fn mac_voice_saves_the_microphone_and_sounds_and_tests_the_level() {
+    let t = app("mac-voice-microphone", false).await;
+    let voice = Arc::new(VoiceApp::default());
+    *t.st.setup.app.lock().unwrap() = voice.clone();
+    let path = "/api/mac-voice";
+    let (code, saved) = t
+        .call("PUT", path, Some(json!({"enabled":true, "shortcut":"Option+Digit7", "input":"usb-1", "sounds":false})), true)
+        .await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!((saved["input"].as_str(), saved["sounds"].as_bool()), (Some("usb-1"), Some(false)));
+    assert_eq!(saved["inputs"]["devices"][0]["name"], "Yeti");
+    let cfg = crate::config::load(&t.st.paths);
+    assert_eq!((cfg["mac_voice_input"].as_str(), cfg["mac_voice_sounds"].as_bool()), (Some("usb-1"), Some(false)));
+    // a later save without them keeps both
+    t.call("PUT", path, Some(json!({"enabled":false, "shortcut":"Option+Digit7"})), true).await;
+    assert_eq!(voice.options.lock().unwrap().last().cloned(), Some(("usb-1".to_owned(), false)));
+    assert_eq!(
+        t.call("PUT", path, Some(json!({"enabled":true, "shortcut":"Option+Digit7", "input":"bad\nuid"})), true).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(t.call("POST", "/api/mac-voice/test", Some(json!({"on":true})), false).await.0, StatusCode::FORBIDDEN);
+    let (code, testing) = t.call("POST", "/api/mac-voice/test", Some(json!({"on":true})), true).await;
+    assert_eq!((code, testing["test_level"].as_f64()), (StatusCode::OK, Some(0.25)));
+    let (_, stopped) = t.call("POST", "/api/mac-voice/test", Some(json!({"on":false})), true).await;
+    assert!(stopped["test_level"].is_null());
+    assert_eq!(
+        t.call("PUT", "/api/config", Some(json!({"mac_voice_input":"x"})), true).await.0,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn mac_voice_settings_require_dashboard_token_and_are_global() {
+    let t = app("mac-voice-settings", false).await;
+    let path = "/api/mac-voice";
+    let default = crate::appctl::DEFAULT_VOICE_SHORTCUT;
+    let body = json!({"enabled":true, "shortcut":"Option+Digit7"});
+    assert_eq!(t.get(path).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("PUT", path, Some(body.clone()), false).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("GET", path, None, true).await.1["supported"], false);
+    assert_eq!(t.call("PUT", path, Some(body.clone()), true).await.0, StatusCode::BAD_REQUEST);
+    let voice = Arc::new(VoiceApp::default());
+    *t.st.setup.app.lock().unwrap() = voice.clone();
+    let (_, initial) = t.call("GET", path, None, true).await;
+    assert_eq!((initial["enabled"].as_bool(), initial["shortcut"].as_str()), (Some(false), Some(default)));
+    let device = t.st.devices.add(&t.st, "FAKE-2", "Second").unwrap();
+    t.st.devices.default_to(&t.st, &device.device_id).unwrap();
+    let (code, saved) = t.call("PUT", path, Some(body), true).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(saved["permission"], "authorized");
+    assert_eq!(saved["input_name"], "System microphone");
+    assert_eq!(crate::config::load(&t.st.paths)["mac_voice_shortcut"], "Option+Digit7");
+    t.st.devices.default_to(&t.st, "primary").unwrap();
+    assert_eq!(t.call("GET", path, None, true).await.1["shortcut"], "Option+Digit7");
+    let gamepad = format!("/api/devices/{}/api/mac-voice", device.device_id);
+    assert_eq!(t.call("GET", &gamepad, None, true).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        t.call("PUT", "/api/config", Some(json!({"mac_voice_enabled":false})), true).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    for chord in ["Space", "Shift+Space", "Control+Control+Space", "Command+Shift+KeyA", "Control+F4"] {
+        assert_eq!(
+            t.call("PUT", path, Some(json!({"enabled":true,"shortcut":chord})), true).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        t.call("PUT", path, Some(json!({"enabled":true,"shortcut":"Command+KeyC"})), true).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(voice.applied.lock().unwrap().as_slice(), &[(true, "Option+Digit7".to_owned())]);
+    assert_eq!(t.call("GET", path, None, true).await.1["shortcut"], "Option+Digit7");
+}
+
+#[tokio::test]
+async fn mac_voice_rolls_back_shortcut_if_settings_cannot_be_saved() {
+    let t = app("mac-voice-save-failure", false).await;
+    let voice = Arc::new(VoiceApp::default());
+    *t.st.setup.app.lock().unwrap() = voice.clone();
+    std::fs::create_dir(t.st.paths.home.join("config.json.tmp")).unwrap();
+    let (code, _) =
+        t.call("PUT", "/api/mac-voice", Some(json!({"enabled":true,"shortcut":"Command+KeyB"})), true).await;
+    assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        voice.applied.lock().unwrap().as_slice(),
+        &[(true, "Command+KeyB".into()), (false, crate::appctl::DEFAULT_VOICE_SHORTCUT.into())]
+    );
+    assert_eq!(t.st.cfg.lock().unwrap()["mac_voice_enabled"], false);
+}
 const ORDER: [&str; 9] = ["welcome", "model", "claude", "hooks", "mcp", "github", "wispr", "stick", "done"];
 
 struct T {

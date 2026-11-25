@@ -19,7 +19,7 @@ pub mod proxy;
 pub mod runtime;
 
 use crate::AppState;
-use crate::talk::{Brain, BrainEvent, plain};
+use crate::talk::{Brain, BrainEvent};
 use futures_util::future::BoxFuture;
 use llama::tempdir;
 use serde_json::{Value, json};
@@ -273,7 +273,7 @@ impl Inner {
         match result {
             Ok(r) if r.get("stopReason").and_then(Value::as_str) == Some("cancelled") => (false, String::new()),
             Ok(_) if reply.trim().is_empty() => (false, "The local assistant had no answer.".into()),
-            Ok(_) => (true, plain(reply.trim())),
+            Ok(_) => (true, crate::talk::brain_reply(reply.trim())),
             Err(e) => {
                 *guard = None; // a stuck or stopped agent starts fresh
                 (false, format!("The local assistant failed: {e}"))
@@ -289,7 +289,7 @@ fn on_update(u: &Value, reply: &mut String, events: &mpsc::UnboundedSender<Brain
         Some("agent_message_chunk") => {
             if let Some(t) = update.pointer("/content/text").and_then(Value::as_str) {
                 reply.push_str(t);
-                let _ = events.send(BrainEvent::Text(plain(reply.trim())));
+                let _ = events.send(BrainEvent::Text(crate::talk::brain_reply(reply.trim())));
             }
         }
         Some("tool_call") => {

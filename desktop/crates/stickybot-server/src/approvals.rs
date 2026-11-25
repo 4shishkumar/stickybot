@@ -477,6 +477,9 @@ pub(crate) async fn approve_tool(
         strict: true,
         decision: None,
     };
+    if let Some(owner) = crate::talk::mac_agent_owner(st, ctx) {
+        owner.waiting_for_approval(&prepared.hint);
+    }
     let shown = &prepared.wire_hint;
     let mac_label = st.host.json()["label"].as_str().unwrap_or("Mac").to_string();
     for (device, _) in &destinations {

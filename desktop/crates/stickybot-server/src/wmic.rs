@@ -980,8 +980,9 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
         loop {
             tokio::select! {
                 m = rx.recv() => match m {
-                    Ok(FromStick::Audio(frame)) => on_audio(&st, &frame),
-                    Ok(FromStick::Message(msg)) => on_message(&st, &msg),
+                    Ok((generation, _)) if generation != st.link.generation() => {},
+                    Ok((_, FromStick::Audio(frame))) => on_audio(&st, &frame),
+                    Ok((_, FromStick::Message(msg))) => on_message(&st, &msg),
                     Err(broadcast::error::RecvError::Lagged(n)) => log::warn!("wireless mic: fell behind the stick by {n}"),
                     Err(_) => return,
                 },

@@ -1,0 +1,11 @@
+{"action":"enter","driver":"fab-new","event":"stage-transition","stage":"intake","ts":"2026-11-22T19:29:31Z"}
+{"args":"Optional Mac keyboard push-to-talk alongside the stick","cmd":"fab-new","event":"command","ts":"2026-11-22T19:29:31Z"}
+{"delta":"+5.0","event":"confidence","score":5,"trigger":"calc-score","ts":"2026-11-22T19:30:45Z"}
+{"action":"enter","driver":"fab-fff","event":"stage-transition","stage":"apply","ts":"2026-11-22T19:57:52Z"}
+{"action":"enter","driver":"fab-fff","event":"stage-transition","stage":"review","ts":"2026-11-22T20:08:51Z"}
+{"event":"review","result":"failed","ts":"2026-11-22T20:10:04Z"}
+{"action":"re-entry","driver":"fab-fff","event":"stage-transition","stage":"apply","ts":"2026-11-22T20:10:04Z"}
+{"action":"re-entry","driver":"fab-fff","event":"stage-transition","stage":"review","ts":"2026-11-22T20:17:56Z"}
+{"action":"enter","driver":"fab-fff","event":"stage-transition","stage":"hydrate","ts":"2026-11-22T20:18:57Z"}
+{"event":"review","result":"passed","ts":"2026-11-22T20:18:57Z"}
+{"action":"enter","driver":"fab-fff","event":"stage-transition","stage":"ship","ts":"2026-11-22T20:20:23Z"}
