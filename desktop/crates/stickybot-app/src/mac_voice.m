@@ -358,6 +358,9 @@ typedef NS_ENUM(NSInteger, SBAction) { SBActionNone, SBActionDashboard, SBAction
 - (void)showPhase:(NSString *)phase heard:(NSString *)heard detail:(NSString *)detail;
 - (void)setMicLevel:(float)level;
 - (void)updateMotion;
+- (void)hide;
+// called whenever the panel leaves the screen (×, Esc, fading, a new recording's cancel…)
+@property(nonatomic, copy) void (^onHidden)(void);
 @end
 
 @implementation SBPanel {
@@ -442,6 +445,11 @@ typedef NS_ENUM(NSInteger, SBAction) { SBActionNone, SBActionDashboard, SBAction
     [self hide];
 }
 - (void)hide { [_fade invalidate]; _fade = nil; [self orderOut:nil]; }
+- (void)orderOut:(id)sender {
+    BOOL wasVisible = self.isVisible;
+    [super orderOut:sender];
+    if (wasVisible && self.onHidden) self.onHidden();
+}
 - (void)act:(id)sender {
     if (_actionKind == SBActionPrivacy) [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:SBPrivacyURL]];
     else sb_voice_dashboard();
@@ -571,6 +579,7 @@ static NSEventModifierFlags SBFlags(UInt32 mods) {
 
 @implementation SBVoice {
     EventHotKeyRef _shortcut, _escape, _escapeHeld;
+    NSTimer *_escapeTimer;
     EventHandlerRef _handler;
     UInt32 _code, _mods, _identifier;
     NSString *_label, *_shownDetail;
@@ -668,9 +677,34 @@ static NSEventModifierFlags SBFlags(UInt32 mods) {
     return [NSString stringWithFormat:@"%@%@ · Esc to cancel", _locked ? @"Hands-free · " : @"", send];
 }
 
+// Esc belongs to StickyBot only while its panel is up: it cancels a recording or a running
+// request, and closes an answer or error. After an answer, Esc goes back to the front app after
+// 15 s even if the panel stays (× still closes it).
+- (void)armEscape:(BOOL)finished {
+    EventHotKeyID escapeID = {SBHotkeySignature, SBEscapeID};
+    if (!_escape && RegisterEventHotKey(kVK_Escape, 0, escapeID, GetApplicationEventTarget(), 0, &_escape) != noErr) _escape = NULL;
+    // while the chord is held, Esc arrives with its modifiers (never Command+Option+Esc: Force Quit)
+    if (_recording && !_escapeHeld && (_mods & (cmdKey | optionKey)) != (cmdKey | optionKey) &&
+        RegisterEventHotKey(kVK_Escape, _mods, escapeID, GetApplicationEventTarget(), 0, &_escapeHeld) != noErr) _escapeHeld = NULL;
+    [_escapeTimer invalidate];
+    _escapeTimer = finished ? [NSTimer scheduledTimerWithTimeInterval:15 target:self selector:@selector(disarmEscape) userInfo:nil repeats:NO] : nil;
+}
+- (void)releaseHeldEscape {
+    if (_escapeHeld) { UnregisterEventHotKey(_escapeHeld); _escapeHeld = NULL; }
+}
+- (void)disarmEscape {
+    [_escapeTimer invalidate]; _escapeTimer = nil;
+    [self releaseHeldEscape];
+    if (_escape) { UnregisterEventHotKey(_escape); _escape = NULL; }
+}
+
 - (void)keyEvent:(UInt32)identifier pressed:(BOOL)pressed {
     if (identifier == SBEscapeID) {
-        if (pressed && _recording) { _locked = NO; [self finishRecording:NO error:nil]; }
+        if (!pressed) return;
+        if (_recording) { _locked = NO; [self finishRecording:NO error:nil]; return; }
+        if (_pending) sb_voice_cancel_turn();
+        [_panel hide];
+        [self disarmEscape];
         return;
     }
     if (!_shortcut || identifier != _identifier) return;
@@ -724,12 +758,7 @@ static NSEventModifierFlags SBFlags(UInt32 mods) {
         return;
     }
     _recording = [SBRecording new];
-    // Esc cancels only while recording: plain Esc, and Esc with the shortcut's keys still down
-    // (never Command+Option+Esc, which is Force Quit).
-    EventHotKeyID escapeID = {SBHotkeySignature, SBEscapeID};
-    if (RegisterEventHotKey(kVK_Escape, 0, escapeID, GetApplicationEventTarget(), 0, &_escape) != noErr) _escape = NULL;
-    if ((_mods & (cmdKey | optionKey)) != (cmdKey | optionKey) &&
-        RegisterEventHotKey(kVK_Escape, _mods, escapeID, GetApplicationEventTarget(), 0, &_escapeHeld) != noErr) _escapeHeld = NULL;
+    [self armEscape:NO];
     NSString *error = [_recording start];
     if (error) { [self finishRecording:NO error:error]; return; }
     if (_recording.engine)
@@ -787,8 +816,7 @@ static NSEventModifierFlags SBFlags(UInt32 mods) {
 - (void)finishRecording:(BOOL)send error:(NSString *)reason {
     if (!_recording) return;
     [_poll invalidate]; _poll = nil;
-    if (_escape) { UnregisterEventHotKey(_escape); _escape = NULL; }
-    if (_escapeHeld) { UnregisterEventHotKey(_escapeHeld); _escapeHeld = NULL; }
+    [self releaseHeldEscape];
     SBRecording *recording = _recording; _recording = nil;
     _locked = NO;
     if (recording.engine) [NSNotificationCenter.defaultCenter removeObserver:self name:AVAudioEngineConfigurationChangeNotification object:recording.engine];
@@ -810,7 +838,11 @@ static NSEventModifierFlags SBFlags(UInt32 mods) {
 }
 
 - (void)show:(NSString *)phase heard:(NSString *)heard detail:(NSString *)detail {
-    if (!_panel) _panel = [SBPanel new];
+    if (!_panel) {
+        _panel = [SBPanel new];
+        __weak SBVoice *weakSelf = self;
+        _panel.onHidden = ^{ [weakSelf disarmEscape]; };
+    }
     if ([phase isEqual:@"cancelled"]) {
         _restorePanel = NO;
         _pending = NO;
@@ -819,7 +851,8 @@ static NSEventModifierFlags SBFlags(UInt32 mods) {
     }
     _shownDetail = [phase isEqual:@"listening"] ? detail : nil;
     [_panel showPhase:phase heard:heard detail:detail];
-    if (_suspended) { _restorePanel = YES; [_panel orderOut:nil]; }
+    if (_suspended) { _restorePanel = YES; [_panel orderOut:nil]; return; }
+    [self armEscape:[phase isEqual:@"reply"] || [phase isEqual:@"error"] || [phase isEqual:@"hint"]];
 }
 // The Rust turn finished (answered, failed, cancelled or panicked): the next press may start one.
 - (void)turnEnded { _pending = NO; }

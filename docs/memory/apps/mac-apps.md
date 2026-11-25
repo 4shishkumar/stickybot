@@ -88,8 +88,10 @@ shortcut. It starts disabled. The suggested chord is Control–Shift–Space. A 
 leaves the working chord registered. Hold the chord in any app and speak; release to send. A press
 shorter than 0.35 s is a tap and records nothing: a single tap shows a hint (at most three per
 session), and a second tap within 0.5 s locks hands-free listening until the next press sends.
-Capture is limited to 60 seconds, with a sound and a countdown for the last 10. Plain Esc (or Esc
-with the chord held, never Command–Option–Esc) cancels a recording; sleep and screen lock discard it.
+Capture is limited to 60 seconds, with a sound and a countdown for the last 10. Esc belongs to StickyBot only while
+the panel is up: it cancels a recording or a running request and closes an answer or error (with
+the chord held too, never Command–Option–Esc). After an answer, Esc returns to the front app after
+15 s even if the panel stays; sleep and screen lock discard it.
 A recording whose loudest moment stays below the silence floor is not sent ("Didn't hear anything
 from <microphone>"). If the microphone disconnects, a recording of a second or more is still sent.
 Hold B uses the stick microphone.

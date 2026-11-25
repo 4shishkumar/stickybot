@@ -108,6 +108,21 @@ static void testShortcutConflict(void) {
     [controller shutdown];
 }
 
+static void testEscapeClosesThePanel(void) {
+    // Esc after an answer closes the panel and gives Esc back; Esc during a request cancels it.
+    SBVoice *controller = [SBVoice new];
+    [controller show:@"reply" heard:@"q" detail:@"a"];
+    SBPanel *panel = [controller valueForKey:@"panel"];
+    CHECK(panel.isVisible);
+    [controller keyEvent:SBEscapeID pressed:YES];
+    CHECK(!panel.isVisible && turnCancels == 1);
+    [controller setValue:@YES forKey:@"pending"];
+    [controller show:@"thinking" heard:@"q" detail:@""];
+    [controller keyEvent:SBEscapeID pressed:YES];
+    CHECK(!panel.isVisible && turnCancels == 2);
+    [controller shutdown];
+}
+
 static void testInputs(void) {
     // The device list is valid JSON, and an unknown saved microphone falls back to the default.
     sb_voice_set_input("no-such-device-uid");
@@ -160,6 +175,7 @@ int main(void) {
             testCancellation();
             testInputs();
             testSilence();
+            testEscapeClosesThePanel();
             puts("Mac voice audio, popup, focus and cancellation checks passed");
         } @catch (NSException *exception) {
             fprintf(stderr, "Native test failed: %s\n", exception.reason.UTF8String);

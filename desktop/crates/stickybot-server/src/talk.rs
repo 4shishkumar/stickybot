@@ -403,7 +403,7 @@ impl MacTurn {
 
     /// Mono 16 kHz, captured by the native app. The callback remains scoped to this turn.
     pub async fn submit(self, audio: Vec<f32>) {
-        self.0.show("transcribing", "", "Microphone off · processing your words").await;
+        self.0.show("transcribing", "", "").await;
         if let Err(e) = handle_audio(&self.0, audio, 0).await {
             self.0.show("error", "", &format!("Could not transcribe the recording: {e}")).await;
         }
