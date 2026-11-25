@@ -19,7 +19,7 @@ async fn main() {
         brain: "local".into(),
         cases: evals_dir.join("assistant.json"),
         fixtures: evals_dir.join("fixtures"),
-        workdir: dirs_home().join(format!("StickyBot-eval-{}", std::process::id())),
+        workdir: dirs_home().join(format!("StickyBot-eval-{}", std::process::id())).join("fixtures"),
         only: vec![],
         repeat: 1,
         port: 18791,
@@ -56,7 +56,7 @@ async fn main() {
     let result = evals::run(opts, &home).await;
     if !keep {
         let _ = std::fs::remove_dir_all(&home);
-        let _ = std::fs::remove_dir_all(&workdir);
+        let _ = std::fs::remove_dir_all(workdir.parent().unwrap_or(&workdir));
     }
     match result {
         Ok(outcomes) => {

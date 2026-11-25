@@ -155,6 +155,8 @@ pub struct Outcome {
     pub category: String,
     pub reply: String,
     pub tools: Vec<String>,
+    /// the tool calls with their arguments and whether they failed (not their results)
+    pub calls: Vec<Value>,
     pub failures: Vec<String>,
     pub seconds: f64,
 }
@@ -195,13 +197,13 @@ fn prepare_fixtures(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// files_search uses Spotlight: give it a moment to index the copied fixtures.
+/// files_search uses Spotlight: give it time to index the copied fixtures' text (about 10 s).
 async fn wait_for_spotlight(dir: &Path) {
-    for _ in 0..30 {
+    for _ in 0..60 {
         let found = std::process::Command::new("/usr/bin/mdfind")
             .args(["-onlyin"])
             .arg(dir)
-            .arg("kMDItemFSName == 'q3-budget.md'")
+            .arg("kMDItemTextContent == '*Priya*'cd")
             .output()
             .is_ok_and(|o| !o.stdout.is_empty());
         if found {
@@ -241,6 +243,9 @@ pub async fn run(opts: Options, home: &Path) -> Result<Vec<Outcome>, String> {
         cases.retain(|c| opts.only.iter().any(|o| o == &c.id || o == &c.category));
     }
     std::fs::create_dir_all(home).map_err(|e| e.to_string())?;
+    if let Some(parent) = opts.workdir.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     prepare_fixtures(&opts.fixtures, &opts.workdir)?;
     let work = opts.workdir.canonicalize().map_err(|e| e.to_string())?;
     wait_for_spotlight(&work).await;
@@ -289,6 +294,7 @@ pub async fn run(opts: Options, home: &Path) -> Result<Vec<Outcome>, String> {
                 failures.push("no answer".into());
             }
             let tools = trace.iter().filter_map(|c| c["tool"].as_str().map(str::to_owned)).collect();
+            let calls = trace.iter().map(|c| json!({"tool": c["tool"], "args": c["args"], "error": c["error"]})).collect();
             eprintln!(
                 "{} {}{} ({seconds:.1} s){}",
                 if failures.is_empty() { "PASS" } else { "FAIL" },
@@ -296,7 +302,7 @@ pub async fn run(opts: Options, home: &Path) -> Result<Vec<Outcome>, String> {
                 if opts.repeat > 1 { format!(" #{}", round + 1) } else { String::new() },
                 if failures.is_empty() { String::new() } else { format!(": {}", failures.join("; ")) }
             );
-            out.push(Outcome { id: case.id.clone(), category: case.category.clone(), reply, tools, failures, seconds });
+            out.push(Outcome { id: case.id.clone(), category: case.category.clone(), reply, tools, calls, failures, seconds });
         }
     }
     let st2 = st.clone();
@@ -324,7 +330,7 @@ pub fn report(brain: &str, outcomes: &[Outcome]) -> (String, Value) {
     let json = json!({
         "brain": brain, "pass_rate": rate, "p50_s": pct(0.5), "p90_s": pct(0.9),
         "cases": outcomes.iter().map(|o| json!({"id": o.id, "category": o.category, "pass": o.failures.is_empty(),
-            "failures": o.failures, "tools": o.tools, "seconds": o.seconds, "reply": o.reply})).collect::<Vec<_>>(),
+            "failures": o.failures, "tools": o.tools, "calls": o.calls, "seconds": o.seconds, "reply": o.reply})).collect::<Vec<_>>(),
     });
     (lines.join("\n"), json)
 }
@@ -403,6 +409,7 @@ mod tests {
             category: cat.into(),
             reply: String::new(),
             tools: vec![],
+            calls: vec![],
             failures: if ok { vec![] } else { vec!["x".into()] },
             seconds: 2.0,
         };
