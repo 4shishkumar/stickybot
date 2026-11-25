@@ -152,7 +152,9 @@ Errors: `@{"ok":false,"error":"<message>"}`.
 ### Button bindings
 
 The optional `buttons` object in `@state` advertises support on the StickS3 and StickC Plus2.
-The dashboard reads this object from the selected stick before offering the editor.
+The dashboard reads this object from the selected stick before offering the editor. The Mac
+HTTP wrapper returns the responding BLE peer in `device_address`. The dashboard sends it back
+as `expected_address` with the save. A different peer or a missing address requires a new read.
 The default is `{"b2":"unlock","b3":"launcher","ab":"reply","bh":"talk"}`.
 
 | Key | Gesture | Action values |

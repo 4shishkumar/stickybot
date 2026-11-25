@@ -8,8 +8,23 @@ import asyncio
 import json
 import logging
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from bleak import BleakClient, BleakScanner
+
+# Nested IR calls and reply chunks inherit the physical press's BLE peer.
+_peer = ContextVar("button_peer", default=None)
+
+
+@contextmanager
+def pin_peer(client, target):
+    token = _peer.set((client, target))
+    try:
+        yield
+    finally:
+        _peer.reset(token)
+
 
 NUS = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"     # Mac -> stick
@@ -83,11 +98,14 @@ class Link:
         if not self.connected:
             return False
         client = self.client
+        peer = _peer.get()
+        if peer and (client is not peer[0] or self.target is not peer[1] or self.paused):
+            return False
         data = (json.dumps(msg, separators=(",", ":")) + "\n").encode()
         try:
             async with self._write_lock:
                 for i in range(0, len(data), CHUNK):
-                    if self.client is not client:
+                    if self.client is not client or (peer and (self.target is not peer[1] or self.paused)):
                         return False
                     await self._write(client, data[i:i + CHUNK])
             return True

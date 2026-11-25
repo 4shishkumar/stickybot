@@ -10,7 +10,7 @@ from stick_agent import buttons, commands, firmware_api, flasher, link
 
 @pytest.fixture
 def wired(agent):
-    agent.link.client = object()
+    agent.link.client = SimpleNamespace(address="stick-a")
     agent.link.target = {"address": "stick-a"}
     agent.stick_api = SimpleNamespace(ble=AsyncMock())
     return agent
@@ -71,7 +71,7 @@ async def test_buttons_save_never_falls_back_to_another_stick_on_usb(wired, monk
     monkeypatch.setattr(flasher, "espressif_ports", lambda: pytest.fail("selected stick changed transport"))
     for connected in (True, False):
         wired.link.connected = connected
-        assert (await stick.run("@buttons b2=launcher&b3=unlock&ab=reply&bh=talk"))["ok"] is False
+        assert (await stick.run("@buttons b2=launcher&b3=unlock&ab=reply&bh=talk", "stick-a"))["ok"] is False
 
 async def test_queued_button_write_cannot_switch_bluetooth_client():
     transport = link.Link(None, None, None)
@@ -85,3 +85,53 @@ async def test_queued_button_write_cannot_switch_bluetooth_client():
     assert not await queued
     old.write_gatt_char.assert_not_called()
     new.write_gatt_char.assert_not_called()
+
+async def test_stale_tab_cannot_save_a_mapping_to_newly_paired_stick(wired, monkeypatch):
+    stick = firmware_api.Stick(wired)
+    ble = AsyncMock(return_value={"ok": True, "buttons": {"b2": "unlock"}})
+    monkeypatch.setattr(stick, "ble", ble)
+    initial = await stick.run("@state")
+    assert initial["device_address"] == "stick-a"
+    wired.link.target = {"address": "stick-b"}
+    assert "device_address" not in await stick.run("@state")  # B selected while A is still disconnecting
+    wired.link.client = SimpleNamespace(address="stick-b")
+    ble.reset_mock()
+    command = "@buttons b2=launcher&b3=unlock&ab=reply&bh=talk"
+    assert not (await stick.run(command, initial["device_address"]))["ok"]
+    assert not (await stick.run(command))["ok"]
+    assert not (await stick.run("@state\n" + command))["ok"]
+    ble.assert_not_awaited()
+    assert (await stick.run(command, "stick-b"))["ok"]
+    ble.assert_awaited_once_with(command)
+
+async def test_ir_fallback_from_physical_press_stays_on_original_connection(wired, monkeypatch):
+    transport = link.Link(None, None, None)
+    first = SimpleNamespace(address="A", is_connected=True, write_gatt_char=AsyncMock())
+    second = SimpleNamespace(address="B", is_connected=True, write_gatt_char=AsyncMock())
+    transport.client, transport.target = first, {"address": "A"}
+    wired.link = transport
+    monkeypatch.setattr(commands, "load", lambda: [{"name": "Power", "ir": {"dev": "tv", "btn": "power"}}])
+    wired.stick_api.ble.return_value = {"ok": True, "buttons": {"ab": "quick:Power"}}
+    wired.cfg["ir_brands"] = {"tv": "samsung"}
+
+    async def learned_missing(_ch, data, response):
+        import json
+        msg = json.loads(data)
+        transport.client, transport.target = second, {"address": "B"}
+        for listener in wired.listeners:
+            listener({"evt": "proto", "id": msg["id"], "reply": {"ok": False, "error": "No such button"}})
+
+    first.write_gatt_char.side_effect = learned_missing
+    await press(wired, "quick:Power", "ab")
+    first.write_gatt_char.assert_awaited_once()
+    second.write_gatt_char.assert_not_awaited()
+
+
+async def test_button_feedback_during_transcription_stays_in_dashboard(wired, monkeypatch):
+    monkeypatch.setattr(commands, "load", lambda: [{"name": "Desk", "open_app": "Notes"}])
+    monkeypatch.setattr(commands, "run", Mock(return_value="Opened Notes."))
+    wired.stick_api.ble.return_value = {"ok": True, "buttons": {"ab": "quick:Desk"}}
+    wired.state = "transcribing"
+    await press(wired, "quick:Desk", "ab")
+    assert any(e.get("via") == "button" for e in wired.events)
+    assert not wired.link.sent

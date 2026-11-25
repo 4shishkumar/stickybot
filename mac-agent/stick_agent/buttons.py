@@ -15,6 +15,11 @@ async def run(agent, msg, source, target):
     def current():
         return link.connected and not link.paused and link.client is source and link.target is target
 
+    def run_if_current(func, *args, **kwargs):
+        if current():
+            return func(*args, **kwargs)
+        return None
+
     gesture, action = msg.get("gesture"), msg.get("action")
     if gesture not in ("b2", "b3", "ab") or not isinstance(action, str) or not current():
         return
@@ -35,7 +40,8 @@ async def run(agent, msg, source, target):
             app = commands.list_apps().get(name.lower())
             if not app:
                 raise ValueError("The mapped Mac app is unavailable")
-            await asyncio.to_thread(subprocess.run, ["/usr/bin/open", "-a", app], check=True, timeout=10)
+            argv = ["/usr/bin/open", "-a", app]
+            await asyncio.to_thread(run_if_current, subprocess.run, argv, check=True, timeout=10)
         else:
             matches = [cmd for cmd in commands.load() if cmd.get("name") == name]
             if len(matches) != 1:
@@ -46,7 +52,7 @@ async def run(agent, msg, source, target):
                 if not ok:
                     raise ValueError(reply)
             else:
-                reply = await asyncio.to_thread(commands.run, cmd, {}, quote_shell=True)
+                reply = await asyncio.to_thread(run_if_current, commands.run, cmd, {}, quote_shell=True)
                 if not reply:
                     raise ValueError("The saved quick command is unavailable")
     except (KeyError, ValueError, OSError, subprocess.SubprocessError) as exc:
@@ -54,5 +60,5 @@ async def run(agent, msg, source, target):
         phase, reply = "error", "Button action unavailable. Check its name and any required arguments."
     if reply and current():
         agent.emit("reply", via="button", text=reply)
-        if not (agent.brain.busy or agent.rec or agent.asks or agent.prompts):
+        if agent.state == "ready" and not (agent.brain.busy or agent.rec or agent.asks or agent.prompts):
             await agent.tell_stick(phase, text=reply)

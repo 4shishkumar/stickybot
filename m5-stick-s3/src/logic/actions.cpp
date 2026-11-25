@@ -62,11 +62,9 @@ static bool applies(const Binding& b, uint8_t flags) {
   return (flags & b.need) == b.need && !(flags & b.unless);
 }
 
-Do lookup(const Screen& s, In in, uint8_t flags, const buttons::Table* global) {
-  buttons::Slot slot;
+Do lookup(const Screen& s, In in, uint8_t flags) {
   for (uint8_t i = 0; i < s.count; i++)
-    if (s.bindings[i].in == in && applies(s.bindings[i], flags))
-      return global && buttons::slotFor(in, slot) ? (*global)[slot].action : s.bindings[i].act;
+    if (s.bindings[i].in == in && applies(s.bindings[i], flags)) return s.bindings[i].act;
   return Do::NONE;
 }
 

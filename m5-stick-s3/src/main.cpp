@@ -1007,14 +1007,26 @@ void loop() {
   }
   if (swallowB || millis() < swallowBUntil) bDown = bSingle = bDouble = bTriple = bHold = bClick = false;
 
+  // B first (or both in one sample) preserves the immediate A dictation press.
+  // Consume its click decision before the agent screen can interpret it as cancel/close,
+  // and both releases before entering a tile. A modal arriving mid-chord discards it.
+  bool chordAllowed = mode == Mode::STATUS && !comboDown && !agentTalking && !ignoreAUntilRelease &&
+                      !ignoreBUntilRelease && !swallowB && millis() >= swallowBUntil && !hid::pairingCode() &&
+                      !buddy::hasPrompt() && !air::active() && !events::active() && !ir::screenActive() && !faces::demoActive();
+  auto chordStep = chord.update(chordAllowed, aDown, A.isPressed(), B.isPressed(), B.pressedFor(B_HOLD_MS));
+  bool chordFired = chordStep == buttons::ChordStep::FIRE;
+  if (chordStep != buttons::ChordStep::PASS) {
+    aDown = aUp = bDown = bHold = bClick = bSingle = bDouble = bTriple = false;
+    if (chordFired || chordStep == buttons::ChordStep::DISCARD) {
+      swallowBUntil = millis() + 900;  // M5's delayed decision for the consumed B click
+      mic::agentEnd();
+    }
+  }
+
   motion::Event mev = motion::poll();
   if (mev != motion::Event::NONE) {
     Log.event(diagnostics::Event::Settings);
   }
-
-  // An intervening modal screen takes ownership of any unfinished chord.
-  if (mode != Mode::STATUS || hid::pairingCode() || buddy::hasPrompt() || air::active() ||
-      events::active() || ir::screenActive() || faces::demoActive()) chord.pending = false;
 
   // A remote mode (air mouse / presenter / media, air.h) owns the buttons, the motion and
   // the screen; only a pairing request still shows (below, A accepts).
@@ -1279,20 +1291,6 @@ void loop() {
     swallowB = B.isPressed();
     page = ui::Page::HOME;
     dirty = true;
-  }
-
-  // B first (or both in one sample) preserves the immediate A dictation press.
-  // Consume both releases before entering a tile: its first input must be a fresh press.
-  bool chordAllowed = mode == Mode::STATUS && !comboDown && !agentTalking && !ignoreAUntilRelease &&
-                      !ignoreBUntilRelease && !swallowB && millis() >= swallowBUntil;
-  auto chordStep = chord.update(chordAllowed, aDown, A.isPressed(), B.isPressed(), B.pressedFor(B_HOLD_MS));
-  bool chordFired = chordStep == buttons::ChordStep::FIRE;
-  if (chordStep != buttons::ChordStep::PASS) {
-    aDown = aUp = bDown = bHold = bClick = bSingle = bDouble = bTriple = false;
-    if (chordFired) {
-      swallowBUntil = millis() + 900;  // M5's delayed decision for the consumed B click
-      mic::agentEnd();
-    }
   }
 
   // The reply view: A pages / reads aloud (not the key combo), tilting scrolls

@@ -433,7 +433,9 @@ class Agent:
         if msg.get("src") == "agent" and msg.get("evt") == "button_action":
             if self.link.connected and (self.button_task is None or self.button_task.done()):
                 self.last_input = time.time()
-                self.button_task = asyncio.create_task(buttons.run(self, msg, self.link.client, self.link.target))
+                client, target = self.link.client, self.link.target
+                with link.pin_peer(client, target):
+                    self.button_task = asyncio.create_task(buttons.run(self, msg, client, target))
             return
         if msg.get("src") == "agent" and msg.get("evt") == "event_shown":
             self.notifier.acked(msg.get("id"))

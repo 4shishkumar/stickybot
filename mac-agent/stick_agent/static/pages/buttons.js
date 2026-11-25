@@ -56,7 +56,8 @@ function watchBindings(target, changed) {
     if (!current() || version !== sequence) return;
     // A generic @state request can fall back to USB. Button writes are Bluetooth-only
     // so a fallback reply must never enable the editor.
-    changed(r.ok && r.via === "ble" ? readBindings(r.reply) : null);
+    const source = r.device_address;
+    changed(r.ok && r.via === "ble" && typeof source === "string" && source ? readBindings(r.reply) : null, source);
   }
   function reset() {
     ++sequence;
@@ -93,10 +94,11 @@ export function render(root) {
   const target = deviceApi();
   const content = h("div", {class: "empty"}, "Reading the stick’s buttons…");
   root.appendChild(content);
-  let saved, revision = 0;
+  let saved, savedAddress, revision = 0;
   const current = version => revision === version && deviceId() === target.id;
-  function show(values) {
-    if (JSON.stringify(saved) === JSON.stringify(values)) return;
+  function show(values, source) {
+    if (savedAddress === source && JSON.stringify(saved) === JSON.stringify(values)) return;
+    savedAddress = source;
     saved = values;
     const version = ++revision;
     if (!values) {
@@ -119,16 +121,18 @@ export function render(root) {
     for (const [key, label] of GESTURES) {
       const selector = h("select", {id: "gesture-" + key}, choices(key).map(([value, text]) => h("option", {value}, text)));
       const name = h("input", {type: "text", autocomplete: "off", id: "gesture-name-" + key});
-      const extra = field("", name);
-      fields.set(key, {selector, name, extra, label});
+      const help = h("span", {}, "Choose a saved command that needs no arguments.");
+      const extra = field("", name, help);
+      fields.set(key, {selector, name, extra, help, label});
       selector.addEventListener("change", () => { name.value = ""; adjust(); });
       name.addEventListener("input", adjust);
     }
     function adjust() {
       let error = "", dirty = false;
-      for (const [key, {selector, name, extra, label}] of fields) {
+      for (const [key, {selector, name, extra, help, label}] of fields) {
         const kind = selector.value;
         extra.hidden = !named(kind);
+        help.hidden = kind !== "quick";
         extra.firstChild.textContent = kind === "app" ? "Mac app name" : "Quick command name";
         if (kind === "quick") name.setAttribute("list", names.id);
         else name.removeAttribute("list");
@@ -153,11 +157,11 @@ export function render(root) {
       busy = true;
       adjust();
       message.textContent = "Saving…";
-      const r = await proto("buttons", requested, target);
+      const r = await proto("buttons", requested, target, source);
       if (!current(version)) return;
       watch.invalidate();
       busy = false;
-      const confirmed = r.ok && readBindings(r.reply);
+      const confirmed = r.ok && r.device_address === source && readBindings(r.reply);
       if (!confirmed) {
         adjust();
         message.textContent = r.error || "The stick did not confirm the new bindings. Try again.";

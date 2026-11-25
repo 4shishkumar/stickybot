@@ -560,6 +560,10 @@ impl CbConn {
 }
 
 impl Connection for CbConn {
+    fn address(&self) -> &str {
+        &self.id
+    }
+
     async fn write_rx(&self, chunk: Vec<u8>) -> Result<(), BleError> {
         self.write(Char::Rx, chunk, true).await
     }

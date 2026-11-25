@@ -32,10 +32,11 @@ bool parse(const std::string (&values)[COUNT], Table& out);
 std::string pack(const Table& t);
 bool unpack(const std::string& record, Table& out);
 
-enum class ChordStep { PASS, CONSUME, FIRE };
+enum class ChordStep { PASS, CONSUME, FIRE, DISCARD };
 // The gesture owns both releases; a modal transition cancels it.
 struct Chord {
   bool pending = false;
+  bool cancelled = false;
   ChordStep update(bool eligible, bool aDown, bool aHeld, bool bHeld, bool bHoldReached);
 };
 

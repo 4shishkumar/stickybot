@@ -103,12 +103,15 @@ bool unpack(const std::string& record, Table& out) {
 }
 
 ChordStep Chord::update(bool eligible, bool aDown, bool aHeld, bool bHeld, bool bHoldReached) {
-  if (!eligible) pending = false;
-  else if (aDown && bHeld && !bHoldReached) pending = true;
+  if (pending && !eligible) cancelled = true;
+  else if (!pending && eligible && aDown && bHeld && !bHoldReached) {
+    pending = true;
+    cancelled = false;
+  }
   if (!pending) return ChordStep::PASS;
   if (aHeld || bHeld) return ChordStep::CONSUME;
   pending = false;
-  return ChordStep::FIRE;
+  return cancelled ? ChordStep::DISCARD : ChordStep::FIRE;
 }
 
 bool finishTalk(bool latched, bool bDown, bool bHeld, bool linked, uint32_t elapsed) {

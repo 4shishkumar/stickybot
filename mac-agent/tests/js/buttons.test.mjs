@@ -24,7 +24,7 @@ const {render, leave, buttonSettingsLink} = await import("../../stick_agent/stat
 const {selectDevice, store} = await import("../../stick_agent/static/lib.js");
 const defaults = {b2:"unlock", b3:"launcher", ab:"reply", bh:"talk"};
 const settle = () => new Promise(resolve => setImmediate(resolve));
-const state = buttons => Response.json({ok:true, via:"ble", reply:{buttons}});
+const state = (buttons, address = "A") => Response.json({ok:true, via:"ble", device_address:address, reply:{buttons}});
 const id = (root, name) => root.find(el => el.id === name);
 const saveButton = root => root.find(el => el.tag === "button");
 const notice = root => root.find(el => el.role === "status");
@@ -115,7 +115,7 @@ test("a previous device's controls and delayed save never update the new stick",
     if (path === "/api/commands") return Response.json({commands:[]});
     const {line} = JSON.parse(opts.body);
     if (line === "@state") return state(defaults);
-    writes.push(path);
+    writes.push([path, JSON.parse(opts.body).expected_address]);
     return new Promise(resolve => {finish = resolve;});
   });
   const first = new Element("div"); render(first); await settle();
@@ -127,6 +127,6 @@ test("a previous device's controls and delayed save never update the new stick",
   store.status = {link:"connected", stick:{name:"stick B"}};
   store.emit("status", store.status); await settle();
   oldSave.fire("click"); finish(state({...defaults, b2:"none"})); await settle();
-  assert.deepEqual(writes, ["/api/devices/stick%20A/api/stick/proto"]);
+  assert.deepEqual(writes, [["/api/devices/stick%20A/api/stick/proto", "A"]]);
   assert.equal(id(second, "gesture-b2").value, "unlock"); assert.equal(notice(second).textContent, "");
 });

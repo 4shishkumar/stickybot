@@ -81,7 +81,7 @@ enum class Id : uint8_t { HOME, TALK, AGENT, REPLY, COUNT };
 const Screen& screen(Id id);
 // The action for this input on this screen in this state (NONE = the screen doesn't use it:
 // the caller does what it always did).
-Do lookup(const Screen& s, In in, uint8_t flags, const buttons::Table* global = nullptr);
+Do lookup(const Screen& s, In in, uint8_t flags);
 
 struct Hint {
   std::string key, label;
