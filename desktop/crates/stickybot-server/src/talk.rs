@@ -35,7 +35,7 @@ pub fn stick_text(s: &str) -> String {
     out
 }
 
-fn cut(s: &str, n: usize) -> String {
+pub(crate) fn cut(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 

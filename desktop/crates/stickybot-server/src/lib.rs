@@ -15,6 +15,7 @@ pub mod commands;
 pub mod config;
 pub mod connections;
 pub mod devices;
+pub mod evals;
 pub mod events;
 pub mod faces;
 pub mod feed;

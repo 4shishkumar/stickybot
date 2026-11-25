@@ -394,6 +394,9 @@ pub struct McpState {
     /// the last home-card push, and a later one already planned
     card_at: Mutex<f64>,
     card_later: std::sync::atomic::AtomicBool,
+    /// Every tool call while `Some` (the agent test runner, `evals.rs`): in memory only, never on
+    /// by default, never logged or saved.
+    pub trace: Mutex<Option<Vec<Value>>>,
 }
 
 impl Default for McpState {
@@ -407,6 +410,7 @@ impl Default for McpState {
             last_call: Mutex::new(Value::Null),
             card_at: Mutex::new(f64::MIN),
             card_later: std::sync::atomic::AtomicBool::new(false),
+            trace: Mutex::new(None),
         }
     }
 }
@@ -518,6 +522,15 @@ pub type Outcome = (String, bool, Option<Value>);
 /// The only tool execution entry point. Identity comes from server-selected credentials, not headers.
 /// Every caller, including internal calls, is subject to profile and approval enforcement.
 pub async fn call(st: &Arc<AppState>, name: &str, args: &Value, ctx: &Context) -> Outcome {
+    let out = call_checked(st, name, args, ctx).await;
+    if let Some(trace) = st.mcp.trace.lock().unwrap().as_mut() {
+        trace.push(json!({"tool": name, "args": args, "error": out.1, "text": crate::talk::cut(&out.0, 4000),
+                          "structured": out.2.clone().unwrap_or(Value::Null)}));
+    }
+    out
+}
+
+async fn call_checked(st: &Arc<AppState>, name: &str, args: &Value, ctx: &Context) -> Outcome {
     let _call = ctx.guard();
     let who = &ctx.who;
     if !ctx.active() || !tool_policy::allowed(st, ctx.caller, name) {

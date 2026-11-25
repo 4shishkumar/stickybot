@@ -8,7 +8,7 @@ PIO ?= $(HOME)/.platformio/penv/bin/pio
 RUFF = $(PY) -m ruff
 
 .PHONY: help test check lint format agent-test agent-test-all firmware-test firmware-build dev-setup shellcheck install-e2e \
-        release release-dry-run
+        release release-dry-run eval
 
 help:
 	@echo "make test            agent tests + firmware native tests"
@@ -20,6 +20,7 @@ help:
 	@echo "make firmware-build  build the M5StickS3 firmware"
 	@echo "make dev-setup       install the agent's dev tools and the pre-commit hook"
 	@echo "make release VERSION=1.8.0   bump + date the changelog + commit + tag, locally (never pushes)"
+	@echo "make eval [BRAIN=local|claude|openrouter] [ONLY=a,b]   score the agent on desktop/evals (a Mac with that brain set up)"
 
 test: agent-test firmware-test
 
@@ -65,3 +66,8 @@ release:
 release-dry-run:
 	@test -n "$(VERSION)" || { echo "usage: make release-dry-run VERSION=1.8.0"; exit 2; }
 	tools/release.sh --dry-run $(VERSION)
+
+# The agent test set (desktop/evals/README.md): needs the brain set up on this Mac
+BRAIN ?= local
+eval:
+	cd desktop && cargo run -q -p stickybot-server --bin stickybot-eval -- --brain $(BRAIN) $(if $(ONLY),--only $(ONLY)) --out ../eval-$(BRAIN).json

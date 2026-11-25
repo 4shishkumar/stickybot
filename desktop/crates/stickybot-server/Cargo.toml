@@ -54,3 +54,7 @@ cpal = "0.18"
 [[bin]]
 name = "stickybot-headless"
 path = "src/bin/headless.rs"
+
+[[bin]]
+name = "stickybot-eval"
+path = "src/bin/eval.rs"
