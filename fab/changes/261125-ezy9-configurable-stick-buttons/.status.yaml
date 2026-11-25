@@ -8,8 +8,8 @@ progress:
     intake: done
     apply: done
     review: done
-    hydrate: active
-    ship: pending
+    hydrate: done
+    ship: active
     review-pr: pending
 plan:
     generated: true
@@ -32,15 +32,16 @@ stage_metrics:
     intake: {started_at: "2026-11-25T17:49:23Z", driver: fab-new, iterations: 1, completed_at: "2026-11-25T17:49:50Z"}
     apply: {started_at: "2026-11-25T17:49:50Z", driver: fab-ff, iterations: 1, completed_at: "2026-11-25T18:10:52Z"}
     review: {started_at: "2026-11-25T18:10:52Z", driver: fab-ff, iterations: 1, completed_at: "2026-11-25T18:11:25Z"}
-    hydrate: {started_at: "2026-11-25T18:11:25Z", driver: fab-ff, iterations: 1}
+    hydrate: {started_at: "2026-11-25T18:11:25Z", driver: fab-ff, iterations: 1, completed_at: "2026-11-25T18:12:22Z"}
+    ship: {started_at: "2026-11-25T18:12:22Z", driver: fab-ff, iterations: 1}
 prs:
     - https://github.com/4shishkumar/stickybot/pull/21
 base_branch: main
 change_type_source: explicit
 true_impact:
-    added: 1761
+    added: 1790
     deleted: 123
-    net: 1638
+    net: 1667
     excluding:
         added: 1649
         deleted: 104
@@ -49,8 +50,8 @@ true_impact:
         added: 400
         deleted: 1
         net: 399
-    computed_at: "2026-11-25T18:10:52Z"
-    computed_at_stage: apply
+    computed_at: "2026-11-25T18:12:22Z"
+    computed_at_stage: hydrate
 # base_branch: written by /git-branch or /fab-new when the change's branch is created (no placeholder here).
 # true_impact: lazily created on first stage-finish that computes it (no placeholder here).
-last_updated: 2026-11-25T18:11:25Z
+last_updated: 2026-11-25T18:12:22Z

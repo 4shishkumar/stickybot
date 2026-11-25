@@ -11,4 +11,4 @@ description: "The stick firmware: where logic lives, how it is tested, the flash
 
 | File | Description |
 |------|-------------|
-| [stick-firmware](stick-firmware.md) | S3 and Plus2 firmware: bounded authenticated host sessions and input picker, legacy pairing and write-only per-host passwords, safe diagnostics, hardware capabilities, native tests, flash/Bluetooth budgets and firmware versioning. |
+| [stick-firmware](stick-firmware.md) | S3 and Plus2 firmware: bounded authenticated host sessions and input picker, configurable button gestures, legacy pairing and write-only per-host passwords, safe diagnostics, hardware capabilities, native tests, flash/Bluetooth budgets and firmware versioning. |

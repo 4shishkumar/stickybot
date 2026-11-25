@@ -1,6 +1,6 @@
 ---
 type: memory
-description: "S3 and Plus2 firmware: bounded authenticated host sessions and input picker, legacy pairing and write-only per-host passwords, safe diagnostics, hardware capabilities, native tests, flash/Bluetooth budgets and firmware versioning."
+description: "S3 and Plus2 firmware: bounded authenticated host sessions and input picker, configurable button gestures, legacy pairing and write-only per-host passwords, safe diagnostics, hardware capabilities, native tests, flash/Bluetooth budgets and firmware versioning."
 ---
 # Stick Firmware
 
@@ -54,6 +54,19 @@ mode retains the slot identities and global password. Shared mode uses the slot 
 enablement, retains bonds and requires explicit password assignment per authenticated host; it
 does not copy the global password to each Mac. Passwords remain write-only, absent from readback
 and diagnostic output.
+
+### Global button mappings
+
+StickS3 and StickC Plus2 persist four bindings together in one NVS record. Double B defaults to
+Unlock Mac, triple B to Launcher, A+B to reopen the last reply, and hold B to Talk. On screens
+with global controls, physical dispatch and hint labels use the same binding table. Press B
+then add A before the hold threshold, or press both together. The chord owns both releases.
+Triple B wakes a sleeping display. Modal screens keep their own controls.
+
+A discrete gesture can open any Launcher tile, start Talk, trigger a named Mac action or do
+nothing. Discrete Talk records until the next B press or its 30-second limit. Hold B can
+instead run Dictation, with release ending the hold. Named Mac actions go only to the selected
+live peer advertising `buttonActions` in its hello. [Controls](../../CONTEXT-ACTIONS.md#buttons--gestures) · [Wire format](../../../PROTOCOL.md#button-bindings)
 
 ### Requirement: Focus and resource ownership survive concurrent peers
 `logic/hosts.*` owns identity, validation, heartbeat, generation leases and transfer reclaim rules.
