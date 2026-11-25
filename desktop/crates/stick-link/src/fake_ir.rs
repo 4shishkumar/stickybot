@@ -202,6 +202,10 @@ const LAUNCHER_TILES: [(&str, char, bool); 8] = [
     ("quick", 'q', true),
     ("settings", 's', true),
 ];
+
+pub(crate) fn is_launcher_tile(id: &str) -> bool {
+    LAUNCHER_TILES.iter().any(|(name, _, _)| *name == id)
+}
 const LAUNCHER_DEFAULT: &str = "grapmfqs";
 
 /// `tiles=` (ids or letters, comma separated) -> the letters, with Quick settings and Settings

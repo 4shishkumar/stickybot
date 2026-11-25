@@ -2,14 +2,14 @@
 //
 // Button A (front) mirrors a key combo over Bluetooth: press = combo down,
 // release = combo up (single press = once, double = twice, hold = held).
-// Button B (side): click = Enter, double = unlock the Mac, hold = talk to the
+// Button B factory defaults: click = Enter, double = unlock the Mac, hold = talk to the
 // Mac agent (tools/mac-agent), triple = wake the screen / open the Launcher (2.5.1: a grid
 // of app tiles, launcher_session.h; its Settings tile is the settings menu).
 //
 // Context actions (2.6.0, logic/actions.h, docs/CONTEXT-ACTIONS.md): a screen can give the
 // buttons its own meaning, shown in a hint bar at its bottom. The reply view (the agent's
 // answer): A = next page, hold A = read it aloud / stop, tilt = scroll, B = close; A is not
-// the key combo there. Hold B (talk), double B (unlock) and triple B (Launcher) stay global.
+// the key combo there. The dashboard configures double B, triple B, hold B and B+A.
 //
 // Motion: lift = wake screen, face-down = standby, shake = Escape (or deny a
 // Claude prompt). Each can be turned off in the menu / settings page.
@@ -82,7 +82,10 @@ constexpr uint16_t COLOR_DIM  = 0x2104;
 enum class Mode { STATUS, MENU, WEB, GAME, LAUNCHER };
 
 static Mode       mode = Mode::STATUS;
-static bool       agentTalking = false;
+static bool       agentTalking = false, latchedTalk = false, bDictating = false;
+static bool       viewingLastReply = false;
+static buttons::Chord chord;
+static uint32_t   latchedAt = 0;
 static bool       swallowB = false;     // a B press that dismissed an event: ignore its click
 static uint32_t   swallowBUntil = 0;
 static uint32_t   agentShowUntil = 0, agentSeenAt = 0, talkEndedAt = 0, lastFrame = 0, promptAt = 0, pageAt = 0;
@@ -235,9 +238,9 @@ static uint8_t replyFlags() {
 
 static void drawReplyView() {
   ui::ReplyView v;
-  v.heard = buddy::agent().heard;
+  v.heard = buddy::lastAnswer().heard;
   const std::string& full = buddy::replyFull();
-  if (full.empty()) replyShort = buddy::agent().text.c_str();
+  if (full.empty()) replyShort = buddy::lastAnswer().text.c_str();
   v.text = full.empty() ? &replyShort : &full;
   v.top = replyPager.top;
   v.flags = replyFlags() & ~actions::PAGED;
@@ -252,9 +255,9 @@ static void render() {
     case Mode::STATUS:
       if (docked)                         ui::drawDock(readDash(), dockSide(), nightTime());
       else if (comboDown)                 ui::drawHolding(status.combo, aPath == wispr::Path::USB, wispr::streams(aPath));
-      else if (agentTalking)              ui::drawTalk(buddy::agentLinked());
+      else if (agentTalking)              ui::drawTalk(buddy::agentLinked(), latchedTalk);
       else if (millis() < agentShowUntil && agentSeenAt < talkEndedAt) ui::drawAgent("thinking", "", "");
-      else if (millis() < agentShowUntil && buddy::agent().state == "done") drawReplyView();
+      else if (millis() < agentShowUntil && (viewingLastReply || buddy::agent().state == "done")) drawReplyView();
       else if (millis() < agentShowUntil) ui::drawAgent(buddy::agent().state, buddy::agent().heard, buddy::agent().text);
       else                                ui::drawPage(page, readDash());
       break;
@@ -631,6 +634,64 @@ static void onLauncher(launcher::Action a, bool byHold) {
   dirty = true;
 }
 
+static void mappedGesture(buttons::Slot slot) {
+  const auto& binding = settings::buttonMap()[slot];
+  using D = actions::Do;
+  switch (binding.action) {
+    case D::UNLOCK: unlockMac(); break;
+    case D::LAUNCHER:
+      launcher::open();
+      mode = Mode::LAUNCHER;
+      ui::wake(B_SCREEN_MS);
+      break;
+    case D::OPEN_TILE:
+      launcher::open();
+      mode = Mode::LAUNCHER;
+      ui::wake(B_SCREEN_MS);
+      onLauncher(launcher::openTile(binding.tile), false);
+      break;
+    case D::LAST_REPLY:
+      if (buddy::lastAnswer().state != "done") {
+        showMessage("No reply yet", nullptr, COLOR_WARN);
+      } else {
+        viewingLastReply = true;
+        talkEndedAt = 0;
+        replyPager = reader::Pager{};
+        replyTilt.begin();
+        replyTiltAt = 0;
+        agentShowUntil = millis() + REPLY_IDLE_MS;
+        ui::wake(REPLY_IDLE_MS);
+      }
+      break;
+    case D::TALK:
+      if (mic::wisprStreaming()) break;
+      if (slot != buttons::Slot::HOLD && !buddy::agentLinked()) {
+        showMessage("Agent offline", "Open StickyBot on the Mac", COLOR_WARN);
+        break;
+      }
+      agentTalking = true;
+      latchedTalk = slot != buttons::Slot::HOLD;
+      latchedAt = millis();
+      if (buddy::agentLinked()) { mic::agentTalk(); sound::playListen(); }
+      else mic::agentEnd();
+      Log.event(diagnostics::Event::Mic);
+      ui::wake(B_SCREEN_MS);
+      break;
+    case D::COMBO:
+      mic::agentEnd();  // release any pre-roll before Bluetooth dictation takes the mic
+      comboPress();
+      bDictating = comboDown;
+      break;
+    case D::MAC_APP:
+    case D::QUICK:
+      if (!buddy::buttonAction(buttons::key(slot), binding.wire.c_str()))
+        showMessage("Mac action unavailable", "Open or update StickyBot", COLOR_WARN);
+      break;
+    default: break;
+  }
+  dirty = true;
+}
+
 // --- Serial ------------------------------------------------------------------------
 
 // Serial "screens": shows every screen with sample data (~3 s each), for design review:
@@ -886,7 +947,13 @@ void loop() {
     if (!B.isPressed()) ignoreBUntilRelease = false;
     bDown = bSingle = bDouble = bTriple = bHold = bClick = false;
   }
-  if (agentTalking && !B.isPressed()) {
+  if (bDictating && !B.isPressed()) {
+    comboRelease();
+    bDictating = false;
+  }
+  if (agentTalking && buttons::finishTalk(latchedTalk, bDown, B.isPressed(), buddy::agentLinked(), millis() - latchedAt)) {
+    if (latchedTalk && bDown) { swallowB = true; bDown = false; }
+    latchedTalk = false;
     agentTalking = false;
     mic::agentEnd();
     if (buddy::agentLinked()) sound::play(sound::Cue::SENT);  // plays once the mic has stopped
@@ -897,6 +964,7 @@ void loop() {
   }
   // New status from the agent: show it (and wake the screen)
   if (buddy::agentUpdated() != agentSeenAt) {
+    viewingLastReply = false;
     agentSeenAt = buddy::agentUpdated();
     const String& st = buddy::agent().state;
     if (st == "cancelled") {  // a quick press with no words: back to the normal screen, quietly
@@ -944,6 +1012,10 @@ void loop() {
     Log.event(diagnostics::Event::Settings);
   }
 
+  // An intervening modal screen takes ownership of any unfinished chord.
+  if (mode != Mode::STATUS || hid::pairingCode() || buddy::hasPrompt() || air::active() ||
+      events::active() || ir::screenActive() || faces::demoActive()) chord.pending = false;
+
   // A remote mode (air mouse / presenter / media, air.h) owns the buttons, the motion and
   // the screen; only a pairing request still shows (below, A accepts).
   {
@@ -980,9 +1052,9 @@ void loop() {
   // the request; back to Home. That click doesn't send Enter.
   // (2.6.0: what B and a shake do comes from the screen's action map, logic/actions.cpp)
   const bool agentScreen = mode == Mode::STATUS && agentShowUntil && millis() < agentShowUntil && !agentTalking;
-  const bool agentBusy = agentScreen && (agentSeenAt < talkEndedAt || buddy::agent().state == "thinking" ||
+  const bool agentBusy = agentScreen && !viewingLastReply && (agentSeenAt < talkEndedAt || buddy::agent().state == "thinking" ||
                                          buddy::agent().state == "working");
-  const bool replyView = agentScreen && !agentBusy && !comboDown && !docked && buddy::agent().state == "done";
+  const bool replyView = agentScreen && !agentBusy && !comboDown && !docked && (viewingLastReply || buddy::agent().state == "done");
   actions::Do agentAct = actions::Do::NONE;
   if (agentScreen) {
     const actions::Screen& scr = actions::screen(replyView ? actions::Id::REPLY : actions::Id::AGENT);
@@ -1056,8 +1128,8 @@ void loop() {
     }
     ui::drawPairing(code);
     ui::keepAwake();
-    if (aDown) hid::confirmPairing(true);
-    if (bDown) hid::confirmPairing(false);
+    if (aDown) { hid::confirmPairing(true); ignoreAUntilRelease = true; }
+    if (bDown) { hid::confirmPairing(false); swallowB = true; }
     delay(20);
     return;
   }
@@ -1093,10 +1165,12 @@ void loop() {
     bool ask = p.ask;  // (p is gone once answered)
     bool shake = mev == motion::Event::SHAKE && settings::shakeEscapes() && millis() - promptAt >= PROMPT_GUARD_MS;
     if (aDown) {
+      ignoreAUntilRelease = true;
       buddy::answer(prompt::decision(ask, prompt::Input::A));
       Log.event(diagnostics::Event::PromptAnswered);
       sound::play(sound::Cue::APPROVED);
     } else if (bDown || shake) {
+      if (bDown) swallowB = true;
       buddy::answer(prompt::decision(ask, bDown ? prompt::Input::B : prompt::Input::SHAKE));
       Log.event(diagnostics::Event::PromptAnswered);
       sound::play(sound::Cue::DENIED);
@@ -1207,6 +1281,20 @@ void loop() {
     dirty = true;
   }
 
+  // B first (or both in one sample) preserves the immediate A dictation press.
+  // Consume both releases before entering a tile: its first input must be a fresh press.
+  bool chordAllowed = mode == Mode::STATUS && !comboDown && !agentTalking && !ignoreAUntilRelease &&
+                      !ignoreBUntilRelease && !swallowB && millis() >= swallowBUntil;
+  auto chordStep = chord.update(chordAllowed, aDown, A.isPressed(), B.isPressed(), B.pressedFor(B_HOLD_MS));
+  bool chordFired = chordStep == buttons::ChordStep::FIRE;
+  if (chordStep != buttons::ChordStep::PASS) {
+    aDown = aUp = bDown = bHold = bClick = bSingle = bDouble = bTriple = false;
+    if (chordFired) {
+      swallowBUntil = millis() + 900;  // M5's delayed decision for the consumed B click
+      mic::agentEnd();
+    }
+  }
+
   // The reply view: A pages / reads aloud (not the key combo), tilting scrolls
   if (replyView && millis() < agentShowUntil) {
     const actions::Screen& scr = actions::screen(actions::Id::REPLY);
@@ -1268,38 +1356,24 @@ void loop() {
   switch (mode) {
     case Mode::STATUS:
     case Mode::WEB:
+      if (chordFired) { mappedGesture(buttons::Slot::CHORD); break; }
+      if (agentTalking || bDictating) break;
       if (aDown) comboPress();  // works with the screen off; doesn't wake it
       if (aUp) comboRelease();
-      if (bSingle) sendEnter("button B");  // works with the screen off; doesn't wake it
-      if (bDouble) unlockMac();
-      // Hold B = talk to the Mac agent. Recording starts on every B press
-      // (pre-roll) and is dropped again if it turns out to be a click.
-      if (bDown && !comboDown) mic::preRoll();
-      if (bHold && !comboDown) {
-        agentTalking = true;
-        if (buddy::agentLinked()) {
-          mic::agentTalk();
-          sound::playListen();  // "speak now" (the mic pauses ~0.2 s for it)
-        }
-        else mic::agentEnd();
-        Log.event(diagnostics::Event::Mic);
-        ui::wake(B_SCREEN_MS);
-        dirty = true;
-      }
+      if (bSingle) sendEnter("button B");
+      if (comboDown || chord.pending) break;
+      if (bDown && settings::buttonMap()[buttons::Slot::HOLD].action == actions::Do::TALK) mic::preRoll();
+      if (bHold) mappedGesture(buttons::Slot::HOLD);
       if (!B.isPressed() && !agentTalking) mic::agentEnd();  // a click: drop the pre-roll
-      if (bTriple && !comboDown) {
-        if (ui::wake(B_SCREEN_MS)) {
-          dirty = true;  // screen was off: this only wakes it
-        } else if (mode == Mode::STATUS) {  // the Launcher (2.5.1; Settings is one of its tiles)
-          launcher::open();
-          mode = Mode::LAUNCHER;
-          dirty = true;
-        } else {
-          if (devActive) web::hide();  // keep Wi-Fi for OTA + logs
+      if (bDouble) mappedGesture(buttons::Slot::DOUBLE);
+      if (bTriple) {
+        if (ui::wake(B_SCREEN_MS)) dirty = true;  // asleep: triple B only wakes it
+        else if (mode == Mode::WEB) {  // this screen owns triple B: close web settings
+          if (devActive) web::hide();
           else web::stop();
           mode = Mode::STATUS;
           dirty = true;
-        }
+        } else mappedGesture(buttons::Slot::TRIPLE);
       }
       break;
 

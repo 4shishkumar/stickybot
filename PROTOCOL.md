@@ -110,6 +110,7 @@ intentional command responses still return the requested data to their requester
 | `games` | | StickS3 2.5.0+: the games and their best scores (kept on the stick, NVS): `{"ok":true,"games":[{"id":"stack","title":"Stack","best":23,"tilt":false,"low":false},…]}` — `best` 0 = not played yet; `low`: lower is better (Reaction, milliseconds). See section 5, *Games* |
 | `ir` | `<op> ...` | StickS3 2.5.0+: the IR remote (see section 5, *IR remote*; state: `ir`) |
 | `launcher` | `tiles=<ids>` or `reset=1`, or none | StickS3 2.5.1+: the Launcher's tiles (triple-press B), in order; the ones left out are hidden. Ids: `games`, `remote`, `air`, `presenter`, `media`, `faces`, `quick`, `settings` (each id's first letter works too). `quick` and `settings` are always shown: left out, they're added at the end. Saved on the stick. Replies `{"ok":true,"launcher":"grapmfqs","tiles":"games,remote,air,presenter,media,faces,quick,settings"}`; errors `unknown tile: <name>`, `tile listed twice: <name>`, `no tiles`. Human form: `launcher [<ids>\|reset]` |
+| `buttons` | `b2=<action>&b3=<action>&ab=<action>&bh=<action>` | Replace the four global gesture bindings in one NVS write. Query-encode values. Replies with `{"ok":true,"buttons":{…}}`. Invalid mappings leave the previous table in place. |
 
 Responses that end in a restart include `"restarting":true`.
 
@@ -147,6 +148,33 @@ Errors: `@{"ok":false,"error":"<message>"}`.
 - StickS3 2.5.1+: `launcher`: the Launcher's tiles in order, one letter each (`"grapmfqs"` =
   games, remote, air, presenter, media, faces, quick, settings; a hidden tile is left out).
   Letters keep `@state` short (22 bytes); `@launcher` answers with the ids too.
+
+### Button bindings
+
+The optional `buttons` object in `@state` advertises support on the StickS3 and StickC Plus2.
+The dashboard reads this object from the selected stick before offering the editor.
+The default is `{"b2":"unlock","b3":"launcher","ab":"reply","bh":"talk"}`.
+
+| Key | Gesture | Action values |
+|---|---|---|
+| `b2`, `b3`, `ab` | Double B, triple B, A+B | `unlock`, `launcher`, `reply`, `talk`, `none`, `tile:<id>`, `app:<name>`, `quick:<name>` |
+| `bh` | Hold B | `talk`, `dictation` |
+
+Tile IDs are the eight full IDs listed under `@launcher`. Named actions take a Mac application name
+or the exact name of a saved quick command that can run without arguments. A name is at most 32
+UTF-8 bytes. Path separators and control characters are invalid. For example, swapping the two
+B tap gestures while keeping the chord and hold at their defaults takes one command:
+
+```
+@buttons b2=launcher&b3=unlock&ab=reply&bh=talk
+```
+
+A Mac advertises `"buttonActions":true` in its hello to receive named actions. A physical press
+sends one message to the active Mac, such as
+`{"src":"agent","evt":"button_action","gesture":"b2","action":"app:Notes"}`.
+The Mac verifies the originating stick still has that binding before running the local action.
+Opening the editor and saving a binding do not execute it. Earlier firmware omits `buttons`,
+and an earlier Mac app can still use the stick's built-in actions.
 
 ## 4. Wi-Fi settings page + OTA
 

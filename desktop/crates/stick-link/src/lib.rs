@@ -10,6 +10,7 @@
 //! - [`fake`]: a stick in memory, for tests and `--fake-stick`.
 
 pub mod adpcm;
+pub mod buttons;
 pub mod fake;
 pub mod fake_ir;
 mod link;

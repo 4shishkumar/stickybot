@@ -48,6 +48,7 @@ static hosts::Transfer bulk;
 static hosts::Lease speakerOwner, micOwner, irOwner;
 static uint32_t speakerSeen = 0;
 static uint16_t requestPeer = hosts::NONE;
+static uint16_t buttonHost = hosts::NONE;  // negotiated by the selected peer on this connection
 static bool shared = false;
 static std::string bondKey(const NimBLEConnInfo& info) {
   auto address = info.getIdAddress();
@@ -287,6 +288,7 @@ static uint32_t speakAskedAt_ = 0;        // asked on the stick, the agent hasn'
 static uint32_t viewChanges_ = 0;
 
 static void clearActiveView() {
+  buttonHost = hosts::NONE;
   agentSeen = agentAt = lastHeard = 0;
   wmic_ = wready_ = speaks_ = speaking_ = false;
   readyPending_ = false;
@@ -374,6 +376,7 @@ void peerDisconnected(uint16_t handle) {
   std::lock_guard<std::recursive_mutex> lock(peersMutex);
   if (shared && (handle == peers.selected() || handle == bulk.owner.handle ||
       handle == speakerOwner.handle || handle == micOwner.handle)) cancelOwned = true;
+  if (buttonHost == handle) buttonHost = hosts::NONE;
   peers.disconnect(handle);
   for (auto& in : inboxes) if (in.handle == handle) in = {};
   hostsChanged = true;
@@ -405,6 +408,7 @@ static void handleAgent(JsonDocument& d) {
   // without this the stick would only notice when the hellos stop (AGENT_TIMEOUT_MS).
   if (d["bye"] == true) {
     if (agentSeen) Log.event(diagnostics::Event::Link);
+    buttonHost = hosts::NONE;
     agentSeen = 0;
     wmic_ = wready_ = false;
     speaking_ = false;
@@ -414,6 +418,7 @@ static void handleAgent(JsonDocument& d) {
   }
   bool foreground = !shared || requestPeer == peers.selected();
   bool fresh = foreground && !agentLinked();  // a new agent (or it was gone): tell it where we are
+  if (fresh) buttonHost = hosts::NONE;
   if (foreground) agentSeen = millis();
   if (fresh) viewChanges_++;  // back (Resume): the screens show it at once
   if (d["reply"].is<JsonObject>()) {  // a part of the full reply (after "done")
@@ -472,6 +477,7 @@ static void handleAgent(JsonDocument& d) {
     wmic_ = on;
   }
   if (d["hello"].is<int>()) {
+    if (foreground) buttonHost = d["buttonActions"] == true ? requestPeer : hosts::NONE;
     wready_ = d["wready"] | false;  // agents before 1.7.1 don't send it
     speaks_ = d["speak"] | false;   // ... before 2.6.0
   }
@@ -547,8 +553,6 @@ static void handleAgent(JsonDocument& d) {
   if (agent_.state == "done") {
     lastAnswer_ = agent_;  // errors don't replace the last answer
     reply_.begin(d["rid"] | 0u, d["parts"] | 0);  // the full reply follows in this many parts
-  } else if (agent_.state == "thinking") {
-    reply_.begin(0, 0);
   }
   agentAt = millis();
 }
@@ -587,7 +591,7 @@ static void handle(const String& l) {
     send(hostState(), false);
     if (shared) {
       JsonDocument clean; clean["src"] = "agent";
-      for (const char* key : {"hello", "wmic", "wready", "speak", "t", "tz", "wx", "home", "world"})
+      for (const char* key : {"hello", "wmic", "wready", "speak", "buttonActions", "t", "tz", "wx", "home", "world"})
         if (!d[key].isNull()) clean[key] = d[key];
       d = clean;
     }
@@ -925,6 +929,17 @@ void fastData() {
   NimBLEServer* server = NimBLEDevice::getServer();
   server->setDataLen(h, 251);  // long link-layer packets (usually on already)
   server->updatePhy(h, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK, 0);  // 2M PHY if the Mac agrees
+}
+
+bool buttonAction(const char* gesture, const char* action) {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  if (requestPeer != hosts::NONE || !agentLinked() || buttonHost == hosts::NONE ||
+      buttonHost != hid::selectedHost()) return false;
+  JsonDocument d;
+  d["src"] = "agent"; d["evt"] = "button_action";
+  d["gesture"] = gesture; d["action"] = action;
+  String line; serializeJson(d, line); send(line);
+  return true;
 }
 
 void agentCancel() { send("{\"src\":\"agent\",\"evt\":\"cancel\"}"); }

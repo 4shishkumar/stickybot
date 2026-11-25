@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "settings.h"
 #include "ui_draw.h"
 #include "faces/faces.h"
 #include <M5Unified.h>
@@ -866,7 +867,7 @@ void drawClassicHome(const Dash& d) {
   } else if (!d.agentLinked) {
     v = CardView{}; v.own = true; v.kind = "hello"; v.a = "Agent offline"; v.b = "A still dictates";
   } else if (!v.kind.length() || v.kind == "face") {
-    v = CardView{}; v.own = true; v.kind = "hello"; v.a = "Hold B to ask"; v.b = "A dictates";
+    v = CardView{}; v.own = true; v.kind = "hello"; v.a = buttons::talkHint(settings::buttonMap()); v.b = "A dictates";
   }
   homeCard(v);
 }
@@ -953,7 +954,7 @@ static void drawAgentPage(const Dash& d) {
   if (!d.agentLinked) {
     moodScreen(Mood::OFFLINE, "Agent offline", "start it on the Mac: stickybot start", "", true, "Agent", &d, 10);
   } else if (!d.agentHeard.length() && !d.agentText.length()) {
-    moodScreen(Mood::IDLE, "Hold B and speak", "\"open PR 1234\"  -  \"what's on my calendar?\"", "", true, "Agent", &d,
+    moodScreen(Mood::IDLE, buttons::talkHint(settings::buttonMap()), "\"open PR 1234\"  -  \"what's on my calendar?\"", "", true, "Agent", &d,
                10);
   } else {
     moodScreen(Mood::IDLE, "", "\"" + d.agentHeard + "\"", d.agentText, true, "Agent", &d, 10);
@@ -1056,14 +1057,14 @@ static std::vector<std::vector<int>> hintRows(const std::vector<actions::Hint>& 
 }
 
 static int hintHeight(actions::Id id, uint8_t flags) {
-  auto rows = hintRows(actions::hints(actions::screen(id), flags));
+  auto rows = hintRows(actions::hints(actions::screen(id), flags, &settings::buttonMap()));
   return rows.empty() ? 0 : (int)rows.size() * HINT_ROW + 5;
 }
 
 // Drawn last, over the bottom of the screen; returns its height.
 static int hintBar(actions::Id id, uint8_t flags, uint16_t bg = GROUND, uint16_t accent = AGENT);
 static int hintBar(actions::Id id, uint8_t flags, uint16_t bg, uint16_t accent) {
-  auto h = actions::hints(actions::screen(id), flags);
+  auto h = actions::hints(actions::screen(id), flags, &settings::buttonMap());
   auto rows = hintRows(h);
   if (rows.empty()) return 0;
   const int hh = (int)rows.size() * HINT_ROW + 5, y0 = H - hh;
@@ -1092,13 +1093,14 @@ static int hintBar(actions::Id id, uint8_t flags, uint16_t bg, uint16_t accent) 
 }
 
 // Button B held: talking to the agent.
-void drawTalk(bool linked) {
+void drawTalk(bool linked, bool latched) {
+  const uint8_t flags = latched ? actions::LATCHED : 0;
   wide();
   if (!linked) {
     moodScreen(Mood::OFFLINE, "Agent offline", "start it on the Mac", "", false, "", nullptr, 0);
   } else {
-    moodScreen(Mood::LISTEN, "Listening", "", "", false, "", nullptr, hintHeight(actions::Id::TALK, 0));
-    hintBar(actions::Id::TALK, 0);
+    moodScreen(Mood::LISTEN, "Listening", "", "", false, "", nullptr, hintHeight(actions::Id::TALK, flags));
+    hintBar(actions::Id::TALK, flags);
   }
   canvas.pushSprite(0, 0);
 }

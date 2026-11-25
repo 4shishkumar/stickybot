@@ -99,6 +99,8 @@ class Stick:
             if reply is not None:
                 self._ble_cache = (0.0, None)  # settings may have changed
                 return {"ok": bool(reply.get("ok", True)), "via": "ble", "reply": reply, "error": reply.get("error")}
+        if line.split(maxsplit=1)[0] == "@buttons":
+            return {"ok": False, "via": "ble", "reply": None, "error": "The selected stick did not answer"}
         ports = [p for p in flasher.espressif_ports() if not flasher.in_bootloader(p)]
         if self.flashing:
             return {"ok": False, "via": None, "reply": None, "error": "the stick is being flashed"}

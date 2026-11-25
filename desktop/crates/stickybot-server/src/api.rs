@@ -780,10 +780,16 @@ async fn stick_proto(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json
         Err(e) => return axum::Json(json!({"ok": false, "via": null, "reply": null, "error": e})),
     };
     let ble = st.link.connected();
-    if ble && let Some(reply) = st.link.request(line).await {
+    let generation = st.link.generation();
+    if ble && let Some(reply) = st.link.with_generation(generation, st.link.request(line)).await {
         let ok = reply.get("ok").and_then(Value::as_bool).unwrap_or(true);
         let error = reply.get("error").cloned().unwrap_or(Value::Null);
         return axum::Json(json!({"ok": ok, "via": "ble", "reply": reply, "error": error}));
+    }
+    // An unanswered mapping write may already have succeeded. Never retry it on a different transport.
+    if line.split_ascii_whitespace().next() == Some("@buttons") {
+        return axum::Json(json!({"ok":false, "via":"ble", "reply":null,
+            "error":"Connect the selected stick over Bluetooth and reload its button mappings."}));
     }
     // over USB (firmware_api.py `Stick.run`): when Bluetooth isn't there or didn't answer
     let hardware_id = st.host_state.lock().unwrap()["deviceId"].as_str().map(str::to_owned);
@@ -1793,6 +1799,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lost_button_save_never_writes_to_another_usb_stick() {
+        let (app, st, fake) = app("button-save-usb", true).await;
+        let usb = crate::usb::FakeUsb::stick("/dev/cu.other", "2.9.0");
+        st.usb.set_backend(usb.clone());
+        fake.set_silent(true);
+        let line = "@buttons b2=launcher&b3=unlock&ab=reply&bh=talk";
+        let (_, reply, _) =
+            call(&app, req("POST", "/api/stick/proto", Some(json!({"line":line})), Some(&st.token))).await;
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["via"], "ble");
+        assert!(usb.lines.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn usb_flash_runs_esptool_as_a_job() {
         let (app, st, _) = app("flash", false).await;
         let usb = crate::usb::FakeUsb::stick("/dev/cu.usbmodem3", "2.1.0");
@@ -1970,6 +1990,7 @@ mod tests {
             assert!(w["pet"].get(k).is_some(), "{k}");
         }
         assert_eq!(h["wready"], true);
+        assert_eq!(h["buttonActions"], true);
         assert_eq!(h["speak"], true); // the stick's reply view may ask us to read aloud (2.6.0)
         assert!(h.get("wx").is_none());
         // with weather (stick-safe place name)

@@ -4,7 +4,8 @@ The stick has two buttons (A on the front, B on the side) and a motion sensor. T
 much, so a screen can give them its own meaning, and says so in a hint bar at its bottom.
 This page lists every screen's controls today and proposes more screen-specific ones.
 
-- **Part 1** is what firmware 2.6.0 does (implemented).
+- **Buttons & gestures** describes the configurable mappings and the defaults.
+- **Part 1** records the screen controls introduced in firmware 2.6.0.
 - **Part 2** is a proposal: nothing in it is built yet.
 
 ## How it works (2.6.0)
@@ -17,21 +18,29 @@ The hint bar is made from the same table, so the hints can't drift from what the
 `lookup(screen, input, flags)` returns `NONE` for inputs a screen doesn't claim, and the caller
 then does what that input always does. That is how the global gestures stay global.
 
-**Global gestures** (the same on every screen that doesn't own the buttons outright: games,
-the remotes, the Launcher, the settings menu, an approval):
+## Buttons & gestures
 
-| Input | Action |
-|---|---|
-| hold B | talk to the Mac agent (from Home, the agent screens and the reply) |
-| double B | type the Mac password (unlock) |
-| triple B | wake the screen; awake: the Launcher |
-| shake | Escape on the Mac (off in settings); on an agent screen it closes / cancels instead |
-| lift | wake the screen |
-| face down 3 s | standby |
+With a connected stick that supports button mappings, open **Settings → Buttons & gestures** in
+the Mac dashboard. Select actions and save them to that stick. To swap the two tap shortcuts,
+set **Double-press B** to **Launcher** and **Triple-press B** to **Unlock Mac**.
 
-The screens that differ from these are marked **differs** in the tables.
+| Gesture | Factory action | Other choices |
+|---|---|---|
+| Double B | Unlock Mac | Launcher, any Launcher tile, Mac app, saved quick command, last reply, Talk, Nothing |
+| Triple B | Launcher | Same choices, including Unlock Mac |
+| A+B | Reopen last reply | Same choices |
+| Hold B | Talk while held | Dictation while held |
 
-## Part 1: today (firmware 2.6.0)
+For A+B, press B and add A before B becomes a hold. You can also press them together.
+A on its own still starts dictation immediately. If Talk is assigned to a tap or chord,
+press B to finish recording. A hold ends when B is released.
+
+Mappings apply on screens that accept global gestures. Games, the Launcher, settings,
+remote modes and approval prompts keep their own controls. Triple B still wakes a sleeping
+display. Hint labels follow the mapping on screens that show them. Shake, lift and standby
+keep their existing behavior.
+
+## Part 1: screen controls (2.6.0 baseline)
 
 Abbreviations: **A** = a click of A, **hold A** = held past 0.5 s, **B** = one click of B
 (decided after the double-click window), **2×B / 3×B** = double / triple click, **hold B** =
@@ -46,7 +55,7 @@ held past 0.6 s, **A+B** = both pressed together.
 | 2×B | unlock the Mac | |
 | 3×B | the Launcher | 3×B apps |
 | hold B | talk to the agent | hold B talk |
-| A+B | nothing | |
+| A+B | reopen the last reply on firmware with button mappings | A+B reply |
 | tilt | the eyes follow it (faces) | |
 | shake | Escape + a face toy | |
 | flick L/R | pages: Home / Agent / Status | |
@@ -119,11 +128,11 @@ These own the buttons outright (their own code, their own hints):
 
 Principles:
 
-1. **Hold B is always talk** wherever the screen doesn't own the buttons outright (games,
-   remotes, menus, approvals keep theirs). A talk from any context should get that context
+1. **Hold B defaults to Talk** outside screens that own the buttons. Keep the configured
+   hold action in global contexts. A talk from any context should get that context
    (see *talking in context* below).
-2. **A+B is the free chord.** Outside the remotes it does nothing today. It is the natural
-   "screen action" key: one per screen, always shown in the hint bar.
+2. **A+B can be a screen action** on screens with their own controls. Show the local action
+   in the hint bar and use the configured binding on screens with global controls.
 3. **Every screen shows its hints.** The other screens move onto the action tables, so their
    hints come from the same place as their buttons.
 4. **A stays the key combo on Home.** Dictation is the stick's first job; only screens that
@@ -131,7 +140,7 @@ Principles:
 
 | Screen | Today | Proposed |
 |---|---|---|
-| **Home** | A combo, B Enter, 2×B unlock, 3×B Launcher, hold B talk, shake Esc, flick pages | **A+B: reopen the last reply** (the reply view, from the stored answer). With media playing (below): the card shows the track; **A+B: play / pause** instead, and the hint says so. Nothing else changes. |
+| **Home** | A combo, B Enter, 2×B unlock, 3×B Launcher, hold B talk, shake Esc, flick pages | With media playing (below): the card shows the track; **A+B: play / pause** instead, and the hint says so. Nothing else changes. |
 | **Reply** | A next, hold A listen / stop, tilt scroll, B close, hold B ask | **A+B: copy the answer** to the Mac's clipboard (`{"evt":"copy"}`, the Mac app sets the pasteboard) or "send to the open app" (types it); **2×A: previous page** (costs a click delay on A; maybe only with long replies). Hold B: the follow-up carries "about your last answer" so Claude keeps the thread (it already does with the session; make it explicit in the hint: "hold B: follow up"). |
 | **Agent working** | B / shake cancel | **hold A: listen** to the answer so far (the same speak path, `what:"progress"`); **A+B: open on the Mac** (the Claude session or terminal in front). |
 | **Approval** | A yes, B no, shake deny | **hold A: always allow this tool** (the hook's `allow` with "remember" if Claude Code offers it; else "yes for this session"); **A+B: show the whole command** (the reply view with the hint text, scrollable: approvals cut long commands today); **hold B: answer by voice** ("yes but only in src/"), sent as the decision's message. |

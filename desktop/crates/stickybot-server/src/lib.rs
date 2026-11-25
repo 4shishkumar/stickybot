@@ -10,6 +10,7 @@ pub mod approvals;
 mod assistant;
 pub mod brain;
 pub mod brains;
+mod buttons;
 pub mod clips;
 pub mod commands;
 pub mod config;

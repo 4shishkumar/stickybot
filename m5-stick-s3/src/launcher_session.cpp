@@ -150,7 +150,12 @@ Action clickB() {
     case Screen::GRID: break;
   }
   if (!layout_.n) return Action::NONE;
-  const Tile t = layout_.tiles[sel < layout_.n ? sel : 0];
+  return openTile(layout_.tiles[sel < layout_.n ? sel : 0]);
+}
+
+Action openTile(Tile t) {
+  touch();
+  sel = startAt(layout_, t);
   settings::saveLauncherLast(info(t).letter);
   Log.event(diagnostics::Event::Launcher);
   switch (t) {

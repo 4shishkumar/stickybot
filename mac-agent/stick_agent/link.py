@@ -82,22 +82,25 @@ class Link:
     async def send(self, msg: dict):
         if not self.connected:
             return False
+        client = self.client
         data = (json.dumps(msg, separators=(",", ":")) + "\n").encode()
         try:
             async with self._write_lock:
                 for i in range(0, len(data), CHUNK):
-                    await self._write(data[i:i + CHUNK])
+                    if self.client is not client:
+                        return False
+                    await self._write(client, data[i:i + CHUNK])
             return True
         except Exception as e:  # noqa: BLE001 — link dropped mid-write
             log.warning("send failed (%s, %d bytes): %s", next(iter(msg), "?"), len(data), e)
             return False
 
-    async def _write(self, part, tries=4):
+    async def _write(self, client, part, tries=4):
         """One chunk; "Insufficient Resource" means the stick's Bluetooth buffers are busy
         for a moment (a long reply going out): wait and send it again."""
         for n in range(tries):
             try:
-                return await self.client.write_gatt_char(RX, part, response=True)
+                return await client.write_gatt_char(RX, part, response=True)
             except Exception as e:  # noqa: BLE001
                 if "Insufficient Resource" not in str(e) or n == tries - 1:
                     raise
@@ -183,7 +186,8 @@ class Link:
                 continue
             self.on_state("searching")
             try:
-                dev = await BleakScanner.find_device_by_address(self.target["address"], timeout=10)
+                target = self.target
+                dev = await BleakScanner.find_device_by_address(target["address"], timeout=10)
                 if dev is None:
                     await asyncio.sleep(3)
                     continue
@@ -195,7 +199,13 @@ class Link:
                                        disconnected_callback=lambda _, ev=disconnected: ev.set()) as c:
                     self.client = c
                     self.mtu = c.mtu_size
-                    await c.start_notify(TX, self._on_tx)
+                    self._buf.clear()
+
+                    def receive(sender, data, client=c, selected=target, gone=disconnected):
+                        if self.client is client and self.target is selected and not self.paused and not gone.is_set():
+                            self._on_tx(sender, data)
+
+                    await c.start_notify(TX, receive)
                     await c.start_notify(AUDIO, lambda _, d: self.on_audio(bytes(d)))
                     log.info("connected to %s (MTU %d)", self.target.get("name"), self.mtu)
                     self.on_state("connected")

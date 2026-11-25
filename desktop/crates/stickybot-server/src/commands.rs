@@ -425,7 +425,15 @@ impl Apps {
 
     /// Freeze the installed bundle path before requesting permission. Never launch by fuzzy name.
     pub fn resolve(&self, spoken: &str) -> Option<String> {
-        let name = self.find(spoken)?;
+        self.bundle_path(&self.find(spoken)?)
+    }
+
+    /// A configured physical button names one installed app; speech aliases and fuzzy matches don't apply.
+    pub(crate) fn resolve_exact(&self, name: &str) -> Option<String> {
+        self.bundle_path(self.list().get(&name.to_lowercase())?)
+    }
+
+    fn bundle_path(&self, name: &str) -> Option<String> {
         if self.fixed.is_some() {
             return Some(format!("/Applications/{name}.app"));
         }

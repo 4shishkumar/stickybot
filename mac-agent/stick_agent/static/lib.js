@@ -53,13 +53,13 @@ export const post = (path, body) => api(path, {method: "POST", body: JSON.string
 export const put = (path, body) => api(path, {method: "PUT", body: JSON.stringify(body || {})});
 
 // Runs a stick protocol command ("@state", "@brightness pct=60") over Bluetooth or USB.
-export async function proto(action, args) {
+export async function proto(action, args, target = deviceApi()) {
   let line = "@" + action;
   if (args) {
     const q = Object.entries(args).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
     if (q) line += " " + q;
   }
-  return post("/api/stick/proto", {line});
+  return target.post("/api/stick/proto", {line});
 }
 
 // h("div", {class: "x", onclick: fn}, "text", childNode, [more])

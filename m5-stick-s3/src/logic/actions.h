@@ -5,13 +5,14 @@
 // A binding can depend on the screen's state (flags): the reply view's "A: next" only with
 // more than one page, "hold A: listen" only when the Mac agent can speak, "stop" while it does.
 //
-// The global gestures stay the same everywhere they aren't listed: hold B = talk to the agent,
-// double B = unlock the Mac, triple B = the Launcher, shake = Escape.
+// The table in logic/button_map.h sets the global gestures on screens that accept them.
 #pragma once
 #include <stdint.h>
 #include <string>
 #include <vector>
 #include "text.h"
+
+namespace buttons { struct Table; }
 
 namespace actions {
 
@@ -23,6 +24,7 @@ enum class In : uint8_t {
   B_DOUBLE,
   B_TRIPLE,
   B_HOLD,
+  CHORD,     // B down, then A (before B hold)
   RELEASE,   // the held button let go (talk: send)
   TILT,      // tipped forward / back
   SHAKE,
@@ -46,6 +48,7 @@ enum class Do : uint8_t {
   CLOSE,        // back to Home
   CANCEL,       // drop the request and close
   SEND,         // the talk goes to the agent
+  LAST_REPLY, OPEN_TILE, MAC_APP, QUICK,
   COUNT
 };
 
@@ -54,6 +57,7 @@ enum Flag : uint8_t {
   PAGED    = 1 << 0,  // the text is longer than the screen
   SPEECH   = 1 << 1,  // the Mac agent can read it aloud
   SPEAKING = 1 << 2,  // ... and does right now
+  LATCHED  = 1 << 4,  // tap-to-talk: a B press sends
   BUSY     = 1 << 3,  // the agent is still on the request
 };
 
@@ -77,13 +81,13 @@ enum class Id : uint8_t { HOME, TALK, AGENT, REPLY, COUNT };
 const Screen& screen(Id id);
 // The action for this input on this screen in this state (NONE = the screen doesn't use it:
 // the caller does what it always did).
-Do lookup(const Screen& s, In in, uint8_t flags);
+Do lookup(const Screen& s, In in, uint8_t flags, const buttons::Table* global = nullptr);
 
 struct Hint {
   std::string key, label;
   bool        accent;  // the reply's listen / stop: drawn as a highlighted chip
 };
-std::vector<Hint> hints(const Screen& s, uint8_t flags);
+std::vector<Hint> hints(const Screen& s, uint8_t flags, const buttons::Table* global = nullptr);
 
 // Hints laid out in rows no wider than maxW (each hint "key label", `gap` px between them):
 // greedy, in order; hints that don't fit in maxRows are left out (the table lists the most

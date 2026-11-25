@@ -1,0 +1,39 @@
+id: ezy9
+name: 261125-ezy9-configurable-stick-buttons
+created: 2026-11-25T17:49:23Z
+created_by: Ashish Kumar
+change_type: feat
+issues: []
+progress:
+    intake: done
+    apply: active
+    review: pending
+    hydrate: pending
+    ship: pending
+    review-pr: pending
+plan:
+    generated: true
+    task_count: 6
+    acceptance_count: 4
+    acceptance_completed: 0
+confidence:
+    certain: 3
+    confident: 0
+    tentative: 0
+    unresolved: 0
+    score: 5.0
+    fuzzy: true
+    dimensions:
+        signal: 96.0
+        reversibility: 95.0
+        competence: 96.0
+        disambiguation: 97.7
+stage_metrics:
+    intake: {started_at: "2026-11-25T17:49:23Z", driver: fab-new, iterations: 1, completed_at: "2026-11-25T17:49:50Z"}
+    apply: {started_at: "2026-11-25T17:49:50Z", driver: fab-ff, iterations: 1}
+prs: []
+base_branch: main
+change_type_source: explicit
+# base_branch: written by /git-branch or /fab-new when the change's branch is created (no placeholder here).
+# true_impact: lazily created on first stage-finish that computes it (no placeholder here).
+last_updated: 2026-11-25T17:50:33Z

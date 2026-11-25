@@ -12,6 +12,10 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- Choose what double B, triple B, A+B and hold B do in **Settings → Buttons & gestures**.
+  Save a different layout on each stick, including shortcuts to stick apps, Mac apps and saved quick commands.
+
 ## [2.8.0] - 2026-11-25
 
 ### Added
