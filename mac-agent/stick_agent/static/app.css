@@ -436,3 +436,8 @@ body.install-mode .page { max-width: 780px; margin: 0 auto; padding-top: 28px; }
 .mic-row { gap: 8px; align-items: center; flex-wrap: wrap; }
 .mic-level { flex: 1; min-width: 80px; height: 8px; border-radius: 4px; background: var(--line-strong); overflow: hidden; }
 .mic-level-bar { height: 100%; border-radius: 4px; background: var(--ok); transition: width .08s linear; }
+
+/* Settings → Memory */
+.memory-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.memory-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 8px; }
+.memory-row .memory-text { flex: 1; overflow-wrap: anywhere; }

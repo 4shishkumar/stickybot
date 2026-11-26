@@ -63,6 +63,7 @@ impl Profile {
             Self::Denied => false,
             Self::Assistant => {
                 crate::assistant::TOOLS.contains(&tool)
+                    || crate::memory::TOOLS.contains(&tool)
                     || matches!(
                         tool,
                         "ask"

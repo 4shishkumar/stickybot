@@ -5,6 +5,7 @@ import {componentsPanel} from "../components.js";
 import {mcpPanel} from "../mcp.js";
 import {updatesPanel} from "../updates.js";
 import {macVoiceFields} from "../mac_voice.js";
+import {memoryPanel} from "../memory.js";
 
 export const title = "Settings";
 export const subtitle = "How the agent behaves. Changes apply right away once you save.";
@@ -12,6 +13,7 @@ export const subtitle = "How the agent behaves. Changes apply right away once yo
 const SOURCES = [["facts", "Fun facts"], ["hn", "Hacker News"], ["onthisday", "On this day"], ["wikipedia", "Wikipedia featured article"]];
 let root = null, cfg = null, unsub = null, unsubBrain = null;
 let macVoice = null;
+let memory = null;
 let renderVersion = 0;
 
 export function actions() {
@@ -37,6 +39,8 @@ export async function render(el) {
   const c = cfg;
   macVoice?.leave();
   macVoice = Object.hasOwn(c, "mac_voice_enabled") ? macVoiceFields() : null;
+  memory?.leave();
+  memory = Object.hasOwn(c, "memory_on") ? memoryPanel() : null;
   const voice = h("select", {id: "voice"}, h("option", {value: ""}, "System voice"));
   get("/api/voices").then(vs => {
     if (!Array.isArray(vs)) return;
@@ -45,6 +49,7 @@ export async function render(el) {
   root.append(
     card("Your stick", stickPicker()),
     card("Brain", brainPanel(c), brainStatus()),
+    memory ? card("Memory", memory.el) : null,
     card("Claude Code",
       field("Model", h("select", {id: "model"}, [["sonnet", "Sonnet — fast (recommended)"], ["opus", "Opus — smartest, slower"], ["haiku", "Haiku — fastest"]]
         .map(([v, l]) => h("option", {value: v, selected: c.model === v}, l)))),
@@ -110,6 +115,8 @@ export function leave() {
   root = null;
   macVoice?.leave();
   macVoice = null;
+  memory?.leave();
+  memory = null;
   if (unsub) unsub();
   if (unsubBrain) unsubBrain();
   unsub = unsubBrain = null;

@@ -38,6 +38,11 @@ pub const PORTED: &[&str] = &[
     "GET /api/mac-voice",
     "PUT /api/mac-voice",
     "POST /api/mac-voice/test",
+    "GET /api/memory",
+    "POST /api/memory",
+    "PUT /api/memory",
+    "PUT /api/memory/{id}",
+    "DELETE /api/memory/{id}",
     "POST /api/stick/proto",
     "GET /api/scan",
     "POST /api/pause",
@@ -309,6 +314,8 @@ fn session_router(state: Arc<AppState>) -> Router {
         .route("/api/hosts/select", post(hosts_select))
         .route("/api/events", get(events))
         .route("/api/config", get(get_config).put(put_config))
+        .route("/api/memory", get(memory_list).post(memory_add).put(memory_settings))
+        .route("/api/memory/{id}", axum::routing::put(memory_edit).delete(memory_delete))
         .route("/api/stick/proto", post(stick_proto))
         .route("/api/scan", get(scan))
         .route("/api/pause", post(pause))
@@ -389,7 +396,7 @@ async fn guard(State(st): State<Arc<AppState>>, mut req: Request, next: Next) ->
     }
     let mcp = req.uri().path() == "/mcp"
         || (req.uri().path().starts_with("/api/devices/") && req.uri().path().ends_with("/mcp")); // every method; MCP clients send the token as a bearer token
-    if mcp || req.uri().path().starts_with("/api/mac-voice") || (req.method() != Method::GET && req.method() != Method::HEAD) {
+    if mcp || req.uri().path().starts_with("/api/mac-voice") || req.uri().path().starts_with("/api/memory") || (req.method() != Method::GET && req.method() != Method::HEAD) {
         let h = |k: &str| req.headers().get(k).map(|v| v.as_bytes()).unwrap_or(b"");
         let bearer = h("authorization").strip_prefix(b"Bearer ").unwrap_or(b"");
         let voice = req
@@ -910,6 +917,75 @@ async fn history(State(st): State<Arc<AppState>>, Query(q): Query<HistoryQuery>)
 }
 
 /// A typed request (`{"text"}`), handled like a spoken one.
+/// Settings → Memory: the facts (newest first), and whether memory is on / shared with cloud brains.
+/// Everything here needs the dashboard token, reads included: they're facts about the person.
+async fn memory_list(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
+    let root = st.devices.root().unwrap_or_else(|| st.clone());
+    let cfg = root.cfg.lock().unwrap().clone();
+    let mut items = crate::memory::load(&root.paths.home);
+    items.reverse();
+    axum::Json(json!({"on": crate::memory::enabled(&cfg),
+        "cloud": cfg.get("memory_cloud").and_then(Value::as_bool).unwrap_or(true),
+        "max": crate::memory::MAX_ITEMS, "max_text": crate::memory::MAX_TEXT, "items": items}))
+}
+
+/// `{"on"?, "cloud"?}`: memory on or off for the whole app, and whether the cloud brains get it.
+async fn memory_settings(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    let root = st.devices.root().unwrap_or_else(|| st.clone());
+    let b = body_obj(&body);
+    let mut changed = Map::new();
+    for (key, name) in [("on", "memory_on"), ("cloud", "memory_cloud")] {
+        match b.get(key) {
+            None => {}
+            Some(Value::Bool(v)) => {
+                changed.insert(name.to_string(), json!(v));
+            }
+            Some(_) => return err(StatusCode::BAD_REQUEST, &format!("{key} must be true or false")),
+        }
+    }
+    let saved = {
+        let mut cfg = root.cfg.lock().unwrap();
+        let mut next = cfg.clone();
+        next.extend(changed);
+        crate::config::save(&root.paths, &next).map(|()| *cfg = next)
+    };
+    if saved.is_err() {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the memory settings");
+    }
+    memory_list(State(st)).await.into_response()
+}
+
+async fn memory_add(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    let root = st.devices.root().unwrap_or_else(|| st.clone());
+    let text = body_obj(&body).get("text").and_then(Value::as_str).unwrap_or("").to_string();
+    match crate::memory::add(&root.paths.home, &text, "dashboard") {
+        Ok(item) => axum::Json(item).into_response(),
+        Err(e) => err(StatusCode::BAD_REQUEST, &e),
+    }
+}
+
+async fn memory_edit(
+    State(st): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    body: Bytes,
+) -> Response {
+    let root = st.devices.root().unwrap_or_else(|| st.clone());
+    let text = body_obj(&body).get("text").and_then(Value::as_str).unwrap_or("").to_string();
+    match crate::memory::update(&root.paths.home, &id, &text) {
+        Ok(item) => axum::Json(item).into_response(),
+        Err(e) => err(StatusCode::BAD_REQUEST, &e),
+    }
+}
+
+async fn memory_delete(State(st): State<Arc<AppState>>, axum::extract::Path(id): axum::extract::Path<String>) -> Response {
+    let root = st.devices.root().unwrap_or_else(|| st.clone());
+    match crate::memory::remove(&root.paths.home, &[id]) {
+        Ok(0) => err(StatusCode::NOT_FOUND, "No such memory."),
+        Ok(_) => axum::Json(json!({"ok": true})).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
 async fn ask(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
     let text = body_obj(&body).get("text").and_then(Value::as_str).unwrap_or("").trim().to_string();
     if text.is_empty() {
@@ -1989,6 +2065,29 @@ mod tests {
         assert_eq!(card["a"], "Claude wants Bash");
         assert_eq!(crate::home::world(&st)["asks"], 1);
         wait.abort();
+    }
+
+    #[tokio::test]
+    async fn memory_settings_need_the_token_and_validate() {
+        let (app, st, _fake) = app("api-memory", true).await;
+        let tok = Some(st.token.as_str());
+        assert_eq!(call(&app, req("GET", "/api/memory", None, None)).await.0, StatusCode::FORBIDDEN);
+        let (s, v, _) = call(&app, req("GET", "/api/memory", None, tok)).await;
+        assert_eq!((s, &v["items"], &v["on"], &v["cloud"]), (StatusCode::OK, &json!([]), &json!(true), &json!(true)));
+        let (s, item, _) = call(&app, req("POST", "/api/memory", Some(json!({"text": "I take the train"})), tok)).await;
+        assert_eq!((s, &item["source"]), (StatusCode::OK, &json!("dashboard")));
+        let id = item["id"].as_str().unwrap();
+        assert_eq!(call(&app, req("POST", "/api/memory", Some(json!({"text": ""})), tok)).await.0, StatusCode::BAD_REQUEST);
+        let path = format!("/api/memory/{id}");
+        let (s, edited, _) = call(&app, req("PUT", &path, Some(json!({"text": "I cycle to work"})), tok)).await;
+        assert_eq!((s, &edited["text"]), (StatusCode::OK, &json!("I cycle to work")));
+        assert_eq!(call(&app, req("DELETE", &path, None, None)).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(call(&app, req("DELETE", &path, None, tok)).await.0, StatusCode::OK);
+        assert_eq!(call(&app, req("DELETE", &path, None, tok)).await.0, StatusCode::NOT_FOUND);
+        let (s, v, _) = call(&app, req("PUT", "/api/memory", Some(json!({"cloud": false})), tok)).await;
+        assert_eq!((s, &v["on"], &v["cloud"]), (StatusCode::OK, &json!(true), &json!(false)));
+        assert_eq!(crate::config::load(&st.paths)["memory_cloud"], false);
+        assert_eq!(call(&app, req("PUT", "/api/memory", Some(json!({"on": "yes"})), tok)).await.0, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

@@ -12,6 +12,12 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- **Memory.** Tell the agent "remember that my standup is at 10:30" and confirm on the stick (A):
+  it keeps short facts about you, never your conversations. Settings → Memory lists them, and you
+  can add, edit, delete and export them, turn memory off, or keep them from the cloud brains. Saving
+  and forgetting always ask on the stick, so text the agent reads in a file can't plant a memory.
+
 ## [2.8.0] - 2026-11-25
 
 ### Added
