@@ -109,6 +109,10 @@ constexpr uint32_t HOME_HINTS_MS = 4000;    // Home's hint bar, after the screen
 // aloud. Which line is at the top, the tilt that scrolls it, and A while it's the reader's.
 static reader::Pager      replyPager;
 static reader::TiltScroll replyTilt;
+// the notification detail page's body: its first line, and how many there are / fit
+static reader::TiltScroll detailTilt;
+static uint32_t           detailTiltAt = 0;
+static int                detailTop = 0, detailTotal = 0, detailVisible = 0;
 static bool               replyA = false;      // this A press began on the reply view: not the key combo
 static uint32_t           replyTiltAt = 0;
 static uint32_t           homeHintsUntil = 0;
@@ -1138,24 +1142,44 @@ void loop() {
     if (events::active()) {
       const events::Event& e = events::current();
       auto& detail = events::detail();
-      bool available = buddy::eventActions(e);
+      bool available = buddy::eventActions(e) && events::actionsLive(e);
       bool canOpen = available && e.url.length();
       auto input = events::expired() ? events::InputResult::CLOSE :
           detail.input(aDown, aUp, A.wasHold() || (aUp && !A.wasClicked()), bDown, canOpen, available);
       if (input == events::InputResult::CLOSE) {
+        // closing the page also stops its read-aloud: it mustn't carry on under the next screen
+        if (detail.read && buddy::agentSpeaking()) buddy::agentSpeak(false);
         events::finish();
         ignoreAUntilRelease = A.isPressed();
         swallowB = B.isPressed();
         dirty = true;
       } else {
-        if (input == events::InputResult::DETAIL) events::detailStarted();
+        if (input == events::InputResult::DETAIL) {
+          events::detailStarted();
+          detailTop = detailTotal = detailVisible = 0;
+          detailTilt.begin();  // tilt from how it's held now
+          detailTiltAt = 0;
+        }
+        if (detail.shown && detailTotal > detailVisible && !A.isPressed()) {  // tilt scrolls a long message
+          float ax, ay, az, gx, gy;
+          motion::accel(ax, ay, az);
+          ui::setTilt(ax, ay);
+          ui::gravity(gx, gy);
+          const uint32_t now = millis();
+          const float dt = detailTiltAt ? (now - detailTiltAt) / 1000.0f : 0;
+          detailTiltAt = now;
+          const int n = detailTilt.feed(dt, reader::pitchDeg(gy, az));
+          const int next = max(0, min(detailTop + n, detailTotal - detailVisible));
+          if (next != detailTop) { detailTop = next; lastFrame = 0; }
+        }
         if (input == events::InputResult::OPEN || input == events::InputResult::READ)
           buddy::eventAction(e, input == events::InputResult::OPEN);
         ui::keepAwake();
         if (input != events::InputResult::NONE || millis() - lastFrame >= (detail.shown ? 250u : 40u)) {
           lastFrame = millis();
           if (detail.shown) {
-            ui::drawEventDetail(e.title, e.sub, e.actor, e.body, canOpen && !detail.opened, available && !detail.read);
+            ui::drawEventDetail(e.title, e.sub, e.actor, e.body, canOpen && !detail.opened, available && !detail.read,
+                                detailTop, detailTotal, detailVisible);
           } else {
             ui::drawEvent((uint8_t)e.level, e.title, e.sub, e.icon, events::elapsed());
             if (settings::sharedHosts()) ui::drawHostLabel(buddy::activeHostLabel());

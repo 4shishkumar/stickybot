@@ -48,6 +48,7 @@ static const Binding EVENT_DETAIL[] = {
     {In::A_CLICK, Do::OPEN_EVENT, "A", "open", EVENT_URL},
     {In::A_HOLD, Do::LISTEN, "hold A", "read", SPEECH},
     {In::B_CLICK, Do::CLOSE, "B", "close"},
+    {In::TILT, Do::SCROLL, "tilt", "scroll", PAGED},
 };
 
 #define SCREEN(name, t) {name, t, (uint8_t)(sizeof(t) / sizeof(t[0]))}

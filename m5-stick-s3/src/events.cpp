@@ -20,7 +20,12 @@ bool parseLevel(const String& s, Level& out) {
   return true;
 }
 
-void push(const Event& e) { queue.push(e); }  // full: drops the oldest
+void push(const Event& e) {  // full: drops the oldest
+  Event stamped = e;
+  stamped.receivedAt = millis();
+  queue.push(stamped);
+}
+bool actionsLive(const Event& e) { return millis() - e.receivedAt < ACTION_WINDOW_MS; }
 
 bool pending() { return !queue.empty(); }
 bool active() { return active_; }

@@ -1691,9 +1691,14 @@ void drawEvent(uint8_t level, const String& title, const String& sub, const Stri
 }
 
 void drawEventDetail(const String& title, const String& sub, const String& actor, const String& body,
-                     bool canOpen, bool canRead) {
+                     bool canOpen, bool canRead, int top, int& total, int& visible) {
   const bool landscape = wide();
-  const uint8_t flags = (canOpen ? actions::EVENT_URL : 0) | (canRead ? actions::SPEECH : 0);
+  uint8_t flags = (canOpen ? actions::EVENT_URL : 0) | (canRead ? actions::SPEECH : 0);
+  total = visible = 0;
+  if (body.length()) {  // paged: the hint says tilt scrolls (decided before laying out, it sizes the hint bar)
+    const int width = W - 2 * PAD;
+    if ((int)readerLines(body.c_str(), width).size() > 3) flags |= actions::PAGED;
+  }
   const auto screen = actions::Id::EVENT_DETAIL;
   const int width = W - 2 * PAD, bottom = H - hintHeight(screen, flags);
   canvas.fillScreen(GROUND);
@@ -1715,10 +1720,13 @@ void drawEventDetail(const String& title, const String& sub, const String& actor
     canvas.drawFastHLine(PAD, y, width, LINE);
     y += 3;
     const auto& wrapped = readerLines(body.c_str(), width);
-    const int count = min((int)wrapped.size(), (bottom - y) / lineH(F12));
+    total = (int)wrapped.size();
+    visible = max(1, (bottom - y) / lineH(F12));
+    const int first = max(0, min(top, total - visible));
+    const int count = min(visible, total - first);
     for (int i = 0; i < count; ++i) {
-      String line = wrapped[i].c_str();
-      if (i + 1 == count && count < (int)wrapped.size()) line = ellipsize(line + "...", F12, width);
+      String line = wrapped[first + i].c_str();
+      if (i + 1 == count && first + count < total) line = ellipsize(line + "...", F12, width);
       txt(line, PAD, y, F12, INK, top_left);
       y += lineH(F12);
     }

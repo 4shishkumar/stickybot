@@ -797,11 +797,12 @@ static void notificationShots(const std::string& dir) {
   mkdir(dir.c_str(), 0755);
   for (int side : {0, 1}) {
     ui::setOrientation(false, side);
+    int total = 0, visible = 0;
     ui::drawEventDetail("Review requested", "web #9 - Update dependencies", "priya",
-                        "The dependency update is ready for a second look.", true, true);
+                        "The dependency update is ready for a second look.", true, true, 0, total, visible);
     const std::string suffix = side ? "-wide.png" : ".png";
     savePng(dir + "/detail" + suffix);
-    ui::drawEventDetail("Build finished", "All checks passed", "", "", false, false);
+    ui::drawEventDetail("Build finished", "All checks passed", "", "", false, false, 0, total, visible);
     savePng(dir + "/detail-legacy" + suffix);
   }
 }

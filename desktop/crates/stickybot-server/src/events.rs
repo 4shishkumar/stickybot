@@ -174,8 +174,9 @@ impl Notifier {
     }
 }
 
+/// Stick-ready text: no control characters (a NUL blanks a field on the stick, others draw as boxes).
 fn cut(s: &str, n: usize) -> String {
-    stick_text(s).chars().take(n).collect()
+    stick_text(s).chars().map(|c| if c.is_control() { ' ' } else { c }).take(n).collect()
 }
 
 const DELIVERY_TTL: Duration = Duration::from_secs(300);
@@ -189,8 +190,9 @@ struct Delivery {
     read: bool,
 }
 
-/// Each device owns its delivery window. Its lock orders a successful BLE write and a
-/// request arriving immediately afterwards, without relying on event history or dashboard state.
+/// Each device owns its delivery window. An event is recorded before its BLE write (a stick can
+/// answer before the write returns) and forgotten if the write fails; the lock is never held
+/// across the write, so a long send doesn't stall the stick's other messages.
 #[derive(Default)]
 pub(crate) struct Deliveries(VecDeque<Delivery>);
 
@@ -201,6 +203,10 @@ impl Deliveries {
             self.0.pop_front();
         }
         self.0.push_back(Delivery { event: event.clone(), sent: now, generation, opened: false, read: false });
+    }
+
+    fn forget(&mut self, id: &Value) {
+        self.0.retain(|d| &d.event["id"] != id);
     }
 
     fn take(&mut self, msg: &Value, generation: u64, now: Instant) -> Option<DetailAction> {
@@ -306,15 +312,18 @@ impl From<&AppState> for Destination {
 impl Destination {
     async fn deliver(&self, event: &Value) -> bool {
         let generation = self.link.bound_generation();
-        let mut deliveries = self.deliveries.lock().await;
-        if !current(&self.link, generation) {
-            return false;
+        {
+            let mut deliveries = self.deliveries.lock().await;
+            if !current(&self.link, generation) {
+                return false;
+            }
+            deliveries.record(event, generation, Instant::now());
         }
         let msg = json!({"src":"agent","event":event});
         if !self.link.with_generation(generation, self.link.send(&msg)).await {
+            self.deliveries.lock().await.forget(&event["id"]);
             return false;
         }
-        deliveries.record(event, generation, Instant::now());
         true
     }
 }
@@ -498,6 +507,18 @@ pub fn kinds_json(cfg: &Map<String, Value>, stick_sounds: Option<&Value>) -> Val
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stick_text_has_no_control_characters_and_failed_sends_are_forgotten() {
+        assert_eq!(cut("Fix\u{0}the\ttest\nnow", 40), "Fix the test now");
+        let mut d = Deliveries::default();
+        let now = std::time::Instant::now();
+        let ev = json!({"id": "e1", "title": "t", "url": "https://github.com/a/b/pull/1"});
+        d.record(&ev, 7, now);
+        d.forget(&json!("e1"));
+        let open = json!({"src": "agent", "evt": "event_action", "id": "e1", "action": "open", "url": "https://github.com/a/b/pull/1"});
+        assert!(d.take(&open, 7, now).is_none());
+    }
+
     use super::*;
 
     fn cfg(v: Value) -> Map<String, Value> {

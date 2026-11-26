@@ -37,6 +37,15 @@ void missing_link_or_capability_disables_action_and_hint() {
   TEST_ASSERT_EQUAL_STRING("close", hints[0].label.c_str());
 }
 
+void a_long_message_says_tilt_scrolls() {
+  const auto& screen = actions::screen(actions::Id::EVENT_DETAIL);
+  TEST_ASSERT_TRUE(actions::lookup(screen, actions::In::TILT, actions::PAGED) == actions::Do::SCROLL);
+  TEST_ASSERT_TRUE(actions::lookup(screen, actions::In::TILT, 0) == actions::Do::NONE);
+  bool says = false;
+  for (const auto& h : actions::hints(screen, actions::PAGED)) says |= h.label == "scroll";
+  TEST_ASSERT_TRUE(says);
+}
+
 void source_is_same_ble_connection_and_host_session_even_after_focus_switch() {
   hosts::Registry peers;
   peers.hello(1,"bond-a",true,"a","Laptop A","A","old",1);
@@ -70,5 +79,6 @@ int main() {
   RUN_TEST(missing_link_or_capability_disables_action_and_hint);
   RUN_TEST(source_is_same_ble_connection_and_host_session_even_after_focus_switch);
   RUN_TEST(urls_and_bounded_utf8_fields);
+  RUN_TEST(a_long_message_says_tilt_scrolls);
   return UNITY_END();
 }

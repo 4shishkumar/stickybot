@@ -19,7 +19,13 @@ struct Event {
   uint32_t connection = 0;         // BLE inbox epoch; a re-used handle is a different sender
   bool actions = false;
   Level  level = Level::NICE;
+  uint32_t receivedAt = 0;         // millis() when it arrived (push sets it)
 };
+
+// The Mac keeps a delivered notification's link and text for 5 minutes; past this the stick stops
+// offering open / read for it instead of sending a request the Mac would refuse.
+constexpr uint32_t ACTION_WINDOW_MS = 280000;
+bool actionsLive(const Event& e);
 
 bool  parseLevel(const String& s, Level& out);
 void  push(const Event& e);        // drops the oldest if the queue is full
