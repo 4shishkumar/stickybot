@@ -1,6 +1,6 @@
 ---
 type: memory
-description: "S3 and Plus2 firmware: bounded authenticated host sessions and input picker, configurable button gestures, legacy pairing and write-only per-host passwords, safe diagnostics, hardware capabilities, native tests, flash/Bluetooth budgets and firmware versioning."
+description: "S3 and Plus2 firmware: bounded authenticated host sessions and input picker, button gestures, Launcher favorites and agent navigation, legacy pairing and write-only per-host passwords, safe diagnostics, hardware capabilities, native tests, flash/Bluetooth budgets and firmware versioning."
 ---
 # Stick Firmware
 
@@ -67,6 +67,17 @@ A discrete gesture can open any Launcher tile, start Talk, trigger a named Mac a
 nothing. Discrete Talk records until the next B press or its 30-second limit. Hold B can
 instead run Dictation, with release ending the hold. Named Mac actions go only to the selected
 live peer advertising `buttonActions` in its hello. [Controls](../../CONTEXT-ACTIONS.md#buttons--gestures) · [Wire format](../../../PROTOCOL.md#button-bindings)
+
+### Launcher favorites and agent navigation
+
+Each stick stores its visible tile order and favorites together. The grid places favorites first,
+preserves the configured order within each group and selects the first favorite when opened.
+With an empty favorites list, the Launcher resumes at the last visible tile.
+
+The selected Mac can open a built-in tile from Home or the Launcher grid while the agent
+is thinking. Recording, pairing, approvals, transfers and other busy screens retain control.
+Air mouse and Media consume the first A click to enable motion controls after an agent opens
+them. [Controls](../../CONTEXT-ACTIONS.md#launcher-favorites-and-voice-shortcuts)
 
 ### Requirement: Focus and resource ownership survive concurrent peers
 `logic/hosts.*` owns identity, validation, heartbeat, generation leases and transfer reclaim rules.

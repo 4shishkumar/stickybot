@@ -26,6 +26,8 @@ feature only when the app's hello says so.
 | stick, in `@state` | `"ota":1`, `otaPending` | firmware update over Bluetooth |
 | stick, in `@state` | `"pkgFaces":{"n","fmt"}` | `faces` messages and `@faces` |
 | stick, in `@state` | `"ir":{…}` | `@ir` and the IR remote |
+| stick, in `@state` | `launcherFav` string, including empty | Launcher favorite controls. Tiles-only saves preserve favorites that remain visible. |
+| stick, in `@state` | `stickOpen:1` | Built-in stick app navigation on the selected Bluetooth connection. |
 | stick, in `@state` | `usbMounted` | wireless mic behaviour on USB in legacy mode |
 | stick, in `@state` | `multiHost:1`, `maxHosts:3` | host hello extension, shared-mode controls and bounded host list |
 | stick, in `@state` | `deviceId`, `board` | physical identity and board-compatible firmware selection |

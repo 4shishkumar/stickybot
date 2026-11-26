@@ -40,7 +40,7 @@ export const CARDS = {
   face: {has: c => !!(c.st && c.st.faces), deps: c => [pick(c.st, "face", "faces"), c.petInfo]},  // firmware 2.1.0+
   combo: {has: always, deps: c => [pick(c.st, "mods", "key", "combo", "enterDelay"), c.keys]},
   unlock: {has: always, deps: c => pick(c.st, "macPassSet")},
-  launcher: {has: c => !!(c.st && c.st.launcher !== undefined), deps: c => pick(c.st, "launcher")},  // 2.5.1+
+  launcher: {has: c => !!(c.st && c.st.launcher !== undefined), deps: c => [pick(c.st, "launcher", "launcherFav"), c.via, c.deviceAddress]},  // 2.5.1+
   sounds: {has: always, deps: c => c.snd},
   gestures: {has: always, deps: c => pick(c.st, "motion")},
   air: {has: c => !!(c.st && c.st.air), deps: c => pick(c.st, "air", "connected")},  // 2.5.0+

@@ -37,7 +37,7 @@ Tools that change the Mac (open_url, open_app, quick_command) are deliberately n
 anywhere: Claude Code asks for permission as for any tool, which our PermissionRequest hook puts
 on the stick (A / B). Brains without Claude Code (OpenRouter, openai_brain.py) run the same tools
 through StickTools.call_approved(), which shows that same prompt first. Everything fails closed
-("stick not connected") without the stick, except stick_status. Alerts (notify, celebrate, speak) are
+("stick not connected") without the stick, except stick_status. Alerts and stick navigation are
 rate-limited so a loop can't spam the stick.
 """
 import asyncio
@@ -68,7 +68,7 @@ META = "io.modelcontextprotocol/"
 PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS, INTERNAL = -32700, -32600, -32601, -32602, -32603
 HEADER_MISMATCH, UNSUPPORTED_VERSION = -32020, -32022
 
-ALERT_GAP_S = 1.0       # notify / celebrate / speak: at least this far apart (all sessions together)
+ALERT_GAP_S = 1.0       # Minimum gap for notify, celebrate, speak and stick_open across sessions
 ALERT_PER_MIN = 20      # ... and at most this many a minute
 CARD_PUSH_GAP_S = 0.5   # progress / pin_home: the card goes to the stick at most this often (the rest
                         # rides on the next hello, <= 8 s later)
@@ -157,6 +157,12 @@ TOOLS = [
      "inputSchema": {"type": "object", "additionalProperties": False, "required": ["phrase"], "properties": {
          "phrase": {"type": "string", "maxLength": 120, "description": "The phrase, as the user would say it."}}},
      "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True}},
+    {"name": "stick_open", "title": "Open a stick app",
+     "description": "Show a built-in app on the selected stick. Use air for Air mouse, quick for Quick settings.",
+     "inputSchema": {"type": "object", "additionalProperties": False, "required": ["app"], "properties": {
+         "app": {"type": "string",
+                 "enum": ["games", "remote", "air", "presenter", "media", "faces", "quick", "settings"]}}},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}},
     {"name": "stick_status", "title": "Stick status",
      "description": ("The stick's state: connected, battery, on USB, what its screen shows, when a button was "
                      "last pressed, and a hint whether the user is at their desk. Read-only."),
@@ -188,7 +194,7 @@ TOOLS = [
      "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True}},
 ]
 BY_NAME = {t["name"]: t for t in TOOLS}
-FEEDBACK_TOOLS = ("notify", "ask", "celebrate", "progress", "pin_home", "stick_status", "speak",
+FEEDBACK_TOOLS = ("notify", "ask", "celebrate", "progress", "pin_home", "stick_open", "stick_status", "speak",
                   "ir_list", "ir_send")  # pre-allowed (ir_send: the user asked for it by voice)
 MAC_TOOLS = ("open_url", "open_app", "quick_command")  # change the Mac: Claude Code asks first
 
@@ -325,7 +331,7 @@ class StickTools:
         self.calls = 0
         self.last_call = None  # {"t", "tool", "from"} for the dashboard
 
-    async def call(self, name, args, who):
+    async def call(self, name, args, who, *, voice=False):
         """-> (text, is_error, structured or None)."""
         tool = BY_NAME[name]
         started = time.monotonic()
@@ -333,7 +339,10 @@ class StickTools:
             clean = check_args(tool["inputSchema"], args)
             if name != "stick_status" and not self.agent.link.connected:
                 raise ToolError(NOT_CONNECTED)
-            out = await getattr(self, f"t_{name}")(clean, who)
+            if name == "stick_open":
+                out = await self.t_stick_open(clean, voice=voice)
+            else:
+                out = await getattr(self, f"t_{name}")(clean, who)
             text, structured = out if isinstance(out, tuple) else (out, None)
             err = False
         except ToolError as e:
@@ -361,7 +370,7 @@ class StickTools:
                 log.info("%s: %s(%s) not run: %s", who, name, summarize(args, 40), why)
                 self.agent.emit("mcp", tool=name, origin=who, args=summarize(args), result=why, ok=False, ms=0)
                 return why, True, None
-        return await self.call(name, args, who)
+        return await self.call(name, args, who, voice=True)
 
     # --- feedback -----------------------------------------------------------------------
 
@@ -474,6 +483,39 @@ class StickTools:
             raise ToolError(why)
         await self.agent.speak(text, force=True)
         return f"speaking on the {self.agent._speech_output()}"
+
+    async def t_stick_open(self, a, *, voice):
+        api = self.agent.stick_api
+        address = api.connected_address()
+        if not address:
+            raise ToolError(NOT_CONNECTED)
+        transport = self.agent.link
+        source, target = transport.client, transport.target
+        origin = self.agent.brain_peer if voice else None
+        if voice and (not origin or source is not origin[0] or target is not origin[1]):
+            raise ToolError("The stick for this voice request is no longer connected.")
+        state = await api.run("@state", address)
+        if not state["ok"] or state.get("device_address") != address:
+            raise ToolError(state.get("error") or "Stick changed before it answered.")
+        if state["reply"].get("stickOpen") != 1:
+            raise ToolError("This stick's firmware does not support opening apps.")
+        same_peer = source is transport.client and target is transport.target
+        if not same_peer or (origin and origin is not self.agent.brain_peer):
+            raise ToolError("The stick or voice request changed before opening the app.")
+        app = a["app"]
+        layout = state["reply"].get("launcher")
+        # The eight canonical tile IDs all have distinct initial letters in @state.launcher.
+        if isinstance(layout, str) and app[0] not in layout:
+            raise ToolError("Tile is hidden")
+        why = self.alerts.take()
+        if why:
+            raise ToolError(why)
+        result = await api.run(f"@stick-open app={app}", address)
+        if result.get("error") == "Stick app is hidden":
+            raise ToolError("Tile is hidden")
+        if not result["ok"] or result.get("device_address") != address or result["reply"].get("app") != app:
+            raise ToolError(result.get("error") or "The stick did not confirm the requested app.")
+        return f"Opened {app} on the stick."
 
     async def t_stick_status(self, a, who):
         ag = self.agent
@@ -657,7 +699,8 @@ def routes(agent):
                     raise RpcError(INVALID_PARAMS, f"Unknown tool: {name}")
                 if name == "ask" and "text/event-stream" in request.headers.get("Accept", ""):
                     return await _streamed(request, tools, params, who, reply, inflight, id_)
-                task = asyncio.ensure_future(tools.call(name, params.get("arguments"), who))
+                voice = request.headers.get("X-Stick-Client") == "voice"
+                task = asyncio.ensure_future(tools.call(name, params.get("arguments"), who, voice=voice))
                 inflight[(who, str(id_))] = task
                 try:
                     text, err, structured = await task

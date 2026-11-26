@@ -571,8 +571,20 @@ void test_format_clock() {
   TEST_ASSERT_EQUAL_STRING("-1:05", b);
 }
 
+void test_agent_open_waits_for_a_complete_physical_click() {
+  remote::EntryPause gate{true};
+  for (auto event : {remote::Btn::B_CLICK, remote::Btn::CHORD, remote::Btn::A_PRESS, remote::Btn::A_RELEASE}) {
+    TEST_ASSERT_TRUE(gate.consume(event));
+    TEST_ASSERT_TRUE(gate.waiting);
+  }
+  TEST_ASSERT_TRUE(gate.consume(remote::Btn::A_CLICK));  // resume, without an HID action
+  TEST_ASSERT_FALSE(gate.waiting);
+  TEST_ASSERT_FALSE(gate.consume(remote::Btn::B_CLICK));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_agent_open_waits_for_a_complete_physical_click);
   RUN_TEST(test_frame_remote_hold);
   RUN_TEST(test_frame_upright_hold);
   RUN_TEST(test_frame_tilted_hold_is_the_same_world);

@@ -43,6 +43,17 @@ display. Hint labels follow the mapping on screens that show them. Shake, lift a
 keep their existing behavior. Opening the Launcher or a tile with a shortcut closes the web settings
 screen first. Developer-mode Wi-Fi stays available in the background.
 
+## Launcher favorites and voice shortcuts
+
+On the dashboard’s **Stick → Launcher** card, mark a visible tile as a favorite and save it to the
+selected stick. The Launcher opens on the first favorite and shows other favorites next, following
+the order you set. Clear the favorites to go back to the regular tile order.
+
+Say “open the air mouse” to open Air mouse on the stick that heard you. The same shortcut works
+for other visible tiles, including Games, Remote, Presenter, Media, Faces, Quick settings and Settings. Press A on a voice-opened
+Air mouse or Media screen to enable motion controls. Finish any approval or recording before
+asking the agent to switch screens.
+
 ## Part 1: screen controls (2.6.0 baseline)
 
 Abbreviations: **A** = a click of A, **hold A** = held past 0.5 s, **B** = one click of B

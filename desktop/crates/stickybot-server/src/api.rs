@@ -781,30 +781,34 @@ async fn stick_proto(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json
     };
     let peer = st.link.connected_peer();
     let ble = peer.is_some();
-    let buttons = line.split_ascii_whitespace().next() == Some("@buttons");
+    let (command, query) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+    let scoped = matches!(command, "@buttons" | "@stick-open")
+        || (command == "@launcher"
+            && (b.contains_key("expected_address")
+                || query.split('&').any(|arg| arg.split('=').next() == Some("favorites"))));
     if let Some((generation, address)) = peer {
-        if buttons
+        if scoped
             && (b.get("expected_address").and_then(Value::as_str) != Some(&address)
                 || st.link.paused()
                 || st.link.target().is_none_or(|t| !t.address.eq_ignore_ascii_case(&address)))
         {
             return axum::Json(json!({"ok":false, "via":"ble", "reply":null,
-                "error":"The selected stick changed. Reload its button mappings."}));
+                "error":"The selected stick changed. Reload its settings."}));
         }
         if let Some(reply) = st.link.with_generation(generation, st.link.request(line)).await {
             let ok = reply.get("ok").and_then(Value::as_bool).unwrap_or(true);
             let error = reply.get("error").cloned().unwrap_or(Value::Null);
             let mut result = json!({"ok": ok, "via": "ble", "reply": reply, "error": error});
-            if buttons || line == "@state" {
+            if scoped || line == "@state" {
                 result["device_address"] = json!(address);
             }
             return axum::Json(result);
         }
     }
     // An unanswered mapping write may already have succeeded. Never retry it on a different transport.
-    if buttons {
+    if scoped {
         return axum::Json(json!({"ok":false, "via":"ble", "reply":null,
-            "error":"Connect the selected stick over Bluetooth and reload its button mappings."}));
+            "error":"Connect the selected stick over Bluetooth and reload its settings."}));
     }
     // over USB (firmware_api.py `Stick.run`): when Bluetooth isn't there or didn't answer
     let hardware_id = st.host_state.lock().unwrap()["deviceId"].as_str().map(str::to_owned);
@@ -1851,6 +1855,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn launcher_favorites_save_checks_the_live_peer_and_never_uses_usb() {
+        let (app, st, fake) = app("favorite-save", true).await;
+        let usb = crate::usb::FakeUsb::stick("/dev/cu.other", "2.9.0");
+        st.usb.set_backend(usb.clone());
+        let route = "/api/stick/proto";
+        let tok = Some(st.token.as_str());
+        let line = "@launcher tiles=air,games&favorites=games";
+        for address in [Value::Null, json!("OTHER"), json!("FAKE")] {
+            let mut b = json!({"line":line});
+            if !address.is_null() {
+                b["expected_address"] = address.clone();
+            }
+            let (_, result, _) = call(&app, req("POST", route, Some(b), tok)).await;
+            let ok = address == "FAKE";
+            assert_eq!(result["ok"], ok, "{result}");
+            assert_eq!(fake.stick_state()["launcherFav"] == "g", ok);
+            if ok {
+                assert_eq!(result["device_address"], address);
+            }
+        }
+        let (_, unpinned, _) = call(&app, req("POST", route, Some(json!({"line":"@stick-open app=air"})), tok)).await;
+        assert_eq!(unpinned["ok"], false);
+        assert!(fake.stick_state()["openTile"].is_null());
+        st.link.pause(true);
+        for line in [line, "@launcher reset=1", "@stick-open app=air"] {
+            let body = json!({"line":line, "expected_address":"FAKE"});
+            let (_, result, _) = call(&app, req("POST", route, Some(body), tok)).await;
+            assert_eq!(result["ok"], false);
+            assert_eq!(result["via"], "ble");
+        }
+        assert!(usb.lines.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn lost_button_save_never_writes_to_another_usb_stick() {
         let (app, st, fake) = app("button-save-usb", true).await;
         let usb = crate::usb::FakeUsb::stick("/dev/cu.other", "2.9.0");
@@ -2572,7 +2610,10 @@ mod tests {
         let (s, body, _) = call(&app, req("GET", "/static/pages/stick.js", None, None)).await;
         assert_eq!(s, StatusCode::OK);
         let body = body.as_str().unwrap();
-        assert!(body.contains("function launcherCard()") && body.contains("send(\"launcher\""));
+        assert!(body.contains("launcherEditor("));
+        let (s, body, _) = call(&app, req("GET", "/static/pages/launcher.js", None, None)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert!(body.as_str().unwrap().contains("export function launcherEditor("));
         // ...and so does the page's layout (its sections), which it imports
         let (s, body, _) = call(&app, req("GET", "/static/pages/stick_layout.js", None, None)).await;
         assert_eq!(s, StatusCode::OK);

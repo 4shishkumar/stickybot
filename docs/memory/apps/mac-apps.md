@@ -1,6 +1,6 @@
 ---
 type: memory
-description: "Rust StickyBot.app and the legacy Python app: independent device sessions, scoped APIs/MCP/history/jobs, default routing, host labels, Mac keyboard push-to-talk and reply panel, shared Mac services, source-bound approvals, shared dashboard compatibility, stick volume controls, configurable button gestures, permissions and in-app updates."
+description: "Rust StickyBot.app and the legacy Python app: independent device sessions, scoped APIs/MCP/history/jobs, default routing, host labels, Mac keyboard push-to-talk and reply panel, shared Mac services, source-bound approvals, shared dashboard compatibility, stick volume controls, button gestures, Launcher favorites and stick app shortcuts, permissions and in-app updates."
 ---
 # Mac Apps
 
@@ -45,6 +45,17 @@ A physical press can open an installed Mac app by exact name or run one uniquely
 quick command that needs no arguments. The app checks the emitting peer's live binding and
 keeps execution on that connection. The physical gesture supplies intent for that action.
 Agent-initiated tool calls retain the broker's approval checks. [Protocol](../../../PROTOCOL.md#button-bindings)
+
+### Launcher editor and stick app shortcuts
+
+The shared Launcher editor saves favorites on the selected stick. When the layout came from an
+identified Bluetooth peer, both apps bind saves and resets to that address, including tiles-only
+edits on older firmware. A lost Bluetooth reply requires a fresh read.
+
+Both MCP servers expose `stick_open(app)` for built-in stick tiles. The Rust Assistant profile
+includes it, and the local brain derives its tool list from that profile. A voice request uses
+its originating connection and turn. Opening a stick tile needs no approval. Success requires
+the stick to acknowledge the requested tile. [Protocol](../../../PROTOCOL.md#launcher-favorites-and-app-navigation)
 
 ### Requirement: Each app keeps to its own home
 The Rust app's settings, token, models and data live in `~/.stickybot-rs/`; the Python app's in

@@ -39,13 +39,14 @@ bool        active();                // a mode is running (or about to start)
 Mode        mode();
 const char* modeName(Mode m);        // "home", "mouse", "presenter", "media"
 bool        parseMode(const String& s, Mode& out);
-void        request(Mode m);         // start (or OFF: stop) at the next loop (safe from any task)
+void        request(Mode m, bool fromAgent = false);         // start (or OFF: stop) at the next loop (safe from any task)
 const Settings& settings();
 void        save(const Settings& s);
 
 // The main loop, while active(): reads the buttons and motion, sends the reports and
 // draws the screen. Returns false once the mode has ended (back to Home).
 bool loop();
+void suspendInput();  // a prompt owns the display and both buttons
 
 // Protocol (PROTOCOL.md): `"air":{...}` for @state, and the @mode / @air actions.
 String stateJson();

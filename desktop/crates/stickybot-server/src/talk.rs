@@ -422,6 +422,18 @@ pub fn cancel_mac_turn(st: &Arc<AppState>) -> bool {
     true
 }
 
+/// HTTP tool calls from a stick-originated voice turn must retain the original BLE generation.
+pub(crate) fn voice_tool_generation(st: &AppState, ctx: &crate::tool_policy::Context) -> Option<u64> {
+    let slot = st.voice_owner.lock().unwrap();
+    slot.as_ref()
+        .filter(|owner| {
+            !owner.cancelled.load(Ordering::Acquire)
+                && ctx.active()
+                && st.mcp.session.current().is_some_and(|scope| scope.turn == ctx.scope.turn)
+        })
+        .map(|owner| owner.generation)
+}
+
 /// Identify the same live brain request across the native caller and its HTTP MCP connection.
 pub(crate) fn mac_agent_owner(st: &AppState, ctx: &crate::tool_policy::Context) -> Option<Arc<Owner>> {
     let slot = st.voice_owner.lock().unwrap();
@@ -1487,15 +1499,48 @@ pub(crate) mod tests {
         assert!(brain_reply(&text).chars().count() <= 280);
     }
 
-    struct OpenTool(std::sync::Weak<AppState>);
+    #[tokio::test]
+    async fn stick_open_over_http_keeps_the_source_voice_generation() {
+        use axum::{body::Body, http::Request};
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+        let t = agent("stick-open-voice-generation", false).await;
+        let app = crate::api::router(t.st.clone());
+        t.st.devices.init(&t.st).unwrap();
+        let ask = || {
+            let request = Request::post("/api/devices/primary/mcp")
+                .header("host", "localhost:8670")
+                .header("authorization", format!("Bearer {}", t.st.mcp.local_token))
+                .body(Body::from(
+                    json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                    "params":{"name":"stick_open","arguments":{"app":"air"}}})
+                    .to_string(),
+                ))
+                .unwrap();
+            app.clone().oneshot(request)
+        };
+        let _scope = t.st.mcp.session.begin();
+        let live = t.st.link.generation();
+        for generation in [None, Some(live.wrapping_sub(1)), Some(live), None] {
+            let _turn = generation.map(|g| VoiceTurn::reserve(t.st.clone(), None, g).unwrap());
+            t.fake.set_stick("openTile", Value::Null);
+            let response = ask().await.unwrap();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let reply: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(reply["result"]["isError"], generation != Some(live), "{reply}");
+            assert_eq!(t.fake.stick_state()["openTile"] == "air", generation == Some(live));
+        }
+    }
+
+    struct OpenTool(std::sync::Weak<AppState>, &'static str, Value);
     impl Brain for OpenTool {
         fn ask(&self, _text: String, _: mpsc::UnboundedSender<BrainEvent>) -> BoxFuture<'static, (bool, String)> {
             let st = self.0.upgrade().unwrap();
+            let (tool, args) = (self.1, self.2.clone());
             Box::pin(async move {
                 let _scope = st.mcp.session.begin();
                 let ctx = crate::tool_policy::Context::brain(&st, crate::tool_policy::Caller::Local).unwrap();
-                let (answer, error, _) =
-                    crate::mcp::call(&st, "open_url", &json!({"url":"https://example.org/docs"}), &ctx).await;
+                let (answer, error, _) = crate::mcp::call_from_client(&st, tool, &args, &ctx).await;
                 (!error, answer)
             })
         }
@@ -1510,9 +1555,26 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn typed_request_can_open_its_stick_app_via_the_brain() {
+        let t = agent("stick-open-typed", true).await;
+        t.st.set_brain(Arc::new(OpenTool(Arc::downgrade(&t.st), "stick_open", json!({"app":"air"}))));
+        let app = crate::api::router(t.st.clone());
+        let request = axum::http::Request::post("/api/ask")
+            .header("host", "localhost:8670")
+            .header("x-stick-token", &t.st.token)
+            .body(axum::body::Body::from(r#"{"text":"open the air mouse"}"#))
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(ended(&t).await.last(), Some(&pair("done", "Opened air on the stick")));
+        assert_eq!(t.fake.stick_state()["openTile"], "air");
+        assert!(t.ran.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn mac_tool_waits_for_exact_stick_approval_and_fails_closed_offline() {
         let t = agent("mac-tool-approval", true).await;
-        t.st.set_brain(Arc::new(OpenTool(Arc::downgrade(&t.st))));
+        t.st.set_brain(Arc::new(OpenTool(Arc::downgrade(&t.st), "open_url", json!({"url":"https://example.org/docs"}))));
         let (notify, events) = mac_display();
         let task = tokio::spawn(MacTurn::begin(t.st.clone(), notify.clone()).unwrap().submit(vec![0.; RATE as usize]));
         assert!(

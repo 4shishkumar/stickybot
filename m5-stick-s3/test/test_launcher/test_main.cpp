@@ -165,10 +165,62 @@ void test_gestures_toggle_all_three() {
   TEST_ASSERT_TRUE(lift && face && shake);
 }
 
+void test_favorites_keep_base_order_and_prune_hidden_tiles() {
+  Catalog c;
+  TEST_ASSERT_TRUE(setFavorites(c, "faces,air,games"));
+  TEST_ASSERT_EQUAL_STRING("grapmfqs:gaf", c.pack().c_str());
+  char grid[TILE_COUNT + 1];
+  letters(c.grid(), grid, sizeof grid);
+  TEST_ASSERT_EQUAL_STRING("gafrpmqs", grid);
+  TEST_ASSERT_EQUAL(0, c.openingSelection(Tile::SETTINGS));
+  TEST_ASSERT_EQUAL((int)ParseError::NONE, (int)parse("settings,faces,games", c.visible));
+  retainVisibleFavorites(c);
+  letters(c.grid(), grid, sizeof grid);
+  TEST_ASSERT_EQUAL_STRING("fgsq", grid);
+  TEST_ASSERT_EQUAL_STRING("sfgq:fg", c.pack().c_str());
+  TEST_ASSERT_TRUE(setFavorites(c, "-"));
+  TEST_ASSERT_TRUE(c.visible == c.grid());
+  TEST_ASSERT_EQUAL(2, c.openingSelection(Tile::GAMES));
+}
+
+void test_catalog_round_trips_and_reads_legacy_layouts() {
+  Catalog c, restored;
+  TEST_ASSERT_TRUE(unpack("amqs", c));
+  TEST_ASSERT_EQUAL_STRING("amqs:", c.pack().c_str());
+  TEST_ASSERT_TRUE(setFavorites(c, "media,quick"));
+  TEST_ASSERT_TRUE(unpack(c.pack().c_str(), restored));
+  TEST_ASSERT_TRUE(c == restored);
+  for (const char* bad : {"amqs:aa", "amqs:r", "amqs:a:", "", "junk", "amqs:!"}) {
+    TEST_ASSERT_FALSE(unpack(bad, restored));
+    TEST_ASSERT_TRUE(c == restored);
+  }
+  for (const char* bad : {"g", "a", "air,air", "games", "air,", ",air", "", "air,unknown"}) {
+    TEST_ASSERT_FALSE(setFavorites(restored, bad));
+    TEST_ASSERT_TRUE(c == restored);
+  }
+}
+
+void test_remote_navigation_protects_interactions() {
+  OpenContext home{true, false, false, false, false, false};
+  TEST_ASSERT_TRUE(home.available());
+  home.yieldingScreen = false;
+  TEST_ASSERT_FALSE(home.available());
+  home.yieldingScreen = true;
+  for (auto flag : {&OpenContext::physicalInput, &OpenContext::recording, &OpenContext::confirmation,
+                    &OpenContext::transfer, &OpenContext::overlay}) {
+    home.*flag = true;
+    TEST_ASSERT_FALSE(home.available());
+    home.*flag = false;
+  }
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_defaults_are_all_eight_in_order);
   RUN_TEST(test_names_and_letters);
+  RUN_TEST(test_favorites_keep_base_order_and_prune_hidden_tiles);
+  RUN_TEST(test_catalog_round_trips_and_reads_legacy_layouts);
+  RUN_TEST(test_remote_navigation_protects_interactions);
   RUN_TEST(test_parse_orders_and_hides);
   RUN_TEST(test_parse_appends_the_fixed_tiles);
   RUN_TEST(test_parse_errors_leave_the_layout_alone);

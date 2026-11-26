@@ -42,6 +42,10 @@ test("a saved setting redraws only the cards drawn from it", () => {
   assert.deepEqual(changedCards(before, slicesOf(ctx({...STATE, face: "aquarium"}))).sort(), ["face", "market"]);
   assert.deepEqual(changedCards(before, slicesOf(ctx({...STATE, battery: 80}))), ["hero"]);
   assert.deepEqual(changedCards(before, slicesOf(ctx())), []);
+  const favourites = ctx({...STATE, launcherFav: ""}, {deviceAddress: "A"});
+  assert.deepEqual(changedCards(before, slicesOf(favourites)), ["launcher"]);
+  assert.deepEqual(changedCards(slicesOf(favourites), slicesOf({...favourites, deviceAddress: "B"})), ["launcher"]);
+  assert.deepEqual(changedCards(slicesOf(favourites), slicesOf({...favourites, st: {...favourites.st, launcherFav: "a"}})), ["launcher"]);
   assert.equal(structureKey(ctx()), structureKey(ctx({...STATE, brightness: 60})));
   assert.notEqual(structureKey(ctx()), structureKey(ctx(null)));
 });

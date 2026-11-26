@@ -149,6 +149,23 @@ Errors: `@{"ok":false,"error":"<message>"}`.
   games, remote, air, presenter, media, faces, quick, settings; a hidden tile is left out).
   Letters keep `@state` short (22 bytes); `@launcher` answers with the ids too.
 
+### Launcher favorites and app navigation
+
+A stick that supports favorites includes `launcherFav` in `@state`. It uses the same letters as
+`launcher` and starts empty. The stick displays favorites first, preserving the configured tile
+order within each group. To save both lists together, send
+`@launcher tiles=media,air,quick,settings&favorites=air,media`. Use `favorites=-` to clear favorites.
+A tiles-only save retains favorites that are still visible. Reset restores the original layout.
+The dashboard sends `expected_address` with launcher writes whenever it read the layout over BLE
+and received the peer address. This also protects tiles-only saves and resets on older firmware.
+
+`stickOpen:1` in `@state` advertises `@stick-open app=<id>`. Accepted IDs are `games`, `remote`,
+`air`, `presenter`, `media`, `faces`, `quick` and `settings`. The foreground Mac can request
+navigation on its current Bluetooth connection. Success returns `{"ok":true,"app":"air"}` for
+Air mouse. A hidden tile returns `Stick app is hidden`. A busy stick or an unsupported target
+returns an error. The agent tool shares the notification rate limit (one action per second and
+up to 20 per minute). Air mouse and Media require physical activation before sending motion input.
+
 ### Button bindings
 
 The optional `buttons` object in `@state` advertises support on the StickS3 and StickC Plus2.

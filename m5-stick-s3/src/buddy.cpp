@@ -10,6 +10,7 @@
 #include "logic/clock.h"
 #include "sound.h"
 #include "protocol.h"
+#include "launcher_session.h"
 #include "events.h"
 #include "ota.h"
 #include "faces/faces.h"
@@ -485,7 +486,11 @@ static void handleAgent(JsonDocument& d) {
     String line = d["proto"].as<String>();
     line.trim();
     if (shared && line.startsWith("@ir")) irOwner = peers.lease(requestPeer);
-    protocol::Result r = protocol::runLine(line, protocol::Source::Bluetooth);
+    // handle() runs inside buddy::loop under the peer lease lock, never in the BLE callback.
+    // Also check the HID destination in legacy mode, where a second connected Mac has no host session.
+    const bool selected = foreground && requestPeer != hosts::NONE && requestPeer == hid::selectedHost();
+    const auto source = selected ? protocol::Source::Bluetooth : protocol::Source::BackgroundBluetooth;
+    protocol::Result r = protocol::runLine(line, source, selected ? launcher::openFromAgent : nullptr);
     String id = d["id"] | "";
     String esc;
     for (char c : id) if (c != '"' && c != '\\') esc += c;  // ids are short tokens

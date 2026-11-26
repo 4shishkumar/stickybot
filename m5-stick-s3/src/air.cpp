@@ -4,6 +4,7 @@
 #include "air.h"
 #include <M5Unified.h>
 #include <Preferences.h>
+#include <atomic>
 #include <HijelHID_BLEKeyboard.h>  // KEY_*, MEDIA_*, MOUSE_BUTTON_*
 #include "air_ui.h"
 #include "battery.h"
@@ -28,7 +29,9 @@ constexpr uint32_t DRAW_MIN_MS       = 90;
 
 static Settings set_;
 static Mode     mode_ = Mode::OFF;
-static volatile int8_t requested = -1;  // a Mode to switch to at the next loop, -1 none
+constexpr int8_t AGENT_ENTRY = 0x10;
+static remote::EntryPause entryPause;
+static std::atomic<int8_t> requested{-1};  // mode and origin travel together
 
 static airmotion::Frame     frame;
 static airmotion::Stillness still;
@@ -101,7 +104,7 @@ bool parseMode(const String& s, Mode& out) {
   return true;
 }
 
-void request(Mode m) { requested = (int8_t)m; }
+void request(Mode m, bool fromAgent) { requested.store((int8_t)m | (fromAgent ? AGENT_ENTRY : 0)); }
 bool active() { return mode_ != Mode::OFF || requested > 0; }
 Mode mode() { return mode_; }
 
@@ -116,7 +119,13 @@ static void releaseMouse() {
   leftDown = laser = scrolling = false;
 }
 
-static void startMode(Mode m) {
+void suspendInput() {
+  releaseMouse();
+  buttons.reset(M5.BtnA.isPressed(), M5.BtnB.isPressed());  // its answer cannot become a remote action
+  dirty = true;
+}
+
+static void startMode(Mode m, bool fromAgent) {
   mode_ = m;
   motion::setFast(true);
   frame.reset();
@@ -140,6 +149,7 @@ static void startMode(Mode m) {
   buttons.configure(t);
   buttons.reset(M5.BtnA.isPressed(), M5.BtnB.isPressed());  // the press that opened it doesn't count
   paused = scrolling = leftDown = laser = black = false;
+  entryPause.waiting = fromAgent && (m == Mode::MOUSE || m == Mode::MEDIA);
   mediaAction = airui::NONE;
   flash = "";
   lastCount = motion::sampleCount();
@@ -274,6 +284,7 @@ static int frameSide() {
 }
 
 static void onSample(uint32_t now, float dt) {
+  if (entryPause.waiting) return;
   float a[3], g[3];
   motion::accel(a[0], a[1], a[2]);
   motion::gyro(g[0], g[1], g[2]);
@@ -322,7 +333,7 @@ static void draw(uint32_t now) {
   v.battery = battery::level();
   v.charging = battery::charging();
   v.sens = set_.sens;
-  v.state = paused ? airui::PAUSED : scrolling ? airui::SCROLLING : leftDown ? airui::DRAGGING
+  v.state = (paused || entryPause.waiting) ? airui::PAUSED : scrolling ? airui::SCROLLING : leftDown ? airui::DRAGGING
           : still.stillFor(now) > RESTING_MS ? airui::RESTING : airui::POINTING;
   v.elapsedMs = timer.elapsedMs(now);
   v.targetMin = set_.talkMin;
@@ -342,12 +353,12 @@ static void draw(uint32_t now) {
 // --- Loop -----------------------------------------------------------------------------------
 
 bool loop() {
-  if (requested >= 0) {
-    Mode m = (Mode)requested;
-    requested = -1;
+  const int8_t change = requested.exchange(-1);
+  if (change >= 0) {
+    Mode m = (Mode)(change & ~AGENT_ENTRY);
     if (m != mode_) {
       if (mode_ != Mode::OFF) endMode("switched");
-      if (m != Mode::OFF) startMode(m);
+      if (m != Mode::OFF) startMode(m, change & AGENT_ENTRY);
     }
   }
   if (mode_ == Mode::OFF) return false;
@@ -364,6 +375,7 @@ bool loop() {
       endMode("A+B held");
       return false;
     }
+    if (entryPause.consume(e)) continue;
     if (mode_ == Mode::MOUSE) onMouseButton(e, now);
     else if (mode_ == Mode::PRESENTER) onPresenterButton(e, now);
     else onMediaButton(e);

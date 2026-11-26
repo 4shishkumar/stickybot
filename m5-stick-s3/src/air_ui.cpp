@@ -166,6 +166,10 @@ static void drawMouse(const View& v, bool wide) {
   topBar("Air mouse", v);
   static const char* const H3[] = {"A click   B right-click", "hold B + tilt: scroll", "A+B pause   hold A+B: exit"};
   static const char* const H2[] = {"A click  B right  hold B + tilt: scroll", "A+B pause   hold A+B: Home"};
+  if (v.state == PAUSED) {
+    static const char* const H[] = {"A to resume   hold A+B: Home"};
+    hints(H, 1);
+  }
   if (wide) {
     if (!problem(v, BAR_H + 4, 24)) {
       mouseIcon(54, 66, v.state);
@@ -173,7 +177,7 @@ static void drawMouse(const View& v, bool wide) {
       txt("Speed", 104, 76, F9, DIM);
       dots(104 + 45 + 26, 92, v.sens, mouseColor(v.state) == FAINT ? DIM : mouseColor(v.state));
     }
-    hints(H2, 2);
+    if (v.state != PAUSED) hints(H2, 2);
   } else {
     if (!problem(v, BAR_H + 6)) {
       mouseIcon(W / 2, 84, v.state);
@@ -181,7 +185,7 @@ static void drawMouse(const View& v, bool wide) {
       txt("Speed", W / 2, 162, F9, DIM, middle_center);
       dots(W / 2, 176, v.sens, mouseColor(v.state) == FAINT ? DIM : mouseColor(v.state));
     }
-    hints(H3, 3);
+    if (v.state != PAUSED) hints(H3, 3);
   }
   if (v.flash.length()) chipAt(v.flash, W / 2, BAR_H + 12, mouseColor(v.state), v.flashT);
 }
@@ -289,6 +293,13 @@ static void mediaIcon(int cx, int cy, const View& v) {
 
 static void drawMedia(const View& v, bool wide) {
   topBar("Media", v);
+  if (v.state == PAUSED) {
+    pauseIcon(W / 2, H / 2 - 12, ASK);
+    txt("Paused", W / 2, H / 2 + 18, F18, INK, middle_center);
+    static const char* const HINT[] = {"A to resume   hold A+B: Home"};
+    hints(HINT, 1);
+    return;
+  }
   if (wide) {
     if (!problem(v, BAR_H + 4, 24)) {
       mediaIcon(54, 68, v);
