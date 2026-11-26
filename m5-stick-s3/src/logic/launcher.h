@@ -30,6 +30,7 @@ struct TileInfo {
 const TileInfo& info(Tile t);
 // An id ("games") or a letter ("g"), n characters of s. false if unknown.
 bool fromName(const char* s, size_t n, Tile& out);
+bool fromFullId(const char* s, size_t n, Tile& out);
 
 struct Layout {
   Tile    tiles[TILE_COUNT]{};
@@ -64,6 +65,7 @@ bool setFavorites(Catalog& c, const char* ids);  // full visible IDs, or "-" to 
 void retainVisibleFavorites(Catalog& c);
 
 // Allow remote navigation on Home (including a thinking voice agent) or the launcher grid.
+enum class OpenResult { OPENED, HIDDEN, BUSY };
 struct OpenContext {
   bool yieldingScreen;
   bool physicalInput;

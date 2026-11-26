@@ -36,6 +36,11 @@ pub const LAUNCHER_TILES: [(&str, char, bool); 8] = [
     ("settings", 's', true),
 ];
 
+/// The firmware publishes visible tiles as the Launcher catalog's single-letter IDs.
+pub fn launcher_shows(letters: &str, app: &str) -> bool {
+    LAUNCHER_TILES.iter().any(|(name, letter, _)| *name == app && letters.contains(*letter))
+}
+
 /// Largest RX write (link.py `CHUNK`): fits the stick's MTU with room to spare.
 pub const CHUNK: usize = 180;
 /// The agent's hello goes out this often (link.py `HELLO_EVERY_S`); the stick shows "agent ready" for 25 s.

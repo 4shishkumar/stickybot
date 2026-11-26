@@ -50,7 +50,7 @@ selected stick. The Launcher opens on the first favorite and shows other favorit
 the order you set. Clear the favorites to go back to the regular tile order.
 
 Say “open the air mouse” to open Air mouse on the stick that heard you. The same shortcut works
-for Games, Remote, Presenter, Media, Faces, Quick settings and Settings. Press A on a voice-opened
+for other visible tiles, including Games, Remote, Presenter, Media, Faces, Quick settings and Settings. Press A on a voice-opened
 Air mouse or Media screen to enable motion controls. Finish any approval or recording before
 asking the agent to switch screens.
 

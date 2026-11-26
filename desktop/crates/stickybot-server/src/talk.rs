@@ -1532,15 +1532,15 @@ pub(crate) mod tests {
         }
     }
 
-    struct OpenTool(std::sync::Weak<AppState>);
+    struct OpenTool(std::sync::Weak<AppState>, &'static str, Value);
     impl Brain for OpenTool {
         fn ask(&self, _text: String, _: mpsc::UnboundedSender<BrainEvent>) -> BoxFuture<'static, (bool, String)> {
             let st = self.0.upgrade().unwrap();
+            let (tool, args) = (self.1, self.2.clone());
             Box::pin(async move {
                 let _scope = st.mcp.session.begin();
                 let ctx = crate::tool_policy::Context::brain(&st, crate::tool_policy::Caller::Local).unwrap();
-                let (answer, error, _) =
-                    crate::mcp::call(&st, "open_url", &json!({"url":"https://example.org/docs"}), &ctx).await;
+                let (answer, error, _) = crate::mcp::call_from_client(&st, tool, &args, &ctx).await;
                 (!error, answer)
             })
         }
@@ -1555,9 +1555,26 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn typed_request_can_open_its_stick_app_via_the_brain() {
+        let t = agent("stick-open-typed", true).await;
+        t.st.set_brain(Arc::new(OpenTool(Arc::downgrade(&t.st), "stick_open", json!({"app":"air"}))));
+        let app = crate::api::router(t.st.clone());
+        let request = axum::http::Request::post("/api/ask")
+            .header("host", "localhost:8670")
+            .header("x-stick-token", &t.st.token)
+            .body(axum::body::Body::from(r#"{"text":"open the air mouse"}"#))
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(ended(&t).await.last(), Some(&pair("done", "Opened air on the stick")));
+        assert_eq!(t.fake.stick_state()["openTile"], "air");
+        assert!(t.ran.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn mac_tool_waits_for_exact_stick_approval_and_fails_closed_offline() {
         let t = agent("mac-tool-approval", true).await;
-        t.st.set_brain(Arc::new(OpenTool(Arc::downgrade(&t.st))));
+        t.st.set_brain(Arc::new(OpenTool(Arc::downgrade(&t.st), "open_url", json!({"url":"https://example.org/docs"}))));
         let (notify, events) = mac_display();
         let task = tokio::spawn(MacTurn::begin(t.st.clone(), notify.clone()).unwrap().submit(vec![0.; RATE as usize]));
         assert!(

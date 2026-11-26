@@ -307,6 +307,9 @@ pub fn run_25(st: &mut Value, action: &str, args: &[(String, String)]) -> Option
             let Some(app) = get("app").filter(|id| args.len() == 1 && is_launcher_tile(id)) else {
                 return Some(json!({"ok":false, "error":"unknown app"}));
             };
+            if !crate::proto::launcher_shows(st["launcher"].as_str().unwrap_or_default(), &app) {
+                return Some(json!({"ok":false, "error":"Stick app is hidden"}));
+            }
             if !st["openTile"].is_null() {
                 return Some(json!({"ok":false, "error":"Stick is busy"}));
             }

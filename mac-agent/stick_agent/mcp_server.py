@@ -37,7 +37,7 @@ Tools that change the Mac (open_url, open_app, quick_command) are deliberately n
 anywhere: Claude Code asks for permission as for any tool, which our PermissionRequest hook puts
 on the stick (A / B). Brains without Claude Code (OpenRouter, openai_brain.py) run the same tools
 through StickTools.call_approved(), which shows that same prompt first. Everything fails closed
-("stick not connected") without the stick, except stick_status. Alerts (notify, celebrate, speak) are
+("stick not connected") without the stick, except stick_status. Alerts and stick navigation are
 rate-limited so a loop can't spam the stick.
 """
 import asyncio
@@ -68,7 +68,7 @@ META = "io.modelcontextprotocol/"
 PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS, INTERNAL = -32700, -32600, -32601, -32602, -32603
 HEADER_MISMATCH, UNSUPPORTED_VERSION = -32020, -32022
 
-ALERT_GAP_S = 1.0       # notify / celebrate / speak: at least this far apart (all sessions together)
+ALERT_GAP_S = 1.0       # Minimum gap for notify, celebrate, speak and stick_open across sessions
 ALERT_PER_MIN = 20      # ... and at most this many a minute
 CARD_PUSH_GAP_S = 0.5   # progress / pin_home: the card goes to the stick at most this often (the rest
                         # rides on the next hello, <= 8 s later)
@@ -503,7 +503,16 @@ class StickTools:
         if not same_peer or (origin and origin is not self.agent.brain_peer):
             raise ToolError("The stick or voice request changed before opening the app.")
         app = a["app"]
+        layout = state["reply"].get("launcher")
+        # The eight canonical tile IDs all have distinct initial letters in @state.launcher.
+        if isinstance(layout, str) and app[0] not in layout:
+            raise ToolError("Tile is hidden")
+        why = self.alerts.take()
+        if why:
+            raise ToolError(why)
         result = await api.run(f"@stick-open app={app}", address)
+        if result.get("error") == "Stick app is hidden":
+            raise ToolError("Tile is hidden")
         if not result["ok"] or result.get("device_address") != address or result["reply"].get("app") != app:
             raise ToolError(result.get("error") or "The stick did not confirm the requested app.")
         return f"Opened {app} on the stick."

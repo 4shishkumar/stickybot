@@ -45,7 +45,7 @@ const INTERNAL: i64 = -32603;
 const HEADER_MISMATCH: i64 = -32020;
 const UNSUPPORTED_VERSION: i64 = -32022;
 
-/// notify / celebrate / speak: at least this far apart (all sessions together), at most 20 a minute.
+/// notify / celebrate / speak / stick_open: at least this far apart (all sessions together), at most 20 a minute.
 pub const ALERT_GAP: Duration = Duration::from_secs(1);
 pub const ALERT_PER_MIN: usize = 20;
 pub const SSE_KEEPALIVE: Duration = Duration::from_secs(15);
@@ -893,12 +893,21 @@ async fn stick_open(st: &AppState, app: &str) -> ToolResult {
         if !selected() {
             return Err(NOT_CONNECTED.into());
         }
+        if state["launcher"].as_str().is_some_and(|layout| !stick_link::proto::launcher_shows(layout, app)) {
+            return Err("Tile is hidden".into());
+        }
+        let limit = st.mcp.alerts.lock().unwrap().take(mono());
+        if !limit.is_empty() {
+            return Err(limit);
+        }
         let line = stick_link::proto::proto_line("stick-open", &[("app", app)]);
         let reply = link.request(&line).await.ok_or("The stick didn't confirm navigation")?;
         if reply["ok"] == true && reply["app"] == app {
             Ok((format!("Opened {app} on the stick"), Some(json!({"app":app}))))
         } else if reply["error"] == "Select this Mac on the stick first" {
             Err("Select this Mac on the stick first".into())
+        } else if reply["error"] == "Stick app is hidden" {
+            Err("Tile is hidden".into())
         } else if reply["error"] == "Stick is busy" {
             Err("The stick is busy; finish the current interaction first".into())
         } else {
@@ -1818,6 +1827,23 @@ mod tests {
         }
         let (text, err, r) = c.call("stick_status", json!({}), &[]).await;
         assert!(!err && text.starts_with("stick not connected") && r["structuredContent"]["connected"] == false);
+    }
+
+    #[tokio::test]
+    async fn stick_open_respects_tile_visibility_and_shares_the_device_alert_limit() {
+        let mut c = C::new("stick-open-limit").await;
+        *c.t.st.mcp.alerts.lock().unwrap() = RateLimit::new(30.0, 20);
+        c.t.fake.set_stick("launcher", json!("qs"));
+        let (text, err, _) = c.call("stick_open", json!({"app":"air"}), &[]).await;
+        assert!(err && text == "Tile is hidden");
+        assert!(c.t.fake.stick_state()["openTile"].is_null());
+        assert!(!c.call("stick_open", json!({"app":"settings"}), &[]).await.1);
+        let (text, err, _) = c.call("notify", json!({"text":"Later"}), &[]).await;
+        assert!(err && text.contains("rate limited"), "{text}");
+        c.t.fake.set_stick("openTile", Value::Null);
+        let (text, err, _) = c.call("stick_open", json!({"app":"quick"}), &[]).await;
+        assert!(err && text.contains("rate limited"), "{text}");
+        assert!(c.t.fake.stick_state()["openTile"].is_null());
     }
 
     #[tokio::test]

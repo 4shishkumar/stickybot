@@ -99,10 +99,12 @@ Result runLine(const String& line, Source source, OpenTile openTile) {
       return {403, "{\"ok\":false,\"error\":\"Select this Mac on the stick first\"}"};
     // An exact full tile ID is the entire argument. No command strings, aliases or extra fields.
     launcher::Tile tile;
-    if (!query.startsWith("app=") || query.length() <= 5 ||
-        !launcher::fromName(query.c_str() + 4, query.length() - 4, tile))
+    if (!query.startsWith("app=") ||
+        !launcher::fromFullId(query.c_str() + 4, query.length() - 4, tile))
       return {400, "{\"ok\":false,\"error\":\"Invalid stick app\"}"};
-    if (!openTile(tile)) return {409, "{\"ok\":false,\"error\":\"Stick is busy\"}"};
+    const auto result = openTile(tile);
+    if (result == launcher::OpenResult::HIDDEN) return {403, "{\"ok\":false,\"error\":\"Stick app is hidden\"}"};
+    if (result == launcher::OpenResult::BUSY) return {409, "{\"ok\":false,\"error\":\"Stick is busy\"}"};
     return {200, String("{\"ok\":true,\"app\":\"") + launcher::info(tile).id + "\"}"};
   }
   if (action == "launcher" && source == Source::BackgroundBluetooth && query.length())

@@ -673,6 +673,7 @@ async def test_stick_open_navigates_selected_peer(client, monkeypatch, app):
 @pytest.mark.parametrize("answers,reason", [
     ([{}], "firmware"),
     ([{"stickOpen": 1}, {"ok": False, "error": "busy"}], "busy"),
+    ([{"stickOpen": 1}, {"ok": False, "error": "Stick app is hidden"}], "Tile is hidden"),
     ([{"stickOpen": 1}, {"ok": True, "app": "media"}], "confirm"),
 ])
 async def test_stick_open_requires_capability_and_matching_ack(client, monkeypatch, answers, reason):
@@ -741,3 +742,41 @@ async def test_agent_directory_is_an_external_mcp_caller(client, monkeypatch):
     monkeypatch.setattr(agent.stick_api, "ble", ble)
     assert agent.brain_peer is None
     assert not (await client.call("stick_open", {"app": "air"}, headers={"X-Stick-Cwd": "/projects/Agent"}))[1]
+
+async def test_stick_open_visibility_and_shared_rate_limit(client, monkeypatch):
+    agent = client.agent
+    agent.link.client = SimpleNamespace(address="A")
+    agent.link.target = {"address": "A"}
+    agent.mcp_tools.alerts = mcp_server.RateLimit(30, 20)
+    ble = AsyncMock(side_effect=[{"stickOpen": 1, "launcher": "qs"}, {"stickOpen": 1, "launcher": "qs"},
+                                 {"ok": True, "app": "settings"}, {"stickOpen": 1, "launcher": "qs"}])
+    monkeypatch.setattr(agent.stick_api, "ble", ble)
+    text, err, _ = await client.call("stick_open", {"app": "air"})
+    assert err and text == "Tile is hidden"
+    assert not (await client.call("stick_open", {"app": "settings"}))[1]
+    text, err, _ = await client.call("notify", {"text": "Later"})
+    assert err and "rate limited" in text
+    text, err, _ = await client.call("stick_open", {"app": "quick"})
+    assert err and "rate limited" in text
+    assert [c.args[0] for c in ble.await_args_list] == ["@state", "@state", "@stick-open app=settings", "@state"]
+
+
+async def test_dashboard_typed_brain_can_open_stick_tile(client, monkeypatch):
+    agent = client.agent
+    agent.link.client = SimpleNamespace(address="A")
+    agent.link.target = {"address": "A"}
+    ble = AsyncMock(side_effect=[{"stickOpen": 1}, {"ok": True, "app": "air"}])
+    monkeypatch.setattr(agent.stick_api, "ble", ble)
+    result = asyncio.get_running_loop().create_future()
+
+    async def ask(text, on_progress, on_text=None):
+        answer, err, _ = await client.call("stick_open", {"app": "air"}, headers={"X-Stick-Client": "voice"})
+        result.set_result((text, answer, err))
+        return not err, answer
+
+    monkeypatch.setattr(agent.brain, "ask", ask)
+    request = await client.post("/api/ask", json={"text": "show the air mouse"}, headers={
+        **HOST, "X-Stick-Token": config.token()})
+    assert request.status == 200
+    assert await asyncio.wait_for(result, timeout=3) == ("show the air mouse", "Opened air on the stick.", False)
+    assert [call.args[0] for call in ble.await_args_list] == ["@state", "@stick-open app=air"]

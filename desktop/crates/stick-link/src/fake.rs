@@ -1181,6 +1181,8 @@ mod tests {
             assert_eq!(run_line_25(s, "@launcher tiles=faces,games")["launcherFav"], "f");
             assert_eq!(run_line_25(s, "@launcher tiles=faces,games&favorites=-")["launcherFav"], "");
             run_line_25(s, "@launcher tiles=faces&favorites=faces");
+            assert_eq!(run_line_25(s, "@stick-open app=air")["error"], "Stick app is hidden");
+            assert!(s.stick["openTile"].is_null());
             assert_eq!(run_line_25(s, "@launcher reset=1")["launcherFav"], "");
             for bad in ["a", "ai%72", "air&other=1"] {
                 assert_eq!(run_line_25(s, &format!("@stick-open app={bad}"))["ok"], false);

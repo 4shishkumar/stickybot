@@ -27,6 +27,10 @@ bool fromName(const char* s, size_t n, Tile& out) {
   return false;
 }
 
+bool fromFullId(const char* s, size_t n, Tile& out) {
+  return fromName(s, n, out) && strlen(info(out).id) == n;
+}
+
 int Layout::indexOf(Tile t) const {
   for (int i = 0; i < n; i++)
     if (tiles[i] == t) return i;
@@ -167,7 +171,7 @@ bool setFavorites(Catalog& c, const char* ids) {
       const char* end = strchr(id, ',');
       size_t n = end ? static_cast<size_t>(end - id) : strlen(id);
       Tile t;
-      if (n < 2 || !fromName(id, n, t) || c.visible.indexOf(t) < 0 || selected.indexOf(t) >= 0) return false;
+      if (!fromFullId(id, n, t) || c.visible.indexOf(t) < 0 || selected.indexOf(t) >= 0) return false;
       selected.tiles[selected.n++] = t;
       if (!end) break;
       id = end + 1;

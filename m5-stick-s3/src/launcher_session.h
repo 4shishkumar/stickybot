@@ -34,7 +34,8 @@ Action flick(int dir);           // +1 right (next page), -1 left
 bool   timedOut();               // 60 s without input
 bool   onGrid();                 // (not Quick settings / Faces)
 
-bool openFromAgent(Tile tile);  // main-loop navigation, false while a protected interaction owns the screen
+bool visible(Tile tile);
+OpenResult openFromAgent(Tile tile);
 // @launcher [tiles=<ids>&favorites=<ids|->] or [reset=1]: save or report the layout.
 protocol::Result command(const protocol::Args& arg);
 String stateJson();              // "launcher":"grapmfqs" for @state

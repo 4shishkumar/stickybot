@@ -39,6 +39,7 @@ void open() {
 }
 
 bool timedOut() { return millis() - lastInput > TIMEOUT_MS; }
+bool visible(Tile tile) { return catalog.visible.indexOf(tile) >= 0; }
 bool onGrid() { return screen_ == Screen::GRID; }
 
 static launcherui::QuickView quickView() {

@@ -80,7 +80,9 @@ void launcher_query_preserves_absent_and_rejects_ambiguous_favorites() {
 
 static int opens;
 static launcher::Tile opened;
-static bool open(launcher::Tile tile) { ++opens; opened = tile; return true; }
+static launcher::OpenResult open(launcher::Tile tile) {
+  ++opens; opened = tile; return launcher::OpenResult::OPENED;
+}
 
 void stick_open_is_single_destination_and_selected_ble_only() {
   using protocol::Source;
@@ -90,6 +92,9 @@ void stick_open_is_single_destination_and_selected_ble_only() {
     auto r = protocol::runLine(String("@stick-open app=") + id, Source::Bluetooth, open);
     TEST_ASSERT_EQUAL(200, r.status);
     TEST_ASSERT_EQUAL(i, (int)opened);
+    const char letter[] = {launcher::info((launcher::Tile)i).letter, 0};
+    const String alias = String("@stick-open app=") + letter;
+    TEST_ASSERT_EQUAL(400, protocol::runLine(alias, Source::Bluetooth, open).status);
   }
   for (const char* line : {"@stick-open", "@stick-open app=g", "@stick-open app=Terminal",
        "@stick-open app=games&app=air", "@stick-open app=air%00", "@stick-open app=air extra"}) {
@@ -99,7 +104,11 @@ void stick_open_is_single_destination_and_selected_ble_only() {
   TEST_ASSERT_EQUAL(403, protocol::runLine("@stick-open app=air", Source::BackgroundBluetooth, open).status);
   TEST_ASSERT_EQUAL(403, protocol::runLine("@stick-open app=air", Source::Serial, open).status);
   TEST_ASSERT_EQUAL(403, protocol::runLine("@stick-open app=air", Source::Bluetooth).status);
-  auto busy = [](launcher::Tile) { return false; };
+  auto hidden = [](launcher::Tile) { return launcher::OpenResult::HIDDEN; };
+  const auto denied = protocol::runLine("@stick-open app=air", Source::Bluetooth, hidden);
+  TEST_ASSERT_EQUAL(403, denied.status);
+  TEST_ASSERT_NOT_NULL(strstr(denied.json.c_str(), "Stick app is hidden"));
+  auto busy = [](launcher::Tile) { return launcher::OpenResult::BUSY; };
   TEST_ASSERT_EQUAL(409, protocol::runLine("@stick-open app=air", Source::Bluetooth, busy).status);
   TEST_ASSERT_EQUAL(launcher::TILE_COUNT, opens);
   TEST_ASSERT_EQUAL(0, executions);

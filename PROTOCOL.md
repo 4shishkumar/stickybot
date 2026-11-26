@@ -162,8 +162,9 @@ and received the peer address. This also protects tiles-only saves and resets on
 `stickOpen:1` in `@state` advertises `@stick-open app=<id>`. Accepted IDs are `games`, `remote`,
 `air`, `presenter`, `media`, `faces`, `quick` and `settings`. The foreground Mac can request
 navigation on its current Bluetooth connection. Success returns `{"ok":true,"app":"air"}` for
-Air mouse. A busy stick or an unsupported target returns an error. Opening a tile does not press
-a remote button or start sending mouse movements. Air mouse and Media require physical activation.
+Air mouse. A hidden tile returns `Stick app is hidden`. A busy stick or an unsupported target
+returns an error. The agent tool shares the notification rate limit (one action per second and
+up to 20 per minute). Air mouse and Media require physical activation before sending motion input.
 
 ### Button bindings
 

@@ -643,7 +643,8 @@ static bool leaveWebSettings() {
   return true;
 }
 
-bool launcher::openFromAgent(Tile tile) {
+launcher::OpenResult launcher::openFromAgent(Tile tile) {
+  if (!visible(tile)) return OpenResult::HIDDEN;
   // Only Home (including a pending voice reply) or the launcher grid can yield.
   // Never cancel or answer a prompt, interrupt a physical input, or discard a settings draft.
   OpenContext context;
@@ -655,7 +656,7 @@ bool launcher::openFromAgent(Tile tile) {
   context.transfer = ota::active() || faces::pkg::install::receiving() || ir::sending() || web::busy();
   context.overlay = air::active() || ir::screenActive() || faces::demoActive() ||
                     events::active() || events::pending() || web::shown();
-  if (!context.available()) return false;
+  if (!context.available()) return OpenResult::BUSY;
 
   agentView.close();
   talkEndedAt = 0;
@@ -665,7 +666,7 @@ bool launcher::openFromAgent(Tile tile) {
   mode = Mode::LAUNCHER;
   ui::wake(B_SCREEN_MS);
   onLauncher(openTile(tile, false), false, true);
-  return true;
+  return OpenResult::OPENED;
 }
 
 static void mappedGesture(buttons::Slot slot) {

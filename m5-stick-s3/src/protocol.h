@@ -35,7 +35,7 @@ inline void humanReply(Print& reply, const String& json) { reply.println(json); 
 // Every caller states its transport; Bluetooth cannot erase shared host records.
 enum class Source { Serial, Bluetooth, BackgroundBluetooth };
 // Only the selected Bluetooth connection supplies the main-loop navigation callback.
-using OpenTile = bool (*)(launcher::Tile);
+using OpenTile = launcher::OpenResult (*)(launcher::Tile);
 Result runLine(const String& line, Source source, OpenTile openTile = nullptr);
 void   finish(const Result& r);
 
