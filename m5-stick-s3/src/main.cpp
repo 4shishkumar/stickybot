@@ -634,9 +634,20 @@ static void onLauncher(launcher::Action a, bool byHold) {
   dirty = true;
 }
 
+static bool leaveWebSettings() {
+  if (web::busy()) return false;
+  if (devActive) web::hide();  // developer USB Wi-Fi runs in the background
+  else web::stop();
+  mode = Mode::STATUS;
+  dirty = true;
+  return true;
+}
+
 static void mappedGesture(buttons::Slot slot) {
   const auto& binding = settings::buttonMap()[slot];
   using D = actions::Do;
+  if (mode == Mode::WEB && (binding.action == D::LAUNCHER || binding.action == D::OPEN_TILE) &&
+      !leaveWebSettings()) return;
   switch (binding.action) {
     case D::UNLOCK: unlockMac(); break;
     case D::LAUNCHER:
@@ -1366,10 +1377,7 @@ void loop() {
       if (bTriple) {
         if (ui::wake(B_SCREEN_MS)) dirty = true;  // asleep: triple B only wakes it
         else if (mode == Mode::WEB) {  // this screen owns triple B: close web settings
-          if (devActive) web::hide();
-          else web::stop();
-          mode = Mode::STATUS;
-          dirty = true;
+          leaveWebSettings();
         } else mappedGesture(buttons::Slot::TRIPLE);
       }
       break;

@@ -40,7 +40,8 @@ press B to finish recording. A hold ends when B is released.
 Mappings apply on screens that accept global gestures. Games, the Launcher, settings,
 remote modes and approval prompts keep their own controls. Triple B still wakes a sleeping
 display. Hint labels follow the mapping on screens that show them. Shake, lift and standby
-keep their existing behavior.
+keep their existing behavior. Opening the Launcher or a tile with a shortcut closes the web settings
+screen first. Developer-mode Wi-Fi stays available in the background.
 
 ## Part 1: screen controls (2.6.0 baseline)
 
