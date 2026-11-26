@@ -12,6 +12,12 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Changed
+- **Stick notifications say who and what.** "priya asked for your review", "alex approved #12",
+  "kim wants changes on #12", "sam merged #12!", "CI failed on #12: lint". Claude Code alerts show
+  what Claude said it did ("took 4 min - Fixed the flaky login test.") instead of repeating your
+  prompt. Events also carry who, the link and a longer text for the stick's upcoming detail page.
+
 ## [2.8.0] - 2026-11-25
 
 ### Added

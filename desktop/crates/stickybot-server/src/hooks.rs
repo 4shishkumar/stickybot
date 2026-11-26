@@ -265,6 +265,32 @@ fn permission_decision(tool: &str, answer: &Value) -> Option<String> {
     Some(json!({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": decision}}).to_string())
 }
 
+/// Claude's last words in a session transcript (JSONL): the text of the last assistant message,
+/// read from the file's last 256 KB.
+pub fn last_reply(transcript: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(transcript).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(256 * 1024))).ok()?;
+    let mut tail = String::new();
+    let mut bytes = Vec::new();
+    f.read_to_end(&mut bytes).ok()?;
+    tail.push_str(&String::from_utf8_lossy(&bytes));
+    tail.lines().rev().filter_map(|l| serde_json::from_str::<Value>(l).ok()).find_map(|v| {
+        if v["type"] != "assistant" {
+            return None;
+        }
+        let text: Vec<&str> = v["message"]["content"]
+            .as_array()?
+            .iter()
+            .filter(|c| c["type"] == "text")
+            .filter_map(|c| c["text"].as_str())
+            .collect();
+        let text = text.join(" ").trim().to_string();
+        (!text.is_empty()).then_some(text)
+    })
+}
+
 /// UserPromptSubmit / Stop (claude_hooks.py): remembers the prompt per session in
 /// `<home>/claude_sessions.json`; at Stop tells the app how long it took. -> the body posted.
 pub fn session_event(req: &Value, home: &Path, now: f64, send: &dyn Fn(&Value)) -> Option<Value> {
@@ -299,8 +325,15 @@ pub fn session_event(req: &Value, home: &Path, now: f64, send: &dyn Fn(&Value)) 
             let t = start.get("t").and_then(Value::as_f64).unwrap_or(now);
             let cwd =
                 if cwd.is_empty() { start.get("cwd").and_then(Value::as_str).unwrap_or("").to_string() } else { cwd };
+            let said = req
+                .get("last_assistant_message")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| req.get("transcript_path").and_then(Value::as_str).and_then(|p| last_reply(Path::new(p))))
+                .unwrap_or_default();
             let body = json!({"elapsed_s": (now - t).round() as i64, "cwd": cwd,
-                              "prompt": start.get("prompt").cloned().unwrap_or(json!(""))});
+                              "prompt": start.get("prompt").cloned().unwrap_or(json!("")),
+                              "summary": said.chars().take(600).collect::<String>()});
             send(&body);
             Some(body)
         }
@@ -479,6 +512,24 @@ mod tests {
     // --- test_hooks.py ---
 
     #[test]
+    fn the_last_assistant_message_comes_from_the_transcript() {
+        let dir = std::env::temp_dir().join(format!("stickybot-transcript-{}", crate::config::new_token()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let t = dir.join("s.jsonl");
+        let lines = [
+            json!({"type": "user", "message": {"content": "fix the login test"}}),
+            json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Looking."}]}}),
+            json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash"}]}}),
+            json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Fixed the flaky login test."}, {"type": "text", "text": "All green."}]}}),
+            json!({"type": "system", "subtype": "stop"}),
+        ];
+        std::fs::write(&t, lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n")).unwrap();
+        assert_eq!(last_reply(&t).as_deref(), Some("Fixed the flaky login test. All green."));
+        assert_eq!(last_reply(&dir.join("missing.jsonl")), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn describe_like_hook_py() {
         assert_eq!(describe("Bash", &json!({"command": "ls -la"})), "ls -la");
         assert_eq!(describe("Edit", &json!({"file_path": "/x/y.rs", "old": 1})), "/x/y.rs");
@@ -506,7 +557,7 @@ mod tests {
         assert_eq!(session_event(&p, &home, 1000.0, &send), None);
         let s = json!({"hook_event_name": "Stop", "session_id": "s1", "cwd": "/w/web"});
         let body = session_event(&s, &home, 1300.4, &send).unwrap();
-        assert_eq!(body, json!({"elapsed_s": 300, "cwd": "/w/web", "prompt": "fix it"}));
+        assert_eq!(body, json!({"elapsed_s": 300, "cwd": "/w/web", "prompt": "fix it", "summary": ""}));
         assert_eq!(sent.lock().unwrap().len(), 1);
         // a Stop without its prompt: nothing
         assert_eq!(session_event(&s, &home, 1400.0, &send), None);

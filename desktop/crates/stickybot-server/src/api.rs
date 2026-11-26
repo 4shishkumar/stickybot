@@ -865,12 +865,12 @@ async fn event_kinds(State(st): State<Arc<AppState>>) -> axum::Json<Value> {
     axum::Json(crate::events::kinds_json(&cfg, st.sounds().as_ref()))
 }
 
-/// The Claude Code Stop hook (`claude_hooks.py`): `{"elapsed_s", "cwd", "prompt"}`.
+/// The Claude Code Stop hook (`claude_hooks.py`): `{"elapsed_s", "cwd", "prompt", "summary"}`.
 async fn claude_event(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json<Value> {
     let b = body_obj(&body);
     let elapsed = b.get("elapsed_s").and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))).unwrap_or(0);
     let s = |k: &str| b.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-    let ev = crate::home::claude_finished(&st, elapsed, &s("cwd"), &s("prompt")).await;
+    let ev = crate::home::claude_finished(&st, elapsed, &s("cwd"), &s("prompt"), &s("summary")).await;
     axum::Json(json!({"ok": true, "shown": ev.is_some()}))
 }
 
@@ -2064,6 +2064,13 @@ mod tests {
         assert_eq!(p1["pet"]["claude"], p0["pet"]["claude"].as_i64().unwrap() + 2);
         assert_eq!(p1["pet"]["xp"], p0["pet"]["xp"].as_i64().unwrap() + 4);
         assert_eq!(p1["pet"]["streak"], 1);
+        // with Claude's last message: its first sentence on the toast, the whole of it for the detail page
+        let summary = "Fixed the flaky login test. The retry loop now waits for the server, and all 40 tests pass.";
+        call(&app, req("POST", "/api/claude-event",
+            Some(json!({"elapsed_s": 245, "cwd": "/Users/a/code/web/", "prompt": "fix the tests", "summary": summary})), tok)).await;
+        let last = stick_lines(&fake).into_iter().rev().find(|l| l.get("event").is_some()).unwrap();
+        assert_eq!(last["event"]["sub"], "took 4 min - Fixed the flaky login test.");
+        assert_eq!(last["event"]["body"], summary);
         assert!(p1["world"]["pet"]["seed"].as_i64().unwrap() > 0);
     }
 
