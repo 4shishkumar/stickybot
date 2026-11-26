@@ -7,6 +7,7 @@ namespace settings {
 
 static Preferences prefs;
 static Combo current;
+static buttons::Table buttonMap_;
 
 static String getStr(const char* key, const char* def = "") {
   return prefs.isKey(key) ? prefs.getString(key) : String(def);
@@ -14,9 +15,22 @@ static String getStr(const char* key, const char* def = "") {
 
 void begin() {
   prefs.begin("stick", false);  // same namespace as M1, keeps the saved combo
+  buttonMap_ = buttons::defaults();
+  char record[buttons::MAX_RECORD_BYTES + 1];
+  if (prefs.isKey("buttons") && prefs.getString("buttons", record, sizeof(record))) buttons::unpack(record, buttonMap_);
   current.mods = prefs.getUChar("mods", KEY_MOD_LALT | KEY_MOD_LGUI);  // default: Option+Cmd
   current.key  = prefs.getUChar("key", 0);
   if (!current.valid()) current.mods = KEY_MOD_LALT | KEY_MOD_LGUI;
+}
+
+const buttons::Table& buttonMap() { return buttonMap_; }
+
+bool saveButtonMap(const buttons::Table& next) {
+  const std::string record = buttons::pack(next);
+  if (record == buttons::pack(buttonMap_)) return true;
+  if (prefs.putString("buttons", record.c_str()) != record.size()) return false;
+  buttonMap_ = next;
+  return true;
 }
 
 Combo combo() { return current; }

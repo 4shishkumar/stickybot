@@ -26,6 +26,7 @@ enum class Action : uint8_t { NONE, REDRAW, HOME, GAMES, REMOTE, AIR, PRESENTER,
 void   begin();                  // loads the layout and the last tile from NVS
 void   open();                   // the grid, on the last tile opened
 void   draw();                   // the screen it's on (main.cpp's render())
+Action openTile(Tile tile);      // shared by the grid and a physical gesture shortcut
 Action pressA();
 Action clickB();                 // B released before the hold time
 Action holdB();

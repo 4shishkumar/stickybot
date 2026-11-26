@@ -5,6 +5,17 @@
 //
 // ctx: {st: the stick's @state reply or null, gamesInfo, snd, petInfo, keys, via, stickName}
 
+export const TILES = [
+  ["g", "games", "Games", "The seven games"],
+  ["r", "remote", "Remote", "The IR remote (TV, AC…)"],
+  ["a", "air", "Air mouse", "Point the stick to move the pointer"],
+  ["p", "presenter", "Presenter", "Slide clicker + talk timer"],
+  ["m", "media", "Media", "Media remote: play, volume, tracks"],
+  ["f", "faces", "Faces", "Pick the Home face"],
+  ["q", "quick", "Quick settings", "Brightness, volume, toggles", true],
+  ["s", "settings", "Settings", "The full settings menu", true],
+];
+
 // Most-used first; rarely used and risky (renames, forgetting a Mac) last.
 export const SECTIONS = [
   {id: "status", title: "Status", short: "Status", cards: ["hero"], fixed: true},

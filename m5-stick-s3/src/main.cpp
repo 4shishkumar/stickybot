@@ -2,14 +2,14 @@
 //
 // Button A (front) mirrors a key combo over Bluetooth: press = combo down,
 // release = combo up (single press = once, double = twice, hold = held).
-// Button B (side): click = Enter, double = unlock the Mac, hold = talk to the
+// Button B factory defaults: click = Enter, double = unlock the Mac, hold = talk to the
 // Mac agent (tools/mac-agent), triple = wake the screen / open the Launcher (2.5.1: a grid
 // of app tiles, launcher_session.h; its Settings tile is the settings menu).
 //
 // Context actions (2.6.0, logic/actions.h, docs/CONTEXT-ACTIONS.md): a screen can give the
 // buttons its own meaning, shown in a hint bar at its bottom. The reply view (the agent's
 // answer): A = next page, hold A = read it aloud / stop, tilt = scroll, B = close; A is not
-// the key combo there. Hold B (talk), double B (unlock) and triple B (Launcher) stay global.
+// the key combo there. The dashboard configures double B, triple B, hold B and A+B.
 //
 // Motion: lift = wake screen, face-down = standby, shake = Escape (or deny a
 // Claude prompt). Each can be turned off in the menu / settings page.
@@ -82,10 +82,13 @@ constexpr uint16_t COLOR_DIM  = 0x2104;
 enum class Mode { STATUS, MENU, WEB, GAME, LAUNCHER };
 
 static Mode       mode = Mode::STATUS;
-static bool       agentTalking = false;
+static bool       agentTalking = false, latchedTalk = false, bDictating = false;
+static reader::Overlay agentView;
+static buttons::Chord chord;
+static uint32_t   latchedAt = 0;
 static bool       swallowB = false;     // a B press that dismissed an event: ignore its click
 static uint32_t   swallowBUntil = 0;
-static uint32_t   agentShowUntil = 0, agentSeenAt = 0, talkEndedAt = 0, lastFrame = 0, promptAt = 0, pageAt = 0;
+static uint32_t   agentSeenAt = 0, talkEndedAt = 0, lastFrame = 0, promptAt = 0, pageAt = 0;
 constexpr uint32_t PAGE_RETURN_MS = 10000;  // other pages go back to Home after this
 constexpr uint32_t DOCK_IDLE_MS = 30000;    // on USB and untouched this long: the dock clock
 static bool       docked = false;
@@ -235,9 +238,9 @@ static uint8_t replyFlags() {
 
 static void drawReplyView() {
   ui::ReplyView v;
-  v.heard = buddy::agent().heard;
+  v.heard = buddy::lastAnswer().heard;
   const std::string& full = buddy::replyFull();
-  if (full.empty()) replyShort = buddy::agent().text.c_str();
+  if (full.empty()) replyShort = buddy::lastAnswer().text.c_str();
   v.text = full.empty() ? &replyShort : &full;
   v.top = replyPager.top;
   v.flags = replyFlags() & ~actions::PAGED;
@@ -252,10 +255,10 @@ static void render() {
     case Mode::STATUS:
       if (docked)                         ui::drawDock(readDash(), dockSide(), nightTime());
       else if (comboDown)                 ui::drawHolding(status.combo, aPath == wispr::Path::USB, wispr::streams(aPath));
-      else if (agentTalking)              ui::drawTalk(buddy::agentLinked());
-      else if (millis() < agentShowUntil && agentSeenAt < talkEndedAt) ui::drawAgent("thinking", "", "");
-      else if (millis() < agentShowUntil && buddy::agent().state == "done") drawReplyView();
-      else if (millis() < agentShowUntil) ui::drawAgent(buddy::agent().state, buddy::agent().heard, buddy::agent().text);
+      else if (agentTalking)              ui::drawTalk(buddy::agentLinked(), latchedTalk);
+      else if (millis() < agentView.until && agentSeenAt < talkEndedAt) ui::drawAgent("thinking", "", "");
+      else if (millis() < agentView.until && (agentView.recalled || buddy::agent().state == "done")) drawReplyView();
+      else if (millis() < agentView.until) ui::drawAgent(buddy::agent().state, buddy::agent().heard, buddy::agent().text);
       else                                ui::drawPage(page, readDash());
       break;
     case Mode::MENU:
@@ -631,6 +634,75 @@ static void onLauncher(launcher::Action a, bool byHold) {
   dirty = true;
 }
 
+static bool leaveWebSettings() {
+  if (web::busy()) return false;
+  if (devActive) web::hide();  // developer USB Wi-Fi runs in the background
+  else web::stop();
+  mode = Mode::STATUS;
+  dirty = true;
+  return true;
+}
+
+static void mappedGesture(buttons::Slot slot) {
+  const auto& binding = settings::buttonMap()[slot];
+  using D = actions::Do;
+  if (mode == Mode::WEB && (binding.action == D::LAUNCHER || binding.action == D::OPEN_TILE) &&
+      !leaveWebSettings()) return;
+  switch (binding.action) {
+    case D::UNLOCK: unlockMac(); break;
+    case D::LAUNCHER:
+      launcher::open();
+      mode = Mode::LAUNCHER;
+      ui::wake(B_SCREEN_MS);
+      break;
+    case D::OPEN_TILE:
+      launcher::open();
+      mode = Mode::LAUNCHER;
+      ui::wake(B_SCREEN_MS);
+      onLauncher(launcher::openTile(binding.tile), false);
+      break;
+    case D::LAST_REPLY:
+      if (buddy::lastAnswer().state != "done") {
+        showMessage("No reply yet", nullptr, COLOR_WARN);
+      } else {
+        talkEndedAt = 0;
+        replyPager = reader::Pager{};
+        replyTilt.begin();
+        replyTiltAt = 0;
+        agentView.recall(millis() + REPLY_IDLE_MS);
+        ui::wake(REPLY_IDLE_MS);
+      }
+      break;
+    case D::TALK:
+      if (mic::wisprStreaming()) break;
+      if (slot != buttons::Slot::HOLD && !buddy::agentLinked()) {
+        showMessage("Agent offline", "Open StickyBot on the Mac", COLOR_WARN);
+        break;
+      }
+      agentView.close();
+      agentTalking = true;
+      latchedTalk = slot != buttons::Slot::HOLD;
+      latchedAt = millis();
+      if (buddy::agentLinked()) { mic::agentTalk(); sound::playListen(); }
+      else mic::agentEnd();
+      Log.event(diagnostics::Event::Mic);
+      ui::wake(B_SCREEN_MS);
+      break;
+    case D::COMBO:
+      mic::agentEnd();  // release any pre-roll before Bluetooth dictation takes the mic
+      comboPress();
+      bDictating = comboDown;
+      break;
+    case D::MAC_APP:
+    case D::QUICK:
+      if (!buddy::buttonAction(buttons::key(slot), binding.wire.c_str()))
+        showMessage("Mac action unavailable", "Open or update StickyBot", COLOR_WARN);
+      break;
+    default: break;
+  }
+  dirty = true;
+}
+
 // --- Serial ------------------------------------------------------------------------
 
 // Serial "screens": shows every screen with sample data (~3 s each), for design review:
@@ -886,13 +958,19 @@ void loop() {
     if (!B.isPressed()) ignoreBUntilRelease = false;
     bDown = bSingle = bDouble = bTriple = bHold = bClick = false;
   }
-  if (agentTalking && !B.isPressed()) {
+  if (bDictating && !B.isPressed()) {
+    comboRelease();
+    bDictating = false;
+  }
+  if (agentTalking && buttons::finishTalk(latchedTalk, bDown, B.isPressed(), buddy::agentLinked(), millis() - latchedAt)) {
+    if (latchedTalk && bDown) { swallowB = true; bDown = false; }
+    latchedTalk = false;
     agentTalking = false;
     mic::agentEnd();
     if (buddy::agentLinked()) sound::play(sound::Cue::SENT);  // plays once the mic has stopped
     bSingle = bDouble = bTriple = false;
     talkEndedAt = millis();
-    agentShowUntil = buddy::agentLinked() ? millis() + NO_ANSWER_MS : 0;  // "Thinking..." until the agent answers
+    agentView.show(buddy::agentLinked() ? millis() + NO_ANSWER_MS : 0);  // "Thinking..." until the agent answers
     dirty = true;
   }
   // New status from the agent: show it (and wake the screen)
@@ -900,7 +978,7 @@ void loop() {
     agentSeenAt = buddy::agentUpdated();
     const String& st = buddy::agent().state;
     if (st == "cancelled") {  // a quick press with no words: back to the normal screen, quietly
-      agentShowUntil = 0;
+      agentView.close();
       talkEndedAt = 0;
       dirty = true;
     } else {
@@ -912,19 +990,19 @@ void loop() {
         replyTilt.begin();
         replyTiltAt = 0;
       }
-      agentShowUntil = millis() + keep;
+      agentView.show(millis() + keep);
       ui::wake(keep);
       dirty = true;
     }
   }
-  if (agentShowUntil && millis() >= agentShowUntil) {
+  if (agentView.until && millis() >= agentView.until) {
     // Still "Thinking..." with no word from the agent at all: say so instead of hanging
     if (agentSeenAt < talkEndedAt && talkEndedAt) {
       talkEndedAt = 0;
       showMessage("No answer", "The Mac agent didn't respond", COLOR_WARN);
       sound::play(sound::Cue::ERROR);
     }
-    agentShowUntil = 0;
+    agentView.close();
     dirty = true;
   }
 
@@ -938,6 +1016,22 @@ void loop() {
     swallowBUntil = millis() + 900;
   }
   if (swallowB || millis() < swallowBUntil) bDown = bSingle = bDouble = bTriple = bHold = bClick = false;
+
+  // B first (or both in one sample) preserves the immediate A dictation press.
+  // Consume its click decision before the agent screen can interpret it as cancel/close,
+  // and both releases before entering a tile. A modal arriving mid-chord discards it.
+  bool chordAllowed = mode == Mode::STATUS && !comboDown && !agentTalking && !ignoreAUntilRelease &&
+                      !ignoreBUntilRelease && !swallowB && millis() >= swallowBUntil && !hid::pairingCode() &&
+                      !buddy::hasPrompt() && !air::active() && !events::active() && !ir::screenActive() && !faces::demoActive();
+  auto chordStep = chord.update(chordAllowed, aDown, A.isPressed(), B.isPressed(), B.pressedFor(B_HOLD_MS));
+  bool chordFired = chordStep == buttons::ChordStep::FIRE;
+  if (chordStep != buttons::ChordStep::PASS) {
+    aDown = aUp = bDown = bHold = bClick = bSingle = bDouble = bTriple = false;
+    if (chordFired || chordStep == buttons::ChordStep::DISCARD) {
+      swallowBUntil = millis() + 900;  // M5's delayed decision for the consumed B click
+      mic::agentEnd();
+    }
+  }
 
   motion::Event mev = motion::poll();
   if (mev != motion::Event::NONE) {
@@ -979,10 +1073,10 @@ void loop() {
   // Escape: on an agent screen, a click of B (or a shake) dismisses it and cancels
   // the request; back to Home. That click doesn't send Enter.
   // (2.6.0: what B and a shake do comes from the screen's action map, logic/actions.cpp)
-  const bool agentScreen = mode == Mode::STATUS && agentShowUntil && millis() < agentShowUntil && !agentTalking;
-  const bool agentBusy = agentScreen && (agentSeenAt < talkEndedAt || buddy::agent().state == "thinking" ||
+  const bool agentScreen = mode == Mode::STATUS && agentView.until && millis() < agentView.until && !agentTalking;
+  const bool agentBusy = agentScreen && !agentView.recalled && (agentSeenAt < talkEndedAt || buddy::agent().state == "thinking" ||
                                          buddy::agent().state == "working");
-  const bool replyView = agentScreen && !agentBusy && !comboDown && !docked && buddy::agent().state == "done";
+  const bool replyView = agentScreen && !agentBusy && !comboDown && !docked && (agentView.recalled || buddy::agent().state == "done");
   actions::Do agentAct = actions::Do::NONE;
   if (agentScreen) {
     const actions::Screen& scr = actions::screen(replyView ? actions::Id::REPLY : actions::Id::AGENT);
@@ -996,7 +1090,7 @@ void loop() {
     if (busy) buddy::agentCancel();
     if (replyView && buddy::agentSpeaking()) buddy::agentSpeak(false);  // closing the reply stops reading it
     Log.event(diagnostics::Event::Display);
-    agentShowUntil = 0;
+    agentView.close();
     talkEndedAt = 0;
     page = ui::Page::HOME;
     bSingle = false;
@@ -1005,7 +1099,7 @@ void loop() {
   }
   // Toys for the faces (StickyWorld, Aquarium), on Home only; the gestures still do their jobs
   const bool onHome = mode == Mode::STATUS && page == ui::Page::HOME && !docked && !comboDown && !agentTalking &&
-                      millis() >= agentShowUntil;
+                      millis() >= agentView.until;
   if (onHome && mev == motion::Event::SHAKE) faces::toy(world::Kick::SHAKE);
   if (onHome && mev == motion::Event::LIFT) faces::toy(world::Kick::LIFT);
   if ((mev == motion::Event::FLICK_LEFT || mev == motion::Event::FLICK_RIGHT) && mode == Mode::STATUS && !comboDown) {
@@ -1056,8 +1150,8 @@ void loop() {
     }
     ui::drawPairing(code);
     ui::keepAwake();
-    if (aDown) hid::confirmPairing(true);
-    if (bDown) hid::confirmPairing(false);
+    if (aDown) { hid::confirmPairing(true); ignoreAUntilRelease = true; }
+    if (bDown) { hid::confirmPairing(false); swallowB = true; }
     delay(20);
     return;
   }
@@ -1093,10 +1187,12 @@ void loop() {
     bool ask = p.ask;  // (p is gone once answered)
     bool shake = mev == motion::Event::SHAKE && settings::shakeEscapes() && millis() - promptAt >= PROMPT_GUARD_MS;
     if (aDown) {
+      ignoreAUntilRelease = true;
       buddy::answer(prompt::decision(ask, prompt::Input::A));
       Log.event(diagnostics::Event::PromptAnswered);
       sound::play(sound::Cue::APPROVED);
     } else if (bDown || shake) {
+      if (bDown) swallowB = true;
       buddy::answer(prompt::decision(ask, bDown ? prompt::Input::B : prompt::Input::SHAKE));
       Log.event(diagnostics::Event::PromptAnswered);
       sound::play(sound::Cue::DENIED);
@@ -1208,10 +1304,10 @@ void loop() {
   }
 
   // The reply view: A pages / reads aloud (not the key combo), tilting scrolls
-  if (replyView && millis() < agentShowUntil) {
+  if (replyView && millis() < agentView.until) {
     const actions::Screen& scr = actions::screen(actions::Id::REPLY);
     auto touch = [] {
-      agentShowUntil = millis() + REPLY_IDLE_MS;
+      agentView.until = millis() + REPLY_IDLE_MS;
       ui::wake(REPLY_IDLE_MS);
       lastInput = millis();
       dirty = true;
@@ -1244,7 +1340,7 @@ void loop() {
       if (n && replyPager.scroll(n)) touch();
     }
     if (buddy::agentSpeaking()) {  // reading aloud: the reply stays
-      agentShowUntil = max(agentShowUntil, millis() + 5000);
+      agentView.until = max(agentView.until, millis() + 5000);
       ui::keepAwake();
     }
   } else if (replyA) {
@@ -1268,38 +1364,21 @@ void loop() {
   switch (mode) {
     case Mode::STATUS:
     case Mode::WEB:
+      if (chordFired) { mappedGesture(buttons::Slot::CHORD); break; }
+      if (agentTalking || bDictating) break;
       if (aDown) comboPress();  // works with the screen off; doesn't wake it
       if (aUp) comboRelease();
-      if (bSingle) sendEnter("button B");  // works with the screen off; doesn't wake it
-      if (bDouble) unlockMac();
-      // Hold B = talk to the Mac agent. Recording starts on every B press
-      // (pre-roll) and is dropped again if it turns out to be a click.
-      if (bDown && !comboDown) mic::preRoll();
-      if (bHold && !comboDown) {
-        agentTalking = true;
-        if (buddy::agentLinked()) {
-          mic::agentTalk();
-          sound::playListen();  // "speak now" (the mic pauses ~0.2 s for it)
-        }
-        else mic::agentEnd();
-        Log.event(diagnostics::Event::Mic);
-        ui::wake(B_SCREEN_MS);
-        dirty = true;
-      }
+      if (bSingle) sendEnter("button B");
+      if (comboDown || chord.pending) break;
+      if (bDown && settings::buttonMap()[buttons::Slot::HOLD].action == actions::Do::TALK) mic::preRoll();
+      if (bHold) mappedGesture(buttons::Slot::HOLD);
       if (!B.isPressed() && !agentTalking) mic::agentEnd();  // a click: drop the pre-roll
-      if (bTriple && !comboDown) {
-        if (ui::wake(B_SCREEN_MS)) {
-          dirty = true;  // screen was off: this only wakes it
-        } else if (mode == Mode::STATUS) {  // the Launcher (2.5.1; Settings is one of its tiles)
-          launcher::open();
-          mode = Mode::LAUNCHER;
-          dirty = true;
-        } else {
-          if (devActive) web::hide();  // keep Wi-Fi for OTA + logs
-          else web::stop();
-          mode = Mode::STATUS;
-          dirty = true;
-        }
+      if (bDouble) mappedGesture(buttons::Slot::DOUBLE);
+      if (bTriple) {
+        if (ui::wake(B_SCREEN_MS)) dirty = true;  // asleep: triple B only wakes it
+        else if (mode == Mode::WEB) {  // this screen owns triple B: close web settings
+          leaveWebSettings();
+        } else mappedGesture(buttons::Slot::TRIPLE);
       }
       break;
 
@@ -1359,7 +1438,7 @@ void loop() {
   // Any input (button, lift, flick) ends it — and the button still does its job.
   {
     bool want = battery::usbPower() && mode == Mode::STATUS && !comboDown && !agentTalking &&
-                millis() >= agentShowUntil && !events::active() && !events::pending() && !messageUntil &&
+                millis() >= agentView.until && !events::active() && !events::pending() && !messageUntil &&
                 millis() - lastInput >= DOCK_IDLE_MS;
     if (want != docked) {
       docked = want;
@@ -1379,10 +1458,10 @@ void loop() {
   // Live screens animate (mic level, eyes): redraw them ~25 times a second
   {
     const String& st = buddy::agent().state;
-    bool agentBusy = millis() < agentShowUntil && (agentSeenAt < talkEndedAt || st == "thinking" || st == "working");
-    bool speaking = mode == Mode::STATUS && !docked && st == "done" && millis() < agentShowUntil && buddy::agentSpeaking();
+    bool agentBusy = millis() < agentView.until && (agentSeenAt < talkEndedAt || st == "thinking" || st == "working");
+    bool speaking = mode == Mode::STATUS && !docked && st == "done" && millis() < agentView.until && buddy::agentSpeaking();
     bool live = mode == Mode::STATUS && !docked && (comboDown || agentTalking || agentBusy);
-    bool calm = mode == Mode::STATUS && !live && !docked && millis() >= agentShowUntil;
+    bool calm = mode == Mode::STATUS && !live && !docked && millis() >= agentView.until;
     bool homeAnim = calm && page == ui::Page::HOME && ui::homeAnimating();  // card fade / eyes peeking
     bool idleEyes = calm && page == ui::Page::AGENT;                          // blinking, glancing
     // the face on Home asks for its own pace (0 = Classic: only on change); slower on battery

@@ -9,6 +9,7 @@ import * as stick from "./pages/stick.js";
 import * as sounds from "./pages/sounds.js";
 import * as remote from "./pages/remote.js";
 import * as events from "./pages/events.js";
+import * as buttons from "./pages/buttons.js";
 import * as settings from "./pages/settings.js";
 import * as logs from "./pages/logs.js";
 import * as wizard from "./wizard.js";
@@ -41,6 +42,7 @@ const PAGES = [
   ["logs", "Logs", logs],
 ];
 const byName = Object.fromEntries(PAGES.map(([n, , m]) => [n, m]));
+byName["settings/buttons"] = buttons;
 byName.install = install;  // the setup page (#install/<step>): not in the nav, shown on its own
 let currentName = null, current = null;
 
@@ -91,8 +93,8 @@ function show(name) {
   currentName = name;
   current = byName[name];
   document.body.classList.toggle("install-mode", name === "install");
-  if (name !== "install") remember("page", name);
-  for (const a of document.querySelectorAll("[data-page]")) a.classList.toggle("on", a.dataset.page === name);
+  if (name !== "install") remember("page", name.split("/")[0]);
+  for (const a of document.querySelectorAll("[data-page]")) a.classList.toggle("on", a.dataset.page === name.split("/")[0]);
   setHead(current);
   const root = clear($("#page"));
   root.scrollTop = 0;
@@ -107,7 +109,7 @@ function route() {
     wizard.open(() => { history.replaceState(null, "", "#" + (currentName || "overview")); });
     return;
   }
-  show(hash.split("/")[0] || recall("page", "overview"));  // #install/<step>: the page follows the step
+  show((Object.hasOwn(byName, hash) ? hash : hash.split("/")[0]) || recall("page", "overview"));  // install handles its own substeps
 }
 
 // ---------- status pill + approvals badge ----------

@@ -53,9 +53,22 @@ void malformed_commands_never_dispatch_and_ir_keeps_its_normalization() {
   TEST_ASSERT_EQUAL_STRING("ir", action.c_str());
   TEST_ASSERT_EQUAL_STRING("volume up", button.c_str());
 }
+void mapping_writes_require_one_unambiguous_value_per_gesture() {
+  for (const char* line : {"@buttons", "@buttons b2=unlock&b3=launcher&ab=none",
+       "@buttons b2=unlock&b2=none&b3=talk&ab=reply&bh=talk",
+       "@buttons b2=app:abc%00def&b3=launcher&ab=none&bh=talk",
+       "@buttons b2=app:x%ZZ&b3=launcher&ab=none&bh=talk",
+       "@buttons b2=unlock&b3=launcher&ab=none&bh=talk&"}) {
+    TEST_ASSERT_EQUAL(400, protocol::runLine(line, protocol::Source::Bluetooth).status);
+  }
+  TEST_ASSERT_EQUAL(0, executions);
+  TEST_ASSERT_EQUAL(200, protocol::runLine("@buttons bh=talk&b3=app%3AMy%20App&ab=reply&b2=launcher",
+                                          protocol::Source::Bluetooth).status);
+}
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(bluetooth_cannot_forget_any_host_or_change_mode_in_the_same_command);
+  RUN_TEST(mapping_writes_require_one_unambiguous_value_per_gesture);
   RUN_TEST(serial_can_forget_one_or_all_hosts);
   RUN_TEST(bluetooth_host_queries_and_mode_changes_still_dispatch);
   RUN_TEST(malformed_commands_never_dispatch_and_ir_keeps_its_normalization);

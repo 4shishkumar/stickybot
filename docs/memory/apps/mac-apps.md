@@ -1,6 +1,6 @@
 ---
 type: memory
-description: "Rust StickyBot.app and the legacy Python app: independent device sessions, scoped APIs/MCP/history/jobs, default routing, host labels, Mac keyboard push-to-talk and reply panel, shared Mac services, source-bound approvals, shared dashboard compatibility, stick volume controls, permissions and in-app updates."
+description: "Rust StickyBot.app and the legacy Python app: independent device sessions, scoped APIs/MCP/history/jobs, default routing, host labels, Mac keyboard push-to-talk and reply panel, shared Mac services, source-bound approvals, shared dashboard compatibility, stick volume controls, configurable button gestures, permissions and in-app updates."
 ---
 # Mac Apps
 
@@ -33,6 +33,18 @@ exact saved volume (0–255). Unmute restores that value, or uses 140 if the sav
 Sound requests to each stick run one at a time. The Rust menu and dashboard coalesce drag updates
 and send the final level on release. If another control changes the volume while the thumb is held
 still, release displays the latest hardware report.
+
+### Buttons & gestures
+
+Both apps expose **Settings → Your stick → Buttons & gestures** when the selected Bluetooth
+stick reports its four bindings in `@state.buttons`. Save submits the entire table with the
+responding peer's `device_address` as `expected_address`. The editor displays the stick's
+acknowledged bindings. A disconnected or newly selected peer requires a fresh read.
+
+A physical press can open an installed Mac app by exact name or run one uniquely named saved
+quick command that needs no arguments. The app checks the emitting peer's live binding and
+keeps execution on that connection. The physical gesture supplies intent for that action.
+Agent-initiated tool calls retain the broker's approval checks. [Protocol](../../../PROTOCOL.md#button-bindings)
 
 ### Requirement: Each app keeps to its own home
 The Rust app's settings, token, models and data live in `~/.stickybot-rs/`; the Python app's in
@@ -94,7 +106,7 @@ the chord held too, never Command–Option–Esc). After an answer, Esc returns 
 15 s even if the panel stays; sleep and screen lock discard it.
 A recording whose loudest moment stays below the silence floor is not sent ("Didn't hear anything
 from <microphone>"). If the microphone disconnects, a recording of a second or more is still sent.
-Hold B uses the stick microphone.
+Talk from the stick uses its own microphone, including with the default hold B binding.
 
 **Microphone:** the system default unless the user picks an input (saved by Core Audio UID as
 `mac_voice_input`). A saved microphone that is not connected falls back to the default and Settings

@@ -2,12 +2,15 @@
 // (`pio run -t upload`); wiped by `pio run -t erase`.
 #pragma once
 #include "combo.h"
+#include "logic/button_map.h"
 
 namespace settings {
 
 constexpr uint8_t SLOTS = 3;
 
 void   begin();
+const buttons::Table& buttonMap();
+bool saveButtonMap(const buttons::Table& next);
 
 Combo  combo();
 void   saveCombo(const Combo& c);

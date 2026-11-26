@@ -53,7 +53,7 @@ void test_hint_bars() {
                            bar(Id::REPLY, PAGED | SPEECH | SPEAKING).c_str());
   TEST_ASSERT_EQUAL_STRING("hold A listen | B close | hold B ask", bar(Id::REPLY, SPEECH).c_str());
   TEST_ASSERT_EQUAL_STRING("B close | hold B ask", bar(Id::REPLY, 0).c_str());
-  TEST_ASSERT_EQUAL_STRING("hold B talk | A dictate | 3×B apps | B enter", bar(Id::HOME, 0).c_str());
+  TEST_ASSERT_EQUAL_STRING("hold B talk | A dictate | 3×B apps | B enter | A+B reply", bar(Id::HOME, 0).c_str());
   TEST_ASSERT_EQUAL_STRING("let go send", bar(Id::TALK, 0).c_str());
   auto h = hints(screen(Id::REPLY), PAGED | SPEECH);
   TEST_ASSERT_TRUE(h[1].accent);  // listen stands out

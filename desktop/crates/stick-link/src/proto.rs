@@ -158,7 +158,7 @@ pub fn proto_request(line: &str, id: &str) -> Value {
 /// Checks a settings line the way firmware_api.py does: `@action [k=v&k=v]`.
 pub fn check_proto_line(line: &str) -> Result<&str, &'static str> {
     let line = line.trim();
-    if line.starts_with('@') { Ok(line) } else { Err("expected a line like @state") }
+    if line.starts_with('@') && !line.contains(['\r', '\n']) { Ok(line) } else { Err("expected a line like @state") }
 }
 
 /// `@action k=v&k=v`, values URL-encoded like the dashboard's `encodeURIComponent`.
@@ -312,6 +312,8 @@ mod tests {
     fn proto_lines_are_checked_and_built_like_the_dashboard() {
         assert_eq!(check_proto_line("  @state "), Ok("@state"));
         assert!(check_proto_line("state").is_err());
+        assert!(check_proto_line("@state\n@state").is_err());
+        assert!(check_proto_line("@state\r@state").is_err());
         assert_eq!(proto_line("state", &[]), "@state");
         assert_eq!(proto_line("combo", &[("text", "cmd+opt")]), "@combo text=cmd%2Bopt");
         assert_eq!(proto_line("name", &[("name", "Arbaaz's stick")]), "@name name=Arbaaz's%20stick");

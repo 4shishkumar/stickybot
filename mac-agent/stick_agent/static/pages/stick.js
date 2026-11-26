@@ -9,7 +9,7 @@ import {h, $, clear, card, field, toggle, proto, get, put, post, report, toast, 
 import {volumeControl} from "../volume.js";
 import {firmwarePanel} from "../firmware.js";
 import {airCard} from "./air.js";
-import {layout, structureKey, slicesOf, changedCards, openSections, summary} from "./stick_layout.js";
+import {TILES, layout, structureKey, slicesOf, changedCards, openSections, summary} from "./stick_layout.js";
 
 export const title = "Stick";
 export const subtitle = "The stick's own settings. They're saved on the stick, so they stay with it.";
@@ -328,16 +328,6 @@ function faceCard() {
 // games earned StickyBot today (capped, pet.py).
 // The Launcher (firmware 2.5.1): triple-press B opens a grid of tiles. @state "launcher" holds
 // the tiles shown, in order, one letter each ("grapmfqs"); Quick settings and Settings always stay.
-const TILES = [
-  ["g", "games", "Games", "The seven games"],
-  ["r", "remote", "Remote", "The IR remote (TV, AC…)"],
-  ["a", "air", "Air mouse", "Point the stick to move the pointer"],
-  ["p", "presenter", "Presenter", "Slide clicker + talk timer"],
-  ["m", "media", "Media", "Media remote: play, volume, tracks"],
-  ["f", "faces", "Faces", "Pick the Home face"],
-  ["q", "quick", "Quick settings", "Brightness, volume, toggles", true],
-  ["s", "settings", "Settings", "The full settings menu", true],
-];
 let launcherDraft = null;  // [{tile, shown}] while editing
 
 function launcherCard() {
@@ -382,7 +372,7 @@ function launcherCard() {
   }
   paintList();
   return card("Launcher",
-    h("p", {class: "lead"}, "Triple-press B on the stick opens the Launcher: a tile for each app, six a page. ",
+    h("p", {class: "lead"}, "The Launcher shows a tile for each app, six a page. ",
       "Put them in the order you like and hide the ones you don't use."),
     box,
     h("div", {class: "row", style: "margin-top:10px"}, save, reset));
@@ -397,7 +387,7 @@ function gamesCard() {
     h("span", {class: "game-best"}, x.best > 0 ? `${x.best}${x.low ? " ms" : ""}` : "—"),
     h("span", {class: "small faint"}, plays[x.id] ? `${plays[x.id]} played` : "")));
   return card("Games",
-    h("p", {class: "lead"}, "Seven little games on the stick: Launcher (triple-press B) → Games. ",
+    h("p", {class: "lead"}, "Seven little games on the stick: Launcher → Games. ",
       "Each game StickyBot plays earns a little XP: ", h("b", null, `${g.xpToday || 0} of ${g.cap || 10} XP today`), "."),
     h("div", {class: "games"}, rows));
 }
@@ -641,10 +631,10 @@ function unlockCard() {
   const clearBtn = h("button", {class: "btn sm danger", type: "button",
     onclick: () => confirmTwice(clearBtn, () => send("macpass", {pass: ""}, "Mac password removed"))}, "Remove");
   return card("Unlock the Mac",
-    h("p", {class: "lead"}, "Double-press B on the lock screen and the stick types this password and presses Return. ",
+    h("p", {class: "lead"}, "Use the Unlock Mac gesture on the lock screen to type this password and press Return. ",
       "It's stored only on the stick, can't be read back, and is sent over the encrypted Bluetooth link."),
     field("Mac password", h("div", {class: "row"}, pw, show, h("button", {class: "btn primary", type: "button", onclick: save}, "Save")),
-      set ? h("span", {class: "ok-text"}, "✓ saved on the stick") : h("span", {class: "dim"}, "not set — double-press B does nothing yet")),
+      set ? h("span", {class: "ok-text"}, "✓ saved on the stick") : h("span", {class: "dim"}, "not set — Unlock Mac is inactive")),
     set ? h("div", {class: "row"}, clearBtn) : null);
 }
 

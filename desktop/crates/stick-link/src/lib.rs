@@ -10,6 +10,7 @@
 //! - [`fake`]: a stick in memory, for tests and `--fake-stick`.
 
 pub mod adpcm;
+pub mod buttons;
 pub mod fake;
 pub mod fake_ir;
 mod link;
@@ -56,6 +57,14 @@ pub enum BackendConn {
 }
 
 impl Connection for BackendConn {
+    fn address(&self) -> &str {
+        match self {
+            #[cfg(target_os = "macos")]
+            BackendConn::CoreBluetooth(c) => c.address(),
+            BackendConn::Fake(c) => c.address(),
+        }
+    }
+
     async fn write_rx(&self, chunk: Vec<u8>) -> Result<(), BleError> {
         match self {
             #[cfg(target_os = "macos")]

@@ -91,6 +91,8 @@ impl Char {
 
 /// One live connection to the stick, with notifications on TX and AUDIO already turned on.
 pub trait Connection: Send + Sync + 'static {
+    /// Bluetooth address of the connected peripheral, stable for the lifetime of this handle.
+    fn address(&self) -> &str;
     /// One write with response on RX (at most [`crate::proto::CHUNK`] bytes).
     fn write_rx(&self, chunk: Vec<u8>) -> impl Future<Output = Result<(), BleError>> + Send;
     /// One write to `ch`: with response (waits for the stick's answer), or without (waits until

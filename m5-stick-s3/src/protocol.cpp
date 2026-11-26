@@ -49,6 +49,17 @@ static const char* btName(hid::Bt b) {
   }
 }
 
+static String buttonState() {
+  const auto& table = settings::buttonMap();
+  String out = "\"buttons\":{";
+  for (int i = 0; i < buttons::COUNT; ++i) {
+    auto slot = static_cast<buttons::Slot>(i);
+    if (i) out += ',';
+    out += q(buttons::key(slot)) + ":" + q(table[slot].wire.c_str());
+  }
+  return out + "}";
+}
+
 static String stateJson() {
   Combo c = settings::combo();
   String j = "\"proto\":1,\"board\":\"" STICK_BOARD "\",\"fw\":\"" FW_VERSION "\"";
@@ -73,6 +84,7 @@ static String stateJson() {
   j += "," + faces::pkg::stateJson();  // 2.4.0: the face packages (their list: @faces)
   j += "," + air::stateJson();  // 2.5.0: the remote modes (air mouse / presenter / media) and their settings
   j += "," + ir::stateJson();           // 2.5.0: the IR remote (its devices: @ir list)
+  j += "," + buttonState();
   j += "," + launcher::stateJson();     // 2.5.1: the Launcher's tiles, as letters (@launcher)
   j += String(",\"wirelessMic\":") + (settings::wirelessMic() ? "true" : "false");
   j += String(",\"ota\":1,\"otaPending\":") + (ota::pendingVerify() ? "true" : "false");  // Bluetooth update (1.8.0+)
@@ -103,6 +115,20 @@ static int slotArg(const String& s) {
 
 Result run(const String& action, const Args& arg) {
   if (action == "state") return ok(stateJson());
+  if (action == "buttons") {
+    std::string values[buttons::COUNT];
+    for (int i = 0; i < buttons::COUNT; ++i) {
+      const String value = arg(buttons::key(static_cast<buttons::Slot>(i)));
+      if (!value.length() || value.length() > buttons::MAX_BINDING_BYTES) return fail("Invalid button binding");
+      values[i].assign(value.c_str(), value.length());
+    }
+    buttons::Table next;
+    const auto error = buttons::parse(values, next);
+    if (error == buttons::ParseError::NO_SETTINGS) return fail("Keep a shortcut to Launcher or Settings");
+    if (error != buttons::ParseError::NONE) return fail("Invalid button binding");
+    if (!settings::saveButtonMap(next)) return fail("Could not save buttons", 500);
+    return ok(buttonState());
+  }
   if (action == "keys")  return ok(keysJson());
   if (action == "hosts") {
     String forget = arg("forget");

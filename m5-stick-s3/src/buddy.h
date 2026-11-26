@@ -62,6 +62,7 @@ const  Agent& agent();
 const  Agent& lastAnswer();        // the last successful exchange ("done"), for the Agent page
 uint32_t agentUpdated();           // millis() of the last status, 0 = none
 void   agentTalkEvent(bool start); // tell the agent a talk press started / ended
+bool   buttonAction(const char* gesture, const char* action);
 void   agentCancel();              // dismissed on the stick: the agent drops the request
 // The reply view (2.6.0): after "done" the agent sends the whole answer in parts
 // ({"src":"agent","reply":{...}}); empty until all of them are in (the 300 characters of

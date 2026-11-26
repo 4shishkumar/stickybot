@@ -563,6 +563,10 @@ fn on_message(st: &Arc<AppState>, msg: &Value, rec: &mut StickRecording) {
                 tokio::spawn(handle_stick_recording(turn, r));
             }
         }
+        (Some("button_action"), _) => {
+            // This path receives notifications from this stick's BLE link only.
+            crate::buttons::pressed(st, msg);
+        }
         (Some("speak"), _) => {
             if st.voice_owner.lock().unwrap().as_ref().is_some_and(|o| o.mac) {
                 return;

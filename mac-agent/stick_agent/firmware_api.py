@@ -89,16 +89,39 @@ class Stick:
         finally:
             self.waiting.pop(pid, None)
 
-    async def run(self, line):
+    def connected_address(self):
+        link = self.agent.link
+        address = getattr(getattr(link, "client", None), "address", None)
+        selected = (link.target or {}).get("address")
+        if link.connected and not link.paused and address and selected and address.casefold() == selected.casefold():
+            return address
+        return None
+
+    async def run(self, line, expected_address=None):
         """-> {"ok", "via", "reply", "error"}"""
+        if any(ch in (line or "") for ch in ("\r", "\n", "\0")):
+            return {"ok": False, "via": None, "reply": None, "error": "Expected one protocol line"}
         line = (line or "").strip()
         if not line.startswith("@"):
             return {"ok": False, "via": None, "reply": None, "error": "expected a line like @state"}
+        operation = line.split(maxsplit=1)[0]
+        address = self.connected_address() if operation in ("@buttons", "@state") else None
+        source = getattr(self.agent.link, "client", None)
+        if operation == "@buttons" and (not address or address != expected_address):
+            return {"ok": False, "via": "ble", "reply": None, "error": "Stick changed. Reload its button mappings."}
         if self.agent.link.connected:
             reply = await self.ble(line)
             if reply is not None:
                 self._ble_cache = (0.0, None)  # settings may have changed
-                return {"ok": bool(reply.get("ok", True)), "via": "ble", "reply": reply, "error": reply.get("error")}
+                result = {"ok": bool(reply.get("ok", True)), "via": "ble", "reply": reply, "error": reply.get("error")}
+                same_link = source is getattr(self.agent.link, "client", None)
+                if address and same_link and address == self.connected_address():
+                    result["device_address"] = address
+                elif operation == "@buttons":
+                    return {"ok": False, "via": "ble", "reply": None, "error": "Stick changed during save."}
+                return result
+        if operation == "@buttons":
+            return {"ok": False, "via": "ble", "reply": None, "error": "The selected stick did not answer"}
         ports = [p for p in flasher.espressif_ports() if not flasher.in_bootloader(p)]
         if self.flashing:
             return {"ok": False, "via": None, "reply": None, "error": "the stick is being flashed"}
@@ -325,7 +348,7 @@ def routes(agent):
 
     async def proto(request):
         body = await request.json()
-        return web.json_response(await stick.run(str(body.get("line", ""))))
+        return web.json_response(await stick.run(str(body.get("line", "")), body.get("expected_address")))
 
     async def get_onboarding(_):
         return web.json_response(await onboarding_state(agent, stick))

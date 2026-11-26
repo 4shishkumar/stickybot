@@ -524,7 +524,7 @@ fn percent_decode(v: &str) -> String {
         out.push(if b[i] == b'+' { b' ' } else { b[i] });
         i += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    String::from_utf8(out).unwrap_or_default()
 }
 
 /// The 2.5.0 lines (`@ir`, `@games`, `@air`, `@mode`, the `ir` / `air` parts of `@state`), else
@@ -541,10 +541,31 @@ fn run_line_25(s: &mut State, line: &str) -> Value {
         return reply;
     }
     crate::fake_ir::state_extra(&mut s.stick, &s.ir);
+    if s.old_firmware {
+        match action {
+            "state" => {
+                let mut reply = s.stick.clone();
+                reply.as_object_mut().unwrap().remove("buttons");
+                return reply;
+            }
+            "buttons" => return json!({"ok": false, "error": "unknown command: buttons"}),
+            _ => {}
+        }
+    }
     if let Some(r) = crate::fake_ir::run_25(&mut s.stick, action, &a) {
         return r;
     }
     run_line(&mut s.stick, line)
+}
+
+fn valid_button_mapping(gesture: &str, action: &str) -> bool {
+    if gesture == "bh" {
+        return matches!(action, "talk" | "dictation");
+    }
+    matches!(gesture, "ab" | "b2" | "b3")
+        && (matches!(action, "unlock" | "launcher" | "reply" | "talk" | "none")
+            || action.strip_prefix("tile:").is_some_and(crate::fake_ir::is_launcher_tile)
+            || crate::buttons::MacAction::parse(gesture, action).is_some())
 }
 
 /// `@action k=v&...` -> the reply JSON (protocol.cpp, roughly).
@@ -559,6 +580,27 @@ fn run_line(st: &mut Value, line: &str) -> Value {
     let flag = |k: &str| num(k).map(|n| n != 0);
     match action {
         "state" => st.clone(),
+        "buttons" if st["buttons"].is_object() => {
+            let raw = q.as_bytes();
+            let valid_escapes = raw.iter().enumerate().all(|(i, &b)| {
+                b != b'%' || raw.get(i + 1..i + 3).is_some_and(|pair| pair.iter().all(u8::is_ascii_hexdigit))
+            });
+            if q.split('&').count() != 4 || !valid_escapes {
+                return json!({"ok": false, "error": "Invalid button map"});
+            }
+            let mut next = serde_json::Map::new();
+            for gesture in ["b2", "b3", "ab", "bh"] {
+                let Some(action) = get(gesture).filter(|action| valid_button_mapping(gesture, action)) else {
+                    return json!({"ok": false, "error": "Invalid button mapping"});
+                };
+                next.insert(gesture.into(), json!(action));
+            }
+            if !next.values().any(|v| matches!(v.as_str(), Some("launcher" | "tile:settings"))) {
+                return json!({"ok":false, "error":"Keep a gesture for Launcher or Settings"});
+            }
+            st["buttons"] = Value::Object(next);
+            json!({"ok": true, "buttons": st["buttons"]})
+        }
         "keys" => json!({"ok": true, "mods": [["Ctrl", 1], ["Option", 4], ["Shift", 2], ["Cmd", 8], ["Fn", 16]],
                          "keys": [["(none)", 0], ["A", 4], ["B", 5], ["Return", 40], ["Escape", 41], ["Space", 44], ["F5", 62]]}),
         "test" => json!({"ok": true}),
@@ -636,6 +678,7 @@ fn initial_state() -> Value {
         "autoRotate": true, "landscape": false, "devMode": false, "enterDelay": 0, "macPassSet": false,
         "motion": {"lift": true, "face": true, "shake": true},
         "wirelessMic": true, "usbMounted": false, "ota": 1, "otaPending": false,
+        "buttons": {"b2": "unlock", "b3": "launcher", "ab": "reply", "bh": "talk"},
         "face": "stickyworld",
         "faces": [
             {"id": "classic", "title": "Classic", "about": "The eyes and the time"},
@@ -1018,10 +1061,15 @@ fn faces_message(s: &mut State, o: &serde_json::Map<String, Value>) {
 
 /// Its connection.
 pub struct FakeConn {
+    address: String,
     stick: FakeStick,
 }
 
 impl Connection for FakeConn {
+    fn address(&self) -> &str {
+        &self.address
+    }
+
     async fn write_rx(&self, chunk: Vec<u8>) -> Result<(), BleError> {
         self.stick.on_write(chunk)
     }
@@ -1067,7 +1115,7 @@ impl Connector for FakeStick {
             s.connects += 1;
             s.decoder.reset();
             s.last_target = Some(target.clone());
-            Ok((FakeConn { stick: self.clone() }, rx))
+            Ok((FakeConn { stick: self.clone(), address: target.address.clone() }, rx))
         })
     }
 
@@ -1092,6 +1140,48 @@ mod tests {
         run_line(&mut st, "@name name=Arbaaz%27s%20stick");
         assert_eq!(st["name"], "Arbaaz's stick");
         assert_eq!(run_line(&mut st, "@nope")["ok"], false);
+    }
+
+    #[test]
+    fn older_fake_firmware_hides_and_refuses_buttons() {
+        let fake = FakeStick::new();
+        fake.set_old_firmware(true);
+        fake.with(|state| {
+            assert!(run_line_25(state, "@state").get("buttons").is_none());
+            assert_eq!(run_line_25(state, "@buttons b2=none&b3=none&ab=none&bh=talk")["ok"], false);
+        });
+    }
+
+    #[test]
+    fn button_table_changes_atomically_and_accepts_escaped_names() {
+        let mut st = initial_state();
+        assert_eq!(st["buttons"], json!({"b2":"unlock","b3":"launcher","ab":"reply","bh":"talk"}));
+        let reply = run_line(&mut st, "@buttons b2=launcher&b3=unlock&ab=app%3AA%26B%20Studio&bh=dictation");
+        assert_eq!(reply["buttons"], json!({"b2":"launcher","b3":"unlock","ab":"app:A&B Studio","bh":"dictation"}));
+        let stranded = "@buttons b2=unlock&b3=tile:games&ab=reply&bh=talk";
+        assert_eq!(run_line(&mut st, stranded)["ok"], false);
+        assert_eq!(st["buttons"], reply["buttons"]);
+        let mut direct_settings = st.clone();
+        assert_eq!(run_line(&mut direct_settings, "@buttons b2=unlock&b3=tile:games&ab=tile:settings&bh=talk")["ok"], true);
+        for input in ["bh=none", "bh=app:Test", "unrelated=yes", "bh=talk&", "bh=talk&ab=none", "bh=talk&x=y"] {
+            assert_eq!(run_line(&mut st, &format!("@buttons b2=launcher&b3=none&ab=talk&{input}"))["ok"], false);
+            assert_eq!(run_line(&mut st, "@state")["buttons"], reply["buttons"]);
+        }
+        for action in [
+            "app:",
+            "quick:%0Aname",
+            "app:bad%FF",
+            "app:bad%zz",
+            "app:bad%2",
+            "app:foo%2Fbar",
+            "app:%5Cbad",
+            "tile:absent",
+            "app:%20name",
+            "quick:1234567890123456789012345678901é",
+        ] {
+            assert_eq!(run_line(&mut st, &format!("@buttons b2={action}&b3=launcher&ab=talk&bh=talk"))["ok"], false);
+            assert_eq!(st["buttons"], reply["buttons"]);
+        }
     }
 
     #[test]

@@ -4,6 +4,7 @@ import {brainPanel, pickedModel} from "../brain.js";
 import {componentsPanel} from "../components.js";
 import {mcpPanel} from "../mcp.js";
 import {updatesPanel} from "../updates.js";
+import {buttonSettingsLink} from "./buttons.js";
 import {macVoiceFields} from "../mac_voice.js";
 
 export const title = "Settings";
@@ -11,7 +12,7 @@ export const subtitle = "How the agent behaves. Changes apply right away once yo
 
 const SOURCES = [["facts", "Fun facts"], ["hn", "Hacker News"], ["onthisday", "On this day"], ["wikipedia", "Wikipedia featured article"]];
 let root = null, cfg = null, unsub = null, unsubBrain = null;
-let macVoice = null;
+let macVoice = null, buttonsLink = null;
 let renderVersion = 0;
 
 export function actions() {
@@ -42,8 +43,10 @@ export async function render(el) {
     if (!Array.isArray(vs)) return;
     for (const v of vs) voice.appendChild(h("option", {value: v.name, selected: c.speak_voice === v.name}, `${v.name} (${v.lang})`));
   });
+  buttonsLink?.leave();
+  buttonsLink = buttonSettingsLink();
   root.append(
-    card("Your stick", stickPicker()),
+    card("Your stick", stickPicker(), buttonsLink.el),
     card("Brain", brainPanel(c), brainStatus()),
     card("Claude Code",
       field("Model", h("select", {id: "model"}, [["sonnet", "Sonnet — fast (recommended)"], ["opus", "Opus — smartest, slower"], ["haiku", "Haiku — fastest"]]
@@ -110,6 +113,8 @@ export function leave() {
   root = null;
   macVoice?.leave();
   macVoice = null;
+  buttonsLink?.leave();
+  buttonsLink = null;
   if (unsub) unsub();
   if (unsubBrain) unsubBrain();
   unsub = unsubBrain = null;

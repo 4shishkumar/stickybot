@@ -1,4 +1,5 @@
 #include "actions.h"
+#include "button_map.h"
 
 namespace actions {
 
@@ -11,14 +12,16 @@ static const Binding HOME[] = {
     {In::A_PRESS, Do::COMBO, "A", "dictate"},
     {In::B_TRIPLE, Do::LAUNCHER, "3×B", "apps"},
     {In::B_CLICK, Do::ENTER, "B", "enter"},
-    {In::B_DOUBLE, Do::UNLOCK, nullptr, nullptr},
+    {In::B_DOUBLE, Do::UNLOCK, "2×B", nullptr},
+    {In::CHORD, Do::LAST_REPLY, "A+B", "reply"},
     {In::SHAKE, Do::ESCAPE, nullptr, nullptr},
     {In::FLICK, Do::PAGES, nullptr, nullptr},
 };
 
 // B held: talking to the agent
 static const Binding TALK[] = {
-    {In::RELEASE, Do::SEND, "let go", "send"},
+    {In::RELEASE, Do::SEND, "let go", "send", 0, LATCHED},
+    {In::B_CLICK, Do::SEND, "B", "send", LATCHED},
 };
 
 // The agent's screens before the answer (thinking / working) and after an error
@@ -65,11 +68,18 @@ Do lookup(const Screen& s, In in, uint8_t flags) {
   return Do::NONE;
 }
 
-std::vector<Hint> hints(const Screen& s, uint8_t flags) {
+std::vector<Hint> hints(const Screen& s, uint8_t flags, const buttons::Table* global) {
   std::vector<Hint> out;
   for (uint8_t i = 0; i < s.count; i++) {
     const Binding& b = s.bindings[i];
     if (!b.key || !applies(b, flags)) continue;
+    buttons::Slot slot;
+    if (global && buttons::slotFor(b.in, slot) && (*global)[slot].wire != buttons::defaults()[slot].wire) {
+      const auto& binding = (*global)[slot];
+      if (binding.action != Do::NONE) out.push_back({b.key, binding.label, false});
+      continue;
+    }
+    if (!b.label) continue;
     bool accent = b.act == Do::LISTEN || b.act == Do::STOP_LISTEN;
     out.push_back({b.key, b.label ? b.label : "", accent});
   }
@@ -98,14 +108,14 @@ std::vector<std::vector<int>> layout(const std::vector<Hint>& h, int maxW, int m
 
 const char* inName(In in) {
   static const char* const N[] = {"A press", "A click", "hold A", "B click", "double B", "triple B",
-                                  "hold B",  "release", "tilt",   "shake",   "flick"};
+                                  "hold B", "A+B", "release", "tilt",   "shake",   "flick"};
   return (int)in < (int)In::COUNT ? N[(int)in] : "?";
 }
 
 const char* doName(Do d) {
   static const char* const N[] = {"-",     "key combo", "Enter",  "unlock",      "talk",
                                   "apps",  "Escape",    "pages",  "next page",   "scroll",
-                                  "listen", "stop",     "close",  "cancel",      "send"};
+                                  "listen", "stop",     "close",  "cancel",      "send", "last reply", "stick app", "Mac app", "quick command"};
   return (int)d < (int)Do::COUNT ? N[(int)d] : "?";
 }
 

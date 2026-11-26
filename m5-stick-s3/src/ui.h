@@ -111,7 +111,7 @@ void drawPairing(uint32_t code);
 void drawPrompt(const String& tool, const String& hint, const String& from);
 // A question from a Claude session (1.7.2): the question, then A / B with their labels
 void drawAsk(const String& question, const String& from, const String& a, const String& b);
-void drawTalk(bool linked);  // B held: talking to the Mac agent
+void drawTalk(bool linked, bool latched = false);  // B held: talking to the Mac agent
 void drawAgent(const String& state, const String& heard, const String& text);
 
 // The reply view (2.6.0): the agent's whole answer after "done". A short one is the done

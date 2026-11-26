@@ -11,6 +11,7 @@ import uuid
 from . import (
     brain,
     brains,
+    buttons,
     clips,
     commands,
     config,
@@ -178,6 +179,7 @@ class Agent:
         self.last_input = None                         # time.time() of the last press / gesture we heard of
         self.loop = None
         self.stats = {"requests": 0, "quick": 0, "claude": 0, "started": time.time()}
+        self.button_task = None
         self.listeners = []  # extra callbacks for every message from the stick
         self.window = None   # (page) -> bool: shows the dashboard in the StickyBot window (menubar.py sets it)
         self.speaker = Speaker(lambda: self.link, self._speech_output,
@@ -428,6 +430,13 @@ class Agent:
         if msg.get("cmd") == "permission" and msg.get("id") in self.asks:
             self._answer(msg["id"], msg.get("decision"), "stick")
             return
+        if msg.get("src") == "agent" and msg.get("evt") == "button_action":
+            if self.link.connected and (self.button_task is None or self.button_task.done()):
+                self.last_input = time.time()
+                client, target = self.link.client, self.link.target
+                with link.pin_peer(client, target):
+                    self.button_task = asyncio.create_task(buttons.run(self, msg, client, target))
+            return
         if msg.get("src") == "agent" and msg.get("evt") == "event_shown":
             self.notifier.acked(msg.get("id"))
             return
@@ -533,7 +542,7 @@ class Agent:
         # wready: we answer the stick's "prepare" with "ready" (it holds the key until then)
         # speak: we read the last reply aloud when the stick asks ({"evt":"speak"}, 2.6.0)
         extra = {"home": self.home_card(), "wmic": self.wispr.ready, "wready": True, "speak": True,
-                 "world": self.world()}
+                 "world": self.world(), "buttonActions": True}
         if self.weather.now:
             extra["wx"] = {**self.weather.now, "at": stick_text(self.weather.now.get("at", ""))}
         return extra

@@ -779,11 +779,32 @@ async fn stick_proto(State(st): State<Arc<AppState>>, body: Bytes) -> axum::Json
         Ok(l) => l,
         Err(e) => return axum::Json(json!({"ok": false, "via": null, "reply": null, "error": e})),
     };
-    let ble = st.link.connected();
-    if ble && let Some(reply) = st.link.request(line).await {
-        let ok = reply.get("ok").and_then(Value::as_bool).unwrap_or(true);
-        let error = reply.get("error").cloned().unwrap_or(Value::Null);
-        return axum::Json(json!({"ok": ok, "via": "ble", "reply": reply, "error": error}));
+    let peer = st.link.connected_peer();
+    let ble = peer.is_some();
+    let buttons = line.split_ascii_whitespace().next() == Some("@buttons");
+    if let Some((generation, address)) = peer {
+        if buttons
+            && (b.get("expected_address").and_then(Value::as_str) != Some(&address)
+                || st.link.paused()
+                || st.link.target().is_none_or(|t| !t.address.eq_ignore_ascii_case(&address)))
+        {
+            return axum::Json(json!({"ok":false, "via":"ble", "reply":null,
+                "error":"The selected stick changed. Reload its button mappings."}));
+        }
+        if let Some(reply) = st.link.with_generation(generation, st.link.request(line)).await {
+            let ok = reply.get("ok").and_then(Value::as_bool).unwrap_or(true);
+            let error = reply.get("error").cloned().unwrap_or(Value::Null);
+            let mut result = json!({"ok": ok, "via": "ble", "reply": reply, "error": error});
+            if buttons || line == "@state" {
+                result["device_address"] = json!(address);
+            }
+            return axum::Json(result);
+        }
+    }
+    // An unanswered mapping write may already have succeeded. Never retry it on a different transport.
+    if buttons {
+        return axum::Json(json!({"ok":false, "via":"ble", "reply":null,
+            "error":"Connect the selected stick over Bluetooth and reload its button mappings."}));
     }
     // over USB (firmware_api.py `Stick.run`): when Bluetooth isn't there or didn't answer
     let hardware_id = st.host_state.lock().unwrap()["deviceId"].as_str().map(str::to_owned);
@@ -1793,6 +1814,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stale_button_editor_cannot_save_to_a_repicked_primary() {
+        let (app, st, fake) = app("stale-button-tab", true).await;
+        let tok = Some(st.token.as_str());
+        let state = json!({"line":"@state"});
+        let route = "/api/stick/proto";
+        let (_, old, _) = call(&app, req("POST", route, Some(state.clone()), tok)).await;
+        assert_eq!(old["device_address"], "FAKE");
+
+        st.update_config(json!({"stick":{"address":"OTHER","name":"B"}}).as_object().unwrap().clone()).unwrap();
+        // Repicking updates the requested target before the old live connection is torn down.
+        assert_eq!(st.link.target().unwrap().address, "OTHER");
+        assert_eq!(st.link.connected_peer().unwrap().1, "FAKE");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while st.link.connected_peer().is_none_or(|(_, addr)| addr != "OTHER") {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let (_, new, _) = call(&app, req("POST", route, Some(state), tok)).await;
+        assert_eq!(new["device_address"], "OTHER");
+        let mut change = json!({"line":"@buttons b2=launcher&b3=unlock&ab=reply&bh=talk"});
+        for addr in [Value::Null, old["device_address"].clone(), new["device_address"].clone()] {
+            if !addr.is_null() {
+                change["expected_address"] = addr.clone();
+            }
+            let (_, result, _) = call(&app, req("POST", route, Some(change.clone()), tok)).await;
+            let applied = addr == new["device_address"];
+            assert_eq!(result["ok"], applied, "{result}");
+            if applied {
+                assert_eq!(result["device_address"], new["device_address"]);
+            }
+            assert_eq!(fake.stick_state()["buttons"]["b2"] == "launcher", applied);
+        }
+    }
+
+    #[tokio::test]
+    async fn lost_button_save_never_writes_to_another_usb_stick() {
+        let (app, st, fake) = app("button-save-usb", true).await;
+        let usb = crate::usb::FakeUsb::stick("/dev/cu.other", "2.9.0");
+        st.usb.set_backend(usb.clone());
+        fake.set_silent(true);
+        let line = "@buttons b2=launcher&b3=unlock&ab=reply&bh=talk";
+        let (_, reply, _) = call(
+            &app,
+            req("POST", "/api/stick/proto", Some(json!({"line":line, "expected_address":"FAKE"})), Some(&st.token)),
+        )
+        .await;
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["via"], "ble");
+        assert!(usb.lines.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn usb_flash_runs_esptool_as_a_job() {
         let (app, st, _) = app("flash", false).await;
         let usb = crate::usb::FakeUsb::stick("/dev/cu.usbmodem3", "2.1.0");
@@ -1970,6 +2045,7 @@ mod tests {
             assert!(w["pet"].get(k).is_some(), "{k}");
         }
         assert_eq!(h["wready"], true);
+        assert_eq!(h["buttonActions"], true);
         assert_eq!(h["speak"], true); // the stick's reply view may ask us to read aloud (2.6.0)
         assert!(h.get("wx").is_none());
         // with weather (stick-safe place name)
