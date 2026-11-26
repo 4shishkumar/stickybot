@@ -15,12 +15,16 @@ Mac hello advertises eventActions:1. Stick sends {"src":"agent","evt":"event_act
 - [x] T006 Exercise delivery-to-action and compatibility using simulated peers.
 
 ## Acceptance
-- [ ] Bounded optional fields render on both boards; toast, detail, read, open and close controls consume the intended physical gesture.
-- [ ] Only an exact delivered event can trigger the validated host action on the same connection; old agents remain compatible.
-- [ ] Native and host suites pass and both board builds fit. State physical hardware coverage.
+- [x] Bounded optional fields render on both boards; toast, detail, read, open and close controls consume the intended physical gesture.
+- [x] Only an exact delivered event can trigger the validated host action on the same connection; old agents remain compatible.
+- [x] Native and host suites pass and both board builds fit. State physical hardware coverage.
 
 ## Verification
 
 - 756 Rust tests passed. Clippy and Ruff passed. Python passed 883 tests (one skipped, five deselected); 45 dashboard tests passed.
 - 303 native firmware tests passed. StickS3 and StickC Plus2 built at 73.3% and 71.2% of the app partition. Physical hardware testing remains open.
 - Simulated peers exercised open and read, forgery, replay, disconnect and switching. Firmware-rendered portrait and landscape previews were inspected using complete and older notifications.
+
+## Deletion Candidates
+
+None. The per-connection event routes replace the former acknowledgement-only route table; that table was removed.
