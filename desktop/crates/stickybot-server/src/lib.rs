@@ -32,6 +32,7 @@ pub mod local;
 pub mod login;
 pub mod logs;
 pub mod mcp;
+pub mod memory;
 pub mod migrate;
 pub mod net;
 pub mod openrouter;

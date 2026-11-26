@@ -154,6 +154,9 @@ pub fn defaults() -> Map<String, Value> {
     match v {
         Value::Object(mut m) => {
             m.insert("assistant_folders".into(), json!([]));
+            // the agent's memory (memory.rs): on, and shared with the cloud brains too
+            m.insert("memory_on".into(), json!(true));
+            m.insert("memory_cloud".into(), json!(true));
             m.insert("tool_profiles".into(), tool_profiles);
             m.insert("approval_devices".into(), Value::Null);
             m.insert("notification_devices".into(), Value::Null);

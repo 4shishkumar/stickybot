@@ -161,6 +161,7 @@ pub fn tools() -> &'static [Value] {
                 "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true}}),
         ];
         tools.extend(crate::assistant::schemas());
+        tools.extend(crate::memory::tool_defs());
         for tool in &mut tools { tool["inputSchema"]["properties"]["device_id"] = text(128,"Optional configured device ID; omitted uses the saved default."); }
         tools
     })
@@ -551,6 +552,17 @@ pub async fn call(st: &Arc<AppState>, name: &str, args: &Value, ctx: &Context) -
     let args = &args;
     // Keep file paths, queries, and results out of the activity feed and persistent logs,
     // including on invalid arguments or a concurrent profile change.
+    // memory: the text stays out of the activity feed and logs; saving and forgetting ask on the stick
+    if crate::memory::TOOLS.contains(&name) {
+        let parsed = match check_args(&tool(name).unwrap()["inputSchema"], args) {
+            Ok(a) => a,
+            Err(e) => return (e, true, None),
+        };
+        return match crate::memory::run(st, name, &parsed, who).await {
+            Ok((text, structured)) => (text, false, structured),
+            Err(e) => (e, true, None),
+        };
+    }
     if crate::assistant::TOOLS.contains(&name) {
         let parsed = match check_args(&tool(name).unwrap()["inputSchema"], args) {
             Ok(a) => a,
@@ -1415,7 +1427,10 @@ mod tests {
                 "files_search",
                 "files_info",
                 "files_read_text",
-                "git_status"
+                "git_status",
+                "memory_save",
+                "memory_search",
+                "memory_forget"
             ]
         );
         assert_eq!(allowed_tool_names()[0], "mcp__stick__notify");
@@ -1628,7 +1643,7 @@ mod tests {
             .await;
         assert_eq!(s, StatusCode::ACCEPTED);
         let (_, v) = c.rpc("tools/list", json!({}), &[("mcp-protocol-version", "2025-11-25")], false).await;
-        assert_eq!(v["result"]["tools"].as_array().unwrap().len(), 15);
+        assert_eq!(v["result"]["tools"].as_array().unwrap().len(), 18);
         let (s, v) = c.rpc("tools/list", json!({}), &[("mcp-protocol-version", "1999-01-01")], false).await;
         assert_eq!((s, v["error"]["code"].as_i64()), (StatusCode::BAD_REQUEST, Some(UNSUPPORTED_VERSION)));
         let (s, v) = c.rpc("nope/nope", json!({}), &[], false).await;
@@ -1772,6 +1787,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn memory_changes_only_after_the_stick_says_yes() {
+        let mut c = C::new("mcp-memory").await;
+        let fake = c.t.fake.clone();
+        let home = c.t.st.paths.home.clone();
+        let save = json!({"text": "my standup is at 10:30"});
+        let (r, ()) = tokio::join!(c.call("memory_save", save.clone(), &[]), answer_when_shown(&fake, "deny", 1));
+        assert!(!r.1 && r.0.contains("said no"), "{}", r.0);
+        assert!(crate::memory::load(&home).is_empty());
+        let p = &c.asks_on_stick()[0];
+        assert_eq!(p["q"], "Remember: my standup is at 10:30?");
+        let (r, ()) = tokio::join!(c.call("memory_save", save.clone(), &[]), answer_when_shown(&fake, "once", 2));
+        assert!(!r.1 && r.0.starts_with("Remembered"), "{}", r.0);
+        assert_eq!(crate::memory::load(&home).len(), 1);
+        // saying it again asks nothing
+        assert_eq!(c.call("memory_save", save, &[]).await.0, "Already remembered.");
+        let (found, err, _) = c.call("memory_search", json!({"query": "when is standup"}), &[]).await;
+        assert!(!err && found.contains("10:30"));
+        let (r, ()) = tokio::join!(c.call("memory_forget", json!({"query": "standup"}), &[]), answer_when_shown(&fake, "once", 3));
+        assert!(!r.1 && r.0.starts_with("Forgot"), "{}", r.0);
+        assert!(crate::memory::load(&home).is_empty());
+        // off in Settings: the tools say so and change nothing
+        c.t.st.cfg.lock().unwrap().insert("memory_on".into(), json!(false));
+        let (text, err, _) = c.call("memory_search", json!({}), &[]).await;
+        assert!(err && text.contains("off"));
+        // the memory text never reaches the activity feed or the log line
+        assert!(!c.t.st.mcp.last_call.lock().unwrap().to_string().contains("10:30"));
+    }
+
+    #[tokio::test]
     async fn ask_answered_on_the_stick_sse_and_json() {
         for (i, (decision, options, want)) in [
             ("once", Some(json!(["Staging", "Prod"])), "Staging"),
@@ -1870,7 +1914,10 @@ mod tests {
                 "files_search",
                 "files_info",
                 "files_read_text",
-                "git_status"
+                "git_status",
+                "memory_save",
+                "memory_search",
+                "memory_forget"
             ]
         );
         for tool in ["quick_command", "ir_send", "notify", "speak", "pin_home", "progress", "celebrate"] {
