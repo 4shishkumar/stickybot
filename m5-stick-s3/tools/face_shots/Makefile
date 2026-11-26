@@ -5,6 +5,7 @@
 #   make -C tools/face_shots            every face's demo, a picture per step -> out/
 #   make -C tools/face_shots FACE=<id>  one face's demo
 #   make -C tools/face_shots air        the remote modes' screens (air mouse, presenter, media) -> out/air/
+#   make -C tools/face_shots notification  notification details, portrait and landscape -> out/notification/
 #   make -C tools/face_shots menu       the stick's menu, a picture per item -> out/menu/
 #   make -C tools/face_shots launcher   the Launcher (2.5.1): the app grid's pages, Quick settings
 #                                       and the Faces picker, portrait and landscape -> out/launcher/
@@ -51,7 +52,7 @@ CSRC := $(wildcard $(GFX)/lgfx/utility/*.c) fontstubs.c
 OBJ  := $(addprefix $(B)/,$(notdir $(APP:.cpp=.o) $(LGFX:.cpp=.o) $(CSRC:.c=.o)))
 VPATH := $(SRC) $(SRC)/faces $(SRC)/faces/pkg $(SRC)/logic $(SRC)/games $(GFX)/lgfx/v1 $(GFX)/lgfx/utility .
 
-.PHONY: demo previews pkg fuzz air games menu launcher reply clean
+.PHONY: demo previews pkg fuzz air games menu launcher reply notification clean
 OUT ?= out/games
 demo: $(B)/shots
 	cd $(B)/.. && $(B)/shots demo out $(FACE)
@@ -61,6 +62,8 @@ menu: $(B)/shots
 	mkdir -p out/menu && $(B)/shots menu out/menu
 launcher: $(B)/shots
 	mkdir -p out/launcher && $(B)/shots launcher out/launcher
+notification: $(B)/shots
+	mkdir -p out/notification && $(B)/shots notification out/notification
 REPLY_OUT ?= out/reply
 reply: $(B)/shots
 	mkdir -p $(REPLY_OUT) && $(B)/shots reply $(REPLY_OUT)

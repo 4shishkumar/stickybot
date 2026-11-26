@@ -142,6 +142,8 @@ void dockEnd();         // back to portrait + normal brightness (safe to call an
 
 // Full-screen event (see events.h): level 0 celebrate, 1 nice, 2 headsup;
 // ms = time since it started (drives the animation; redraw ~25x/s).
+void drawEventDetail(const String& title, const String& sub, const String& actor, const String& body,
+                     bool canOpen, bool canRead);
 void drawEvent(uint8_t level, const String& title, const String& sub, const String& icon, uint32_t ms);
 
 }  // namespace ui

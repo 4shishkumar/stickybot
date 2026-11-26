@@ -8,6 +8,7 @@ constexpr uint32_t CELEBRATE_MS = 6000, NICE_MS = 4000, HEADSUP_MS = 60000;
 
 static FixedQueue<Event, MAX_QUEUED> queue;
 static Event    cur;
+static Detail   detail_;
 static bool     active_ = false;
 static uint32_t since = 0;
 
@@ -27,13 +28,18 @@ const Event& current() { return cur; }
 
 void start() {
   if (!queue.pop(cur)) return;
+  detail_ = {};
   active_ = true;
   since = millis();
 }
 
 uint32_t elapsed() { return millis() - since; }
 
+Detail& detail() { return detail_; }
+void detailStarted() { since = millis(); }
+
 bool expired() {
+  if (detail_.shown) return elapsed() >= 60000;
   uint32_t ms = cur.level == Level::CELEBRATE ? CELEBRATE_MS : cur.level == Level::NICE ? NICE_MS : HEADSUP_MS;
   return elapsed() >= ms;
 }

@@ -822,6 +822,7 @@ void loop() {
   ir::loop();
   pollSerial();
   if (otaLoop()) {
+    if (events::active()) events::finish();
     delay(2);  // the update screen: no other screens, buttons or standby meanwhile
     return;
   }
@@ -940,6 +941,7 @@ void loop() {
   if (swallowB || millis() < swallowBUntil) bDown = bSingle = bDouble = bTriple = bHold = bClick = false;
 
   motion::Event mev = motion::poll();
+  if (events::active()) mev = motion::Event::NONE;
   if (mev != motion::Event::NONE) {
     Log.event(diagnostics::Event::Settings);
   }
@@ -949,6 +951,7 @@ void loop() {
   {
     static bool airWas = false;
     if (air::active() && !hid::pairingCode()) {
+      if (!airWas && events::active()) events::finish();
       if (!airWas) {  // starting (from the menu or @mode): it takes over from whatever else is open
         if (mode == Mode::GAME) games::close();  // the CPU back to 80 MHz, the speaker released
         if (mode == Mode::MENU) ui::setBrightness(settings::brightnessPct());  // the menu's drafts are dropped
@@ -979,7 +982,7 @@ void loop() {
   // Escape: on an agent screen, a click of B (or a shake) dismisses it and cancels
   // the request; back to Home. That click doesn't send Enter.
   // (2.6.0: what B and a shake do comes from the screen's action map, logic/actions.cpp)
-  const bool agentScreen = mode == Mode::STATUS && agentShowUntil && millis() < agentShowUntil && !agentTalking;
+  const bool agentScreen = mode == Mode::STATUS && !events::active() && agentShowUntil && millis() < agentShowUntil && !agentTalking;
   const bool agentBusy = agentScreen && (agentSeenAt < talkEndedAt || buddy::agent().state == "thinking" ||
                                          buddy::agent().state == "working");
   const bool replyView = agentScreen && !agentBusy && !comboDown && !docked && buddy::agent().state == "done";
@@ -1049,6 +1052,12 @@ void loop() {
   // Pairing request: show the code, A accepts, B rejects
   uint32_t code = hid::pairingCode();
   if (code) {
+    if (events::active()) {
+      events::finish();  // the opening press belongs to the displaced notification
+      aDown = bDown = false;
+      ignoreAUntilRelease = A.isPressed();
+      swallowB = B.isPressed();
+    }
     if (!showingPairing) {
       showingPairing = true;
       ui::wake(35000);
@@ -1069,6 +1078,7 @@ void loop() {
   // Claude permission prompt: A approves, B denies
   static String shownPrompt;
   if (buddy::hasPrompt()) {
+    if (events::active()) events::finish();  // a prompt cannot leave an armed notification gesture
     const buddy::Prompt& p = buddy::prompt();
     bool fresh = shownPrompt != p.from + ":" + p.id;
     if (fresh) {
@@ -1113,11 +1123,11 @@ void loop() {
   // never over dictation, talking, the menu or a press in progress
   {
     bool canShow = (mode == Mode::STATUS || mode == Mode::WEB) && !comboDown && !agentTalking &&
-                   !A.isPressed() && !B.isPressed();
+                   !ir::screenActive() && !faces::demoActive() && !A.isPressed() && !B.isPressed();
     if (!events::active() && events::pending() && canShow) {
       events::start();
       const events::Event& e = events::current();
-      buddy::eventShown(e.id);
+      buddy::eventShown(e);
       ui::wake(e.level == events::Level::HEADSUP ? 61000 : 8000);
       // its own sound; one this firmware doesn't have: the level's default (silent with sound off)
       event_sound::play(e.sound.c_str(), events::defaultSound(e.level),
@@ -1127,28 +1137,33 @@ void loop() {
     }
     if (events::active()) {
       const events::Event& e = events::current();
-      bool press = aDown || bDown;  // any press dismisses, and does nothing else
-      if (press || events::expired()) {
+      auto& detail = events::detail();
+      bool available = buddy::eventActions(e);
+      bool canOpen = available && e.url.length();
+      auto input = events::expired() ? events::InputResult::CLOSE :
+          detail.input(aDown, aUp, A.wasHold() || (aUp && !A.wasClicked()), bDown, canOpen, available);
+      if (input == events::InputResult::CLOSE) {
         events::finish();
-        if (press) {
-          ignoreAUntilRelease = A.isPressed();
-          swallowB = B.isPressed();
-        }
+        ignoreAUntilRelease = A.isPressed();
+        swallowB = B.isPressed();
         dirty = true;
-        if (press) {
-          delay(10);
-          return;
-        }
       } else {
+        if (input == events::InputResult::DETAIL) events::detailStarted();
+        if (input == events::InputResult::OPEN || input == events::InputResult::READ)
+          buddy::eventAction(e, input == events::InputResult::OPEN);
         ui::keepAwake();
-        if (millis() - lastFrame >= 40) {
+        if (input != events::InputResult::NONE || millis() - lastFrame >= (detail.shown ? 250u : 40u)) {
           lastFrame = millis();
-          ui::drawEvent((uint8_t)e.level, e.title, e.sub, e.icon, events::elapsed());
-          if (settings::sharedHosts()) ui::drawHostLabel(buddy::activeHostLabel());
+          if (detail.shown) {
+            ui::drawEventDetail(e.title, e.sub, e.actor, e.body, canOpen && !detail.opened, available && !detail.read);
+          } else {
+            ui::drawEvent((uint8_t)e.level, e.title, e.sub, e.icon, events::elapsed());
+            if (settings::sharedHosts()) ui::drawHostLabel(buddy::activeHostLabel());
+          }
         }
-        delay(10);
-        return;
       }
+      delay(10);
+      return;
     }
   }
 

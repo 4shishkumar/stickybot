@@ -46,6 +46,7 @@ enum class Do : uint8_t {
   CLOSE,        // back to Home
   CANCEL,       // drop the request and close
   SEND,         // the talk goes to the agent
+  OPEN_EVENT,   // open the notification link on its source Mac
   COUNT
 };
 
@@ -54,6 +55,7 @@ enum Flag : uint8_t {
   PAGED    = 1 << 0,  // the text is longer than the screen
   SPEECH   = 1 << 1,  // the Mac agent can read it aloud
   SPEAKING = 1 << 2,  // ... and does right now
+  EVENT_URL = 1 << 5,  // this notification can open its link
   BUSY     = 1 << 3,  // the agent is still on the request
 };
 
@@ -72,7 +74,7 @@ struct Screen {
   uint8_t        count;
 };
 
-enum class Id : uint8_t { HOME, TALK, AGENT, REPLY, COUNT };
+enum class Id : uint8_t { HOME, TALK, AGENT, REPLY, EVENT_DETAIL, COUNT };
 
 const Screen& screen(Id id);
 // The action for this input on this screen in this state (NONE = the screen doesn't use it:

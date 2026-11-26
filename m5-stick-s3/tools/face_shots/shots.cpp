@@ -58,7 +58,14 @@ bool usbPower() { return false; }
 bool full() { return false; }
 int  recent(uint8_t[RECENT], bool[RECENT]) { return 0; }
 }
-namespace settings { bool soundOn() { return false; } }
+namespace settings {
+bool soundOn() { return false; }
+bool sharedHosts() { return false; }
+}
+namespace buddy {
+String activeHostLabel() { return ""; }
+bool nextHost() { return false; }
+}
 namespace sound { bool play(const String&) { return true; } }
 String comboToString(const Combo&) { return "Option+Cmd"; }
 // No installed face packages here (no flash): `shots pkg` draws one with the engine directly
@@ -786,6 +793,19 @@ static void replyShots(const std::string& dir) {
   printf("contact sheet: %s/reply-sheet.png\n", dir.c_str());
 }
 
+static void notificationShots(const std::string& dir) {
+  mkdir(dir.c_str(), 0755);
+  for (int side : {0, 1}) {
+    ui::setOrientation(false, side);
+    ui::drawEventDetail("Review requested", "web #9 - Update dependencies", "priya",
+                        "The dependency update is ready for a second look.", true, true);
+    const std::string suffix = side ? "-wide.png" : ".png";
+    savePng(dir + "/detail" + suffix);
+    ui::drawEventDetail("Build finished", "All checks passed", "", "", false, false);
+    savePng(dir + "/detail-legacy" + suffix);
+  }
+}
+
 int main(int argc, char** argv) {
   ui::begin();
   std::string mode = argc > 1 ? argv[1] : "demo";
@@ -804,6 +824,7 @@ int main(int argc, char** argv) {
   if (mode == "air") { airShots(dir); return 0; }
   if (mode == "menu") { menuShots(dir); return 0; }
   if (mode == "launcher") { launcherShots(dir); return 0; }
+  if (mode == "notification") { notificationShots(dir); return 0; }
   if (mode == "reply") { replyShots(dir); return 0; }
   if (mode == "games") return gamesMode(dir);
   if (mode == "previews") previews(dir);

@@ -295,6 +295,11 @@ impl<C: Connector> Link<C> {
         self.inner.current.lock().unwrap().is_some()
     }
 
+    /// The actual connected peer, even while a change of the requested target is pending.
+    pub fn connected_peer(&self) -> Option<(u64, String)> {
+        self.inner.current.lock().unwrap().as_ref().map(|c| (self.generation(), c.address().to_owned()))
+    }
+
     pub fn mtu(&self) -> usize {
         self.inner.mtu.load(Ordering::Relaxed)
     }
@@ -336,7 +341,7 @@ impl<C: Connector> Link<C> {
         }
         let data = proto::encode(&scoped);
         let _guard = self.inner.write_lock.lock().await;
-        if self.generation() != generation {
+        if self.generation() != generation || !self.origin_current() {
             return false;
         }
         for part in proto::chunks(&data) {
@@ -551,10 +556,13 @@ impl<C: Connector> Link<C> {
         target: &Target,
         ctl: &mut watch::Receiver<Control>,
     ) {
-        self.inner.generation.fetch_add(1, Ordering::AcqRel);
         *self.inner.session.lock().unwrap() = None;
         self.inner.mtu.store(conn.mtu(), Ordering::Relaxed);
-        *self.inner.current.lock().unwrap() = Some(conn.clone());
+        {
+            let mut current = self.inner.current.lock().unwrap();
+            self.inner.generation.fetch_add(1, Ordering::AcqRel);
+            *current = Some(conn.clone());
+        }
         self.set_state(LinkState::Connected);
         self.inner.send_fails.store(0, Ordering::Relaxed);
         let dead = self.inner.dead.notified();
@@ -627,9 +635,12 @@ impl<C: Connector> Link<C> {
         if leaving && !self.bye().await {
             log::info!("the stick didn't take the bye; disconnecting anyway");
         }
-        self.inner.generation.fetch_add(1, Ordering::AcqRel);
+        {
+            let mut current = self.inner.current.lock().unwrap();
+            self.inner.generation.fetch_add(1, Ordering::AcqRel);
+            *current = None;
+        }
         *self.inner.session.lock().unwrap() = None;
-        *self.inner.current.lock().unwrap() = None;
         self.inner.pending.lock().unwrap().clear(); // waiting requests get None now
         self.inner.mtu.store(0, Ordering::Relaxed);
         conn.disconnect().await;

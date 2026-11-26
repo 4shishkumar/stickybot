@@ -1597,6 +1597,12 @@ static void eventText(const String& title, std::initializer_list<const lgfx::IFo
   for (int i = 0; i < sn; i++, y += 15) txt(sl[i], cx, y, F12, subInk, middle_center);
 }
 
+static void eventFooter() {
+  canvas.fillRect(0, H - 15, W, 15, GROUND);
+  txt("A details    B close", W / 2, H - 8, F9, INK, middle_center);
+  canvas.pushSprite(0, 0);
+}
+
 void drawEvent(uint8_t level, const String& title, const String& sub, const String& icon, uint32_t ms) {
   const bool landscape = wide();
   const float t = ms / 1000.0f;
@@ -1624,7 +1630,7 @@ void drawEvent(uint8_t level, const String& title, const String& sub, const Stri
     }
     if (landscape) {
       eventText(title, {F24, F18, F14}, sub, H / 2, INK, blend(INK, bg, 0.15f), true);
-      canvas.pushSprite(0, 0);
+      eventFooter();
       return;
     }
     const lgfx::IFont* f = fit(title, W - 2 * PAD, {F24, F18, F14});
@@ -1653,13 +1659,13 @@ void drawEvent(uint8_t level, const String& title, const String& sub, const Stri
       int bw = (int)((W - 2 * PAD) * (1 - constrain(ms / 4000.0f, 0.0f, 1.0f)));
       if (landscape) {
         eventText(title, {F18, F14, F12}, sub, H / 2 - 4, ink, blend(ink, AGENT, 0.25f), false);
-        canvas.fillRoundRect(PAD, H - 8, bw, 4, 2, ink);
-        canvas.pushSprite(0, 0);
+        canvas.fillRoundRect(PAD, H - 18, bw, 4, 2, ink);
+        eventFooter();
         return;
       }
       centredLines(title, fit(title, W - 2 * PAD, {F18, F14, F12}), 152, 2, ink, 21);
       centredLines(sub, F12, 192, 3, blend(ink, AGENT, 0.25f), 15);
-      canvas.fillRoundRect(PAD, H - 10, bw, 4, 2, ink);
+      canvas.fillRoundRect(PAD, H - 18, bw, 4, 2, ink);
     }
   } else {
     // HEADSUP: orange, a gentle pulse and a ring breathing round the icon; stays until a press
@@ -1675,14 +1681,49 @@ void drawEvent(uint8_t level, const String& title, const String& sub, const Stri
     }
     if (landscape) {
       eventText(title, {F18, F14, F12}, sub, H / 2 - 8, ON_ASK, rgb(0x4a, 0x2c, 0x05), false);
-      txt("press any button", EV_TX + (W - PAD - EV_TX) / 2, H - 10, F9, ON_ASK, middle_center);
-      canvas.pushSprite(0, 0);
+      eventFooter();
       return;
     }
     centredLines(title, fit(title, W - 2 * PAD, {F18, F14, F12}), 148, 2, ON_ASK, 21);
     centredLines(sub, F12, 188, 3, rgb(0x4a, 0x2c, 0x05), 15);
-    txt("press any button", W / 2, H - 12, F9, ON_ASK, middle_center);
   }
+  eventFooter();
+}
+
+void drawEventDetail(const String& title, const String& sub, const String& actor, const String& body,
+                     bool canOpen, bool canRead) {
+  const bool landscape = wide();
+  const uint8_t flags = (canOpen ? actions::EVENT_URL : 0) | (canRead ? actions::SPEECH : 0);
+  const auto screen = actions::Id::EVENT_DETAIL;
+  const int width = W - 2 * PAD, bottom = H - hintHeight(screen, flags);
+  canvas.fillScreen(GROUND);
+  int y = 5;
+  auto lines = [&](const String& s, const lgfx::IFont* font, uint16_t color, int limit) {
+    const int height = lineH(font);
+    String rows[3];
+    int n = wrap(s, font, rows, min(limit, (bottom - y) / height), width);
+    for (int i = 0; i < n; ++i) {
+      txt(ellipsize(rows[i], font, width), PAD, y, font, color, top_left);
+      y += height;
+    }
+    if (n) y += 2;
+  };
+  lines(title, landscape ? F14 : F18, INK, 2);
+  if (actor.length()) lines("From " + actor, F12, AGENT, 1);
+  lines(sub, F12, DIM, landscape ? 1 : 3);
+  if (body.length()) {
+    canvas.drawFastHLine(PAD, y, width, LINE);
+    y += 3;
+    const auto& wrapped = readerLines(body.c_str(), width);
+    const int count = min((int)wrapped.size(), (bottom - y) / lineH(F12));
+    for (int i = 0; i < count; ++i) {
+      String line = wrapped[i].c_str();
+      if (i + 1 == count && count < (int)wrapped.size()) line = ellipsize(line + "...", F12, width);
+      txt(line, PAD, y, F12, INK, top_left);
+      y += lineH(F12);
+    }
+  }
+  hintBar(screen, flags);
   canvas.pushSprite(0, 0);
 }
 

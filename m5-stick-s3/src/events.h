@@ -1,5 +1,7 @@
 #pragma once
 #include <Arduino.h>
+#include "logic/hosts.h"
+#include "logic/event_detail.h"
 
 // Full-screen event screens sent by the Mac agent (GitHub, Claude Code...):
 //   celebrate - confetti + fanfare, ~6 s
@@ -12,7 +14,10 @@ namespace events {
 enum class Level : uint8_t { CELEBRATE = 0, NICE = 1, HEADSUP = 2 };
 
 struct Event {
-  String id, title, sub, icon, sound;
+  String id, title, sub, icon, sound, actor, body, url;
+  hosts::Lease owner;              // shared-host session generation, or legacy connection handle
+  uint32_t connection = 0;         // BLE inbox epoch; a re-used handle is a different sender
+  bool actions = false;
   Level  level = Level::NICE;
 };
 
@@ -21,6 +26,8 @@ void  push(const Event& e);        // drops the oldest if the queue is full
 bool  pending();                   // something waiting to be shown
 bool  active();                    // one is on screen
 const Event& current();
+Detail& detail();
+void  detailStarted();             // give the opened page its own reading window
 void  start();                     // shows the next one: returns its id via current()
 uint32_t elapsed();                // ms since the current one started
 bool  expired();                   // its time is up (headsup: 60 s)

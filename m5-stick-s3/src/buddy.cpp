@@ -40,7 +40,16 @@ static NimBLECharacteristic* tx = nullptr;
 static NimBLECharacteristic* audio = nullptr;
 static Agent        agent_, lastAnswer_;
 static uint32_t     agentSeen = 0, agentAt = 0;
-struct Inbox { uint16_t handle = hosts::NONE; std::string bytes; hosts::Lines lines; bool overflow = false; uint32_t epoch = 0; };
+struct Inbox {
+  uint16_t handle = hosts::NONE;
+  std::string bytes;
+  hosts::Lines lines;
+  bool overflow = false;
+  uint32_t epoch = 0;       // disconnection invalidates partially assembled input
+  uint32_t eventEpoch = 0;  // an agent bye/timeout also invalidates notification actions
+  bool eventActions = false;
+  uint32_t helloAt = 0;
+};
 static Inbox inboxes[hosts::CAPACITY];
 static std::recursive_mutex peersMutex;
 static hosts::Registry peers;
@@ -62,9 +71,10 @@ static uint32_t focusRequestedAt = 0;
 static Prompt focusPrompt;
 static std::atomic<bool> cancelOwned{false};
 static uint32_t inboxEpoch = 0;
-struct EventRoute { String local, original; hosts::Lease owner; };
-static EventRoute eventRoutes[8];
-static uint32_t eventSerial = 0;
+static Inbox* inbox(uint16_t handle) {
+  if (handle != hosts::NONE) for (auto& i : inboxes) if (i.handle == handle) return &i;
+  return nullptr;
+}
 static uint16_t targetHandle() { return requestPeer != hosts::NONE ? requestPeer : hid::selectedHost(); }
 static bool peerOwns(hosts::Lease owner, uint16_t handle) {
   std::lock_guard<std::recursive_mutex> lock(peersMutex);
@@ -128,7 +138,7 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
     std::lock_guard<std::recursive_mutex> lock(peersMutex);
     Inbox* in = nullptr;
     for (auto& i : inboxes) if (i.handle == info.getConnHandle()) { in = &i; break; }
-    if (!in) for (auto& i : inboxes) if (i.handle == hosts::NONE) { i.handle = info.getConnHandle(); i.epoch = ++inboxEpoch; in = &i; break; }
+    if (!in) for (auto& i : inboxes) if (i.handle == hosts::NONE) { i.handle = info.getConnHandle(); i.epoch = i.eventEpoch = ++inboxEpoch; in = &i; break; }
     if (!in) return;
     if (in->bytes.size() + v.size() <= MAX_LINE * 2) in->bytes += v;
     else { in->bytes.clear(); in->overflow = true; }
@@ -400,6 +410,15 @@ static void persistPeer(int i) {
   String out; serializeJson(d, out); settings::saveHostRecord(i, out);
 }
 
+// Truncate display text on a character boundary. Never shorten an identity or a destination.
+static String eventField(JsonVariantConst field, size_t maxChars, bool exact = false) {
+  JsonString v = field.as<JsonString>();
+  if (v.isNull()) return "";
+  size_t bytes = events::prefixBytes(v.c_str(), v.size(), maxChars);
+  if (!bytes || (exact && bytes != v.size())) return "";
+  return String(v.c_str(), bytes);
+}
+
 static void handleAgent(JsonDocument& d) {
   // Paused or quitting on the Mac (2.6.0): the Bluetooth link stays up for the keyboard, so
   // without this the stick would only notice when the hellos stop (AGENT_TIMEOUT_MS).
@@ -496,18 +515,22 @@ static void handleAgent(JsonDocument& d) {
     JsonObject e = d["event"];
     events::Event ev;
     if (!events::parseLevel(e["level"] | "", ev.level)) return;
-    ev.id = e["id"] | "";
-    ev.title = e["title"] | "";
-    if (shared) {
-      int i = peers.byHandle(requestPeer);
-      String local = "h" + String(++eventSerial);
-      eventRoutes[eventSerial % 8] = {local, ev.id, peers.lease(requestPeer)};
-      ev.id = local;
-      ev.title = String(peers.display(i).c_str()) + ": " + ev.title;
+    ev.id = eventField(e["id"], 64, true);
+    ev.title = eventField(e["title"], 40);
+    ev.owner = shared ? peers.lease(requestPeer) : hosts::Lease{requestPeer, 0};
+    if (const Inbox* in = inbox(requestPeer)) {
+      ev.connection = in->eventEpoch;
+      ev.actions = in->eventActions;
     }
-    ev.sub = e["sub"] | "";
-    ev.icon = e["icon"] | "star";
-    ev.sound = e["sound"] | "";
+    if (shared) ev.title = String(peers.display(peers.byHandle(requestPeer)).c_str()) + ": " + ev.title;
+    ev.sub = eventField(e["sub"], 90);
+    ev.actor = eventField(e["actor"], 24);
+    ev.body = eventField(e["body"], 300);
+    ev.url = eventField(e["url"], 200, true);
+    if (!events::webLink(ev.url.c_str())) ev.url = "";
+    ev.icon = eventField(e["icon"], 32, true);
+    if (!ev.icon.length()) ev.icon = "star";
+    ev.sound = eventField(e["sound"], 64, true);
     events::push(ev);
     faces::onEventKind(e["kind"] | "");  // the faces react too (agents since faces send the kind)
     if (!shared) Log.event(diagnostics::Event::Event);
@@ -587,9 +610,23 @@ static void handle(const String& l) {
     send(hostState(), false);
     if (shared) {
       JsonDocument clean; clean["src"] = "agent";
-      for (const char* key : {"hello", "wmic", "wready", "speak", "t", "tz", "wx", "home", "world"})
+      for (const char* key : {"hello", "eventActions", "wmic", "wready", "speak", "t", "tz", "wx", "home", "world"})
         if (!d[key].isNull()) clean[key] = d[key];
       d = clean;
+    }
+  }
+  // A capability belongs to the transport that advertised it, including background Macs.
+  if (d["src"] == "agent" && (!shared || hello || peers.valid(requestPeer, d["hs"] | ""))) {
+    if (Inbox* in = inbox(requestPeer)) {
+      if (d["bye"] == true) {
+        in->eventActions = false;
+        in->eventEpoch = ++inboxEpoch;
+      } else if (d["hello"].is<int>()) {
+        bool capable = d["eventActions"].is<int>() && d["eventActions"].as<int>() == 1;
+        if (in->eventActions != capable || millis() - in->helloAt > AGENT_TIMEOUT_MS) in->eventEpoch = ++inboxEpoch;
+        in->eventActions = capable;
+        in->helloAt = millis();
+      }
     }
   }
   if (shared) {
@@ -876,25 +913,43 @@ static uint16_t connHandle() {
   return targetHandle();
 }
 
-void eventShown(const String& id) {
+// Called under peersMutex; the BLE callback can retire either identity between frames.
+static Inbox* eventSender(const events::Event& e) {
+  Inbox* in = inbox(e.owner.handle);
+  if (!in || !e.id.length() || !events::sameSender(peers, shared, e.owner, e.connection, in->handle, in->eventEpoch))
+    return nullptr;
+  return in;
+}
+
+bool eventActions(const events::Event& e) {
   std::lock_guard<std::recursive_mutex> lock(peersMutex);
-  uint16_t old = requestPeer;
-  String original = id;
-  if (shared) {
-    EventRoute* route = nullptr;
-    for (auto& e : eventRoutes) if (e.local == id) { route = &e; break; }
-    if (!route || !peers.owns(route->owner,route->owner.handle)) return;
-    requestPeer = route->owner.handle; original = route->original; *route = {};
-  }
+  const Inbox* in = eventSender(e);
+  return in && e.actions && in->eventActions && millis() - in->helloAt <= AGENT_TIMEOUT_MS;
+}
+
+static void sendEvent(const events::Event& e, const char* action) {
+  std::lock_guard<std::recursive_mutex> lock(peersMutex);
+  if (!eventSender(e) || (action && !eventActions(e))) return;
   JsonDocument d;
   d["src"] = "agent";
-  d["evt"] = "event_shown";
-  d["id"] = original;
+  d["evt"] = action ? "event_action" : "event_shown";
+  d["id"] = e.id;
+  if (action) {
+    d["action"] = action;
+    if (!strcmp(action, "open")) {
+      if (!e.url.length()) return;
+      d["url"] = e.url;
+    }
+  }
   String out;
   serializeJson(d, out);
-  send(out);
+  uint16_t old = requestPeer;
+  requestPeer = e.owner.handle;
+  send(out, false);
   requestPeer = old;
 }
+void eventShown(const events::Event& e) { sendEvent(e, nullptr); }
+void eventAction(const events::Event& e, bool open) { sendEvent(e, open ? "open" : "read"); }
 
 void fastLink() {
   // A quick connection interval (15-30 ms, within Apple's accessory

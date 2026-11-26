@@ -19,12 +19,15 @@ Sent to the stick as:
   {"src":"agent","event":{"id","level","title","sub","icon","sound"}}
 and the stick answers {"src":"agent","evt":"event_shown","id"}.
 """
+import asyncio
 import json
 import logging
 import re
+import secrets
 import time
+from urllib.parse import urlsplit
 
-from . import config
+from . import config, link
 
 log = logging.getLogger("events")
 LEVELS = ("celebrate", "nice", "headsup", "off")
@@ -123,13 +126,35 @@ def quiet_now(cfg):
     return start <= now < end if start <= end else now >= start or now < end  # may wrap midnight
 
 
+DETAIL_LIMIT = 16
+DETAIL_TTL_S = 300
+
+
+def valid_event_url(url):
+    if (not isinstance(url, str) or len(url) > 200 or not url.startswith(("https://", "http://"))
+            or "\\" in url or any(c.isspace() or not c.isprintable() for c in url)):
+        return False
+    try:
+        parts = urlsplit(url)
+        if not parts.hostname or parts.username is not None or parts.password is not None:
+            return False
+        # urlsplit leaves an invalid port undetected until .port is accessed.
+        if parts.port is not None and not 0 <= parts.port <= 65535:
+            return False
+        if parts.netloc.startswith("["):
+            return bool(re.fullmatch(r"\[[0-9a-fA-F:.]+\](?::[0-9]+)?", parts.netloc))
+        return bool(re.fullmatch(r"[a-zA-Z0-9_.-]+", parts.hostname.encode("idna").decode()))
+    except (UnicodeError, ValueError):
+        return False
+
+
 class Events:
     def __init__(self, agent):
         self.agent = agent
-        self._n = 0
+        self.deliveries = {}  # id -> (peer, monotonic expiry, independent one-use actions)
         self.shown = set()  # ids the stick acknowledged
 
-    async def notify(self, kind, title, sub="", icon=None, level=None, sound=None):
+    async def notify(self, kind, title, sub="", icon=None, level=None, sound=None, *, actor=None, url=None, body=None):
         """Fires an event of `kind` (its level and sound come from the settings unless given;
         sound "" = the level's default, "off" = silent). Returns the event dict, or None if this
         kind is turned off."""
@@ -139,15 +164,37 @@ class Events:
         if level == "off":
             log.info("event %s (off): %s", kind, title)
             return None
-        self._n += 1
         quiet = quiet_now(cfg)
         if sound is None:
             sound = sounds(cfg).get(kind, "")
         sound = for_stick(sound, tune_list(self.agent.sounds))
-        ev = {"id": f"e{self._n}", "level": level, "title": stick_text(title)[:40], "sub": stick_text(sub)[:90],
+        def display(text, limit):
+            return "".join(c if c.isprintable() else " " for c in stick_text(text))[:limit]
+
+        ev = {"id": "e" + secrets.token_urlsafe(12), "level": level,
+              "title": display(title, 40), "sub": display(sub, 90),
               "icon": icon or KINDS.get(kind, (None, "bell"))[1], "sound": "off" if quiet else sound,
               "kind": kind}  # the stick's faces react to it (firmware 2.1.0+; older ones ignore it)
-        sent = await self.agent.link.send({"src": "agent", "event": ev})
+        for key, value, limit in (("actor", actor, 24), ("body", body, 300)):
+            if isinstance(value, str) and (text := display(value, limit)):
+                ev[key] = text
+        if valid_event_url(url):
+            ev["url"] = url
+        transport = self.agent.link
+        peer = link.selected_peer(transport)
+        sent = False
+        if peer:
+            with link.pin_peer(*peer):
+                sent = await transport.send({"src": "agent", "event": ev})
+            if sent and link.peer_current(transport, peer):
+                actions = {"read": ". ".join(dict.fromkeys(ev[k] for k in ("title", "actor", "sub", "body")
+                                                           if ev.get(k)))}
+                if "url" in ev:
+                    actions["open"] = ev["url"]
+                if len(self.deliveries) >= DETAIL_LIMIT:
+                    del self.deliveries[next(iter(self.deliveries))]
+                self.deliveries[ev["id"]] = (peer, time.monotonic() + DETAIL_TTL_S, actions)
+
         entry = {"t": time.time(), "kind": kind, **ev, "sent": sent, "quiet": quiet}
         try:
             with EVENTS_LOG.open("a") as f:
@@ -158,6 +205,41 @@ class Events:
         log.info("event %s -> %s: %s / %s%s", kind, level, ev["title"], ev["sub"],
                  "" if sent else " (stick not connected)")
         return ev
+
+    def act(self, msg):
+        """Claim the local copy of a delivered action before scheduling its effect."""
+        eid, action = msg.get("id"), msg.get("action")
+        if not isinstance(eid, str) or action not in ("open", "read"):
+            return None
+        delivery = self.deliveries.get(eid)
+        if not delivery:
+            return None
+        peer, expires, actions = delivery
+        if time.monotonic() >= expires or not link.peer_current(self.agent.link, peer):
+            self.deliveries.pop(eid)
+            return None
+        fields = {"src", "evt", "id", "action"}
+        if action == "open":
+            fields.add("url")
+        if action not in actions or set(msg) != fields:
+            return None
+        if action == "open" and msg["url"] != actions["open"]:
+            return None
+        value = actions.pop(action)
+        return asyncio.create_task(self._perform(peer, expires, action, value))
+
+    async def _perform(self, peer, expires, action, value):
+        if time.monotonic() >= expires or not link.peer_current(self.agent.link, peer):
+            return
+        with link.pin_peer(*peer):
+            if action == "read":
+                await self.agent.speak(value, force=True)
+                return
+            try:
+                proc = await asyncio.create_subprocess_exec("/usr/bin/open", value)
+                await proc.wait()
+            except OSError as err:
+                log.warning("Could not open notification link (%s)", type(err).__name__)
 
     async def test(self, kind, level=None, sound=None):
         """The kind's sample, with the level / sound picked on the page if given (saved or not)."""

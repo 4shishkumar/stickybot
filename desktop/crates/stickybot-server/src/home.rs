@@ -71,6 +71,7 @@ pub struct Home {
     /// `{"ok", "error", "tracked"}` for `/api/status`
     gh_status: Arc<Mutex<(f64, String)>>,
     pub notifier: Arc<events::Notifier>,
+    pub(crate) deliveries: Arc<tokio::sync::Mutex<events::Deliveries>>,
     rot: Mutex<Rotation>,
     pub(crate) world_sent: Mutex<Option<Value>>,
     http: Arc<Mutex<Arc<dyn Http>>>,
@@ -88,6 +89,7 @@ impl Home {
             gh_state: self.gh_state.clone(),
             gh_status: self.gh_status.clone(),
             notifier: self.notifier.clone(),
+            deliveries: Default::default(),
             http: self.http.clone(),
             gh: self.gh.clone(),
             sessions: self.sessions.clone(),
@@ -114,6 +116,7 @@ impl Home {
             gh_state: Arc::new(Mutex::new(gh_state)),
             gh_status: Arc::new(Mutex::new((0.0, String::new()))),
             notifier: Arc::new(events::Notifier::default()),
+            deliveries: Default::default(),
             rot: Mutex::new(Rotation::default()),
             world_sent: Mutex::new(None),
             http: Arc::new(Mutex::new(http)),
@@ -292,6 +295,7 @@ pub fn world(st: &AppState) -> Value {
 pub fn hello_extra(st: &AppState) -> Map<String, Value> {
     let mut m = Map::new();
     m.insert("home".into(), home_card(st));
+    m.insert("eventActions".into(), json!(1));
     m.insert("world".into(), world(st));
     if let Some(mut wx) = st.home.weather.lock().unwrap().now.clone() {
         wx["at"] = json!(stick_text(wx["at"].as_str().unwrap_or("")));

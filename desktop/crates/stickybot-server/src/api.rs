@@ -1969,6 +1969,7 @@ mod tests {
         for k in ["xp", "streak", "acc", "seed", "greens", "towers"] {
             assert!(w["pet"].get(k).is_some(), "{k}");
         }
+        assert_eq!(h["eventActions"], 1);
         assert_eq!(h["wready"], true);
         assert_eq!(h["speak"], true); // the stick's reply view may ask us to read aloud (2.6.0)
         assert!(h.get("wx").is_none());
@@ -2005,14 +2006,16 @@ mod tests {
 
         let (_, v, _) = call(&app, req("POST", "/api/events/test", Some(json!({"kind": "pr_merged"})), tok)).await;
         let ev = &v["event"];
+        let id = ev["id"].as_str().unwrap();
+        assert!(id.starts_with('e') && id.len() == 17);
         assert_eq!(
             (ev["id"].as_str(), ev["level"].as_str(), ev["icon"].as_str()),
-            (Some("e1"), Some("celebrate"), Some("merge"))
+            (Some(id), Some("celebrate"), Some("merge"))
         );
         let sent: Vec<Value> = stick_lines(&fake).into_iter().filter(|l| l.get("event").is_some()).collect();
         assert_eq!(
             sent,
-            vec![json!({"src": "agent", "event": {"id": "e1", "level": "celebrate", "title": "PR #5507 merged!",
+            vec![json!({"src": "agent", "event": {"id": id, "level": "celebrate", "title": "PR #5507 merged!",
                         "sub": "web - Add stick agent", "icon": "merge", "sound": "applause", "kind": "pr_merged"}})]
         );
         let (_, h, _) = call(&app, req("GET", "/api/events/history?n=5", None, None)).await;
@@ -2023,14 +2026,14 @@ mod tests {
         // the stick says it showed it (the loops: offline in fake mode)
         crate::home::spawn(st.clone());
         tokio::time::sleep(Duration::from_millis(20)).await;
-        fake.notify(&json!({"src": "agent", "evt": "event_shown", "id": "e1"}));
+        fake.notify(&json!({"src": "agent", "evt": "event_shown", "id": id}));
         for _ in 0..50 {
-            if st.home.notifier.shown.lock().unwrap().contains("e1") {
+            if st.home.notifier.shown.lock().unwrap().contains(id) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        assert!(st.home.notifier.shown.lock().unwrap().contains("e1"));
+        assert!(st.home.notifier.shown.lock().unwrap().contains(id));
         // a kind turned off: nothing
         st.update_config(json!({"event_rules": {"test": "off"}}).as_object().unwrap().clone()).unwrap();
         let (_, v, _) = call(&app, req("POST", "/api/events/test", Some(json!({"kind": "test"})), tok)).await;

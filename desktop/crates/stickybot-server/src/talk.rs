@@ -512,6 +512,9 @@ async fn receive(st: &Arc<AppState>, generation: u64, message: FromStick, rec: &
                         recording.add(&frame);
                     }
                 }
+                FromStick::Message(msg) if msg["src"] == "agent" && msg["evt"] == "event_action" => {
+                    crate::events::detail_action(st, generation, &msg).await;
+                }
                 FromStick::Message(msg) => on_message(st, &msg, rec),
             }
         })
@@ -1691,6 +1694,70 @@ pub(crate) mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         false
+    }
+
+    #[tokio::test]
+    async fn detail_action_uses_only_the_notified_sticks_original_link_and_text() {
+        let t = agent("event-actions", false).await;
+        let voice = Arc::new(crate::speak::tests::FakeVoice::default());
+        *t.st.speaker.voice.lock().unwrap() = Arc::new(voice.clone());
+        t.st.devices.init(&t.st).unwrap();
+        let child = t.st.devices.add(&t.st, "SECOND", "Second").unwrap();
+        assert!(until(|| child.link.connected()).await);
+        let url = "https://example.org/review/12?view=all#files";
+        let ev = crate::events::notify_with(
+            &t.st,
+            "review_requested",
+            "Review requested",
+            "web 12",
+            &json!({"actor":"Kai","url":url,"body":"Check the tests"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ev["url"], url);
+        let open = json!({"src":"agent","evt":"event_action","action":"open","id":ev["id"],"url":url});
+        let read = json!({"src":"agent","evt":"event_action","action":"read","id":ev["id"]});
+        // The second stick knows the ID and real link, but did not receive this event.
+        crate::events::detail_action(&child, child.link.generation(), &open).await;
+        let mut wrong = open.clone();
+        wrong["url"] = json!("https://example.org/other");
+        t.fake.notify(&wrong);
+        wrong = open.clone();
+        wrong["id"] = json!("unknown");
+        t.fake.notify(&wrong);
+        t.fake.notify(&open);
+        t.fake.notify(&open);
+        let mut forged_read = read.clone();
+        forged_read["text"] = json!("forged");
+        t.fake.notify(&forged_read);
+        t.fake.notify(&read);
+        t.fake.notify(&read);
+        assert!(until(|| speech_msgs(&t.fake).contains(&"off".to_string())).await);
+        assert_eq!(*t.ran.lock().unwrap(), [Action::Open(vec![url.to_string()])]);
+        assert_eq!(voice.made.lock().unwrap().join(" "), "Review requested. Kai. web 12. Check the tests");
+
+        let next = crate::events::notify_with(&t.st, "release", "Release", "", &json!({"url":url})).await.unwrap();
+        let old_generation = t.st.link.generation();
+        t.fake.drop_connection();
+        assert!(until(|| t.st.link.connected() && t.st.link.generation() != old_generation).await);
+        let stale = json!({"src":"agent","evt":"event_action","action":"open","id":next["id"],"url":url});
+        crate::events::detail_action(&t.st, old_generation, &stale).await;
+        crate::events::detail_action(&t.st, t.st.link.generation(), &stale).await;
+        // Default can change while an old notification is displayed; authority stays with the recipient.
+        t.st.devices.default_to(&t.st, &child.device_id).unwrap();
+        let child_url = "https://example.org/child";
+        let child_ev =
+            crate::events::notify_with(&t.st, "release", "Child", "", &json!({"url":child_url})).await.unwrap();
+        let child_open =
+            json!({"src":"agent","evt":"event_action","action":"open","id":child_ev["id"],"url":child_url});
+        t.st.devices.default_to(&t.st, "primary").unwrap();
+        crate::events::detail_action(&t.st, t.st.link.generation(), &child_open).await;
+        crate::events::detail_action(&child, child.link.generation(), &child_open).await;
+        assert!(until(|| t.ran.lock().unwrap().len() >= 2).await);
+        assert_eq!(
+            *t.ran.lock().unwrap(),
+            [Action::Open(vec![url.to_owned()]), Action::Open(vec![child_url.to_owned()])]
+        );
     }
 
     #[tokio::test]

@@ -44,12 +44,19 @@ static const Binding REPLY[] = {
     {In::FLICK, Do::NONE, nullptr, nullptr},
 };
 
+static const Binding EVENT_DETAIL[] = {
+    {In::A_CLICK, Do::OPEN_EVENT, "A", "open", EVENT_URL},
+    {In::A_HOLD, Do::LISTEN, "hold A", "read", SPEECH},
+    {In::B_CLICK, Do::CLOSE, "B", "close"},
+};
+
 #define SCREEN(name, t) {name, t, (uint8_t)(sizeof(t) / sizeof(t[0]))}
 static const Screen SCREENS[] = {
     SCREEN("home", HOME),
     SCREEN("talk", TALK),
     SCREEN("agent", AGENT),
     SCREEN("reply", REPLY),
+    SCREEN("notification", EVENT_DETAIL),
 };
 static_assert(sizeof(SCREENS) / sizeof(SCREENS[0]) == (size_t)Id::COUNT, "a Screen per Id");
 
@@ -105,7 +112,7 @@ const char* inName(In in) {
 const char* doName(Do d) {
   static const char* const N[] = {"-",     "key combo", "Enter",  "unlock",      "talk",
                                   "apps",  "Escape",    "pages",  "next page",   "scroll",
-                                  "listen", "stop",     "close",  "cancel",      "send"};
+                                  "listen", "stop",     "close",  "cancel",      "send", "open notification"};
   return (int)d < (int)Do::COUNT ? N[(int)d] : "?";
 }
 

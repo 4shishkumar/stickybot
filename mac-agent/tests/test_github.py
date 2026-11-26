@@ -137,3 +137,14 @@ def test_helpers():
     assert github._short("acme/web", "acme/web") == "web"
     assert github._short("acme/x", "acme/web") == "acme/x"
     assert github.settings({"github": {"interval_s": 60}})["primary_repo"] == ""   # no repo until the user sets one
+
+
+async def test_review_event_carries_requester_and_link(gh, agent):
+    await gh.poll()
+    url = "https://github.com/acme/web/pull/9"
+    gh.data["asks"]["nodes"].append({"number": 9, "title": "Update deps", "url": url,
+                                     "repository": {"nameWithOwner": "acme/web"},
+                                     "timelineItems": {"nodes": [{"actor": {"login": "teammate"}}]}})
+    await gh.poll()
+    ev = next(m["event"] for m in agent.link.sent if "event" in m)
+    assert ev["actor"] == "teammate" and ev["url"] == url

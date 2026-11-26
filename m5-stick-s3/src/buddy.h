@@ -13,6 +13,8 @@
 #include "logic/clock.h"
 #include <string>
 
+namespace events { struct Event; }
+
 namespace buddy {
 
 // Prompts come from two sources: the Claude desktop app (its heartbeat
@@ -80,7 +82,9 @@ bool   takeWisprReady(uint16_t& id);  // the agent's "ready" arrived since (once
 void   setUsbMounted(bool on);     // plugged into a computer by USB: tell the agent (on change)
 size_t audioPayloadMax();          // largest audio frame one notification can carry
 bool   sendAudio(const uint8_t* data, size_t len);  // safe from any task
-void   eventShown(const String& id);  // ack: {"src":"agent","evt":"event_shown","id":...}
+bool   eventActions(const events::Event& e);
+void   eventAction(const events::Event& e, bool open);
+void   eventShown(const events::Event& e);  // ack: {"src":"agent","evt":"event_shown","id":...}
 void   fastLink();                 // ask the Mac for a quick connection interval (audio coming)
 void   fastData();                 // ... plus long packets + the 2M PHY (firmware update coming)
 void   sendLine(const String& json, bool log = true);  // one JSON line to the Mac (TX notify, split as needed)

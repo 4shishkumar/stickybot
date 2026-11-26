@@ -58,8 +58,11 @@ def main():
         save(sessions)
         if not start:
             return
-        body = json.dumps({"elapsed_s": round(now - start["t"]), "cwd": cwd or start.get("cwd", ""),
-                           "prompt": start.get("prompt", "")}).encode()
+        payload = {"elapsed_s": round(now - start["t"]), "cwd": cwd or start.get("cwd", ""),
+                   "prompt": start.get("prompt", "")}
+        if isinstance(summary := req.get("last_assistant_message"), str) and summary:
+            payload["summary"] = summary[:300]
+        body = json.dumps(payload).encode()
         try:
             token = (HOME / "token").read_text().strip()
             r = urllib.request.Request(f"http://127.0.0.1:{PORT}/api/claude-event", data=body, method="POST",
