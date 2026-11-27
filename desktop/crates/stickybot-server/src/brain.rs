@@ -34,9 +34,11 @@ pub const TIMEOUT: Duration = Duration::from_secs(240);
 pub const INTERRUPT_WAIT: Duration = Duration::from_secs(3);
 /// Claude Code's built-in tools that change the Mac or run programs: never available to the voice brain.
 /// Told to the voice brain every time: what it can't do, so it says so instead of offering to try later.
-pub const VOICE_READ_ONLY: &str = "You are read-only on this Mac: you can look things up but never run commands, change, \
-create, delete, move, send or install anything, and asking on the stick doesn't change that. When asked to, say you \
-can't, in one sentence, and don't offer to do it later.";
+pub const VOICE_READ_ONLY: &str = "You can't run commands or create, edit, delete, move, send or install files or messages \
+on this Mac, and asking on the stick doesn't change that: when asked, say you can't in one sentence and don't offer to \
+do it later. You CAN use your stick tools: open apps and links (open_app, open_url: the user approves on the stick), open \
+stick apps (stick_open), ask, notify, remember facts (memory_save: the user confirms) and look things up. When asked to \
+open something, call the tool.";
 
 /// Read, Glob and Grep read any file (`~/.ssh`, `.env`) past the shared-folder and secret rules,
 /// so the voice brain reads files only through the assistant's file tools.
