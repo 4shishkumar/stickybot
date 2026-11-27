@@ -24,15 +24,18 @@ DEFAULT = {"on": True, "interval_s": 120, "primary_repo": ""}
 QUERY = """
 query($mine: String!, $asks: String!, $owner: String!, $name: String!, $withRepo: Boolean!) {
   mine: search(query: $mine, type: ISSUE, first: 40) {
-    nodes { ... on PullRequest { number title state merged createdAt repository { nameWithOwner } reviewDecision
+    nodes { ... on PullRequest { number title url state merged mergedBy { login }
+      createdAt repository { nameWithOwner } reviewDecision
       commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       reviews(last: 20) { nodes { id author { login } state } } } }
   }
   asks: search(query: $asks, type: ISSUE, first: 40) {
-    nodes { ... on PullRequest { number title repository { nameWithOwner } } }
+    nodes { ... on PullRequest { number title url repository { nameWithOwner }
+      timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 5) { nodes {
+        ... on ReviewRequestedEvent { actor { login } } } } } }
   }
   primary: repository(owner: $owner, name: $name) @include(if: $withRepo) {
-    releases(first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { tagName name } }
+    releases(first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { tagName name url } }
   }
 }
 """
@@ -105,15 +108,25 @@ class GitHub:
             commit = ((n.get("commits") or {}).get("nodes") or [{}])[0].get("commit") or {}
             devin = [r["id"] for r in (n.get("reviews") or {}).get("nodes") or []
                      if r.get("author") and "devin" in r["author"]["login"].lower()]
+            reviewers = {r.get("state"): r["author"]["login"] for r in (n.get("reviews") or {}).get("nodes") or []
+                         if r and (r.get("author") or {}).get("login")}
             prs[key] = {"repo": n["repository"]["nameWithOwner"], "number": n["number"], "title": n["title"],
                         "state": n["state"], "merged": n["merged"], "decision": n.get("reviewDecision"),
-                        "created": _epoch(n.get("createdAt")),
+                        "created": _epoch(n.get("createdAt")), "url": n.get("url"),
+                        "merged_by": (n.get("mergedBy") or {}).get("login"), "reviewers": reviewers,
                         "ci": (commit.get("statusCheckRollup") or {}).get("state"), "devin": devin}
-        asks = {f"{n['repository']['nameWithOwner']}#{n['number']}": {
-                    "repo": n["repository"]["nameWithOwner"], "number": n["number"], "title": n["title"]}
-                for n in (data.get("asks") or {}).get("nodes") or [] if n}
+        asks = {}
+        for n in (data.get("asks") or {}).get("nodes") or []:
+            if n:
+                actors = [(item.get("actor") or {}).get("login")
+                          for item in (n.get("timelineItems") or {}).get("nodes") or [] if item]
+                repo = n["repository"]["nameWithOwner"]
+                actor = next(filter(None, reversed(actors)), None)
+                asks[f"{repo}#{n['number']}"] = {"repo": repo, "number": n["number"], "title": n["title"],
+                                                 "url": n.get("url"), "actor": actor}
         rel = ((data.get("primary") or {}).get("releases") or {}).get("nodes") or []
         return {"prs": prs, "asks": asks, "release": rel[0]["tagName"] if rel else None,
+                "release_url": rel[0].get("url") if rel else None,
                 "release_name": rel[0].get("name") if rel else None}
 
     async def _diff(self, old, new, primary):
@@ -123,37 +136,43 @@ class GitHub:
         for key, pr in order:
             was = old["prs"].get(key)
             where = f"{_short(pr['repo'], primary)} #{pr['number']}"
-            title = pr["title"][:60]
+            sub = f"{where} - {pr['title'][:60]}"
+            url = pr.get("url")
+            reviewers = pr.get("reviewers") or {}
             if was is None:
                 # only PRs created since the last look (an old PR that got updated isn't "new")
                 if pr["state"] == "OPEN" and pr["created"] >= old.get("seen_at", 0) - 300:
-                    await ev("pr_created", f"PR #{pr['number']} opened", f"{where} - {title}")
+                    await ev("pr_created", f"PR #{pr['number']} opened", sub, url=url)
                 continue
             if pr["merged"] and not was["merged"]:
                 self.agent.pet.merged()
-                await ev("pr_merged", f"PR #{pr['number']} merged!", f"{where} - {title}")
+                await ev("pr_merged", f"PR #{pr['number']} merged!", sub, url=url, actor=pr.get("merged_by"))
             if pr["decision"] != was["decision"]:
                 if pr["decision"] == "APPROVED":
-                    await ev("pr_approved", f"PR #{pr['number']} approved", f"{where} - {title}")
+                    await ev("pr_approved", f"PR #{pr['number']} approved", sub, url=url,
+                             actor=reviewers.get("APPROVED"))
                 elif pr["decision"] == "CHANGES_REQUESTED":
-                    await ev("changes_requested", "Changes requested", f"{where} - {title}")
+                    await ev("changes_requested", "Changes requested", sub, url=url,
+                             actor=reviewers.get("CHANGES_REQUESTED"))
             if pr["ci"] != was["ci"]:
                 if pr["ci"] == "SUCCESS":  # a green build (the pet's sunglasses come at 10)
                     self.agent.pet.green()
                 if pr["ci"] in ("FAILURE", "ERROR"):
-                    await ev("ci_failed", "CI failed", f"{where} - {title}")
+                    await ev("ci_failed", "CI failed", sub, url=url)
                 elif pr["ci"] == "SUCCESS" and was["ci"] in ("FAILURE", "ERROR"):
-                    await ev("ci_fixed", "CI is green again", f"{where} - {title}")
+                    await ev("ci_fixed", "CI is green again", sub, url=url)
             fresh = [r for r in pr["devin"] if r not in set(was.get("devin") or [])]
             if fresh:
-                await ev("devin_review", f"Devin reviewed #{pr['number']}", f"{where} - {title}")
+                await ev("devin_review", f"Devin reviewed #{pr['number']}", sub, url=url, actor="Devin")
         for key, a in sorted(new["asks"].items(), key=lambda kv: (kv[1]["repo"] != primary, kv[0])):
             if key not in old["asks"]:
                 await ev("review_requested", "Review requested",
-                         f"{_short(a['repo'], primary)} #{a['number']} - {a['title'][:60]}")
+                         f"{_short(a['repo'], primary)} #{a['number']} - {a['title'][:60]}",
+                         actor=a.get("actor"), url=a.get("url"))
         if new["release"] and old.get("release") and new["release"] != old["release"]:
             self.agent.pet.release()
-            await ev("release", f"Release {new['release']}"[:40], _short(primary, primary))
+            await ev("release", f"Release {new['release']}"[:40], _short(primary, primary),
+                     url=new.get("release_url"))
 
     async def poll(self):
         cfg = settings(self.agent.cfg)

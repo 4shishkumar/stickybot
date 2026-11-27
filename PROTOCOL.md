@@ -343,16 +343,19 @@ The agent's hello may also carry `"home":{"k","a","b","u"}` (home screen card) a
 `{"src":"agent","home":{…}}` on its own (no `hello`) updates the card at once — the agent sends it when a Claude
 session's `progress()` / `pin_home()` changes it (at most every 0.5 s); boards since the home card handle it.
 
-**Events** (full-screen screens on the board; StickS3):
+**Events** (notification screens on StickS3 and StickC Plus2):
 
 | Direction | Message |
 |---|---|
 | Mac → board | `{"src":"agent","event":{"id":"e123","level":"celebrate"\|"nice"\|"headsup","title":"PR #5507 merged","sub":"acme/web · feat: dark mode","icon":"merge"\|"pr"\|"check"\|"x"\|"review"\|"claude"\|"star"\|"bell","sound":""}}` |
 | board → Mac | `{"src":"agent","evt":"event_shown","id":"e123"}` when it appears on screen |
+| Mac → board | `"eventActions":1` inside the sending Mac’s hello advertises open and read-aloud support |
+| board → Mac | `{"src":"agent","evt":"event_action","id":"e123","action":"open","url":"https://github.com/acme/web/pull/9"}` |
+| board → Mac | `{"src":"agent","evt":"event_action","id":"e123","action":"read"}` |
 
 - `celebrate`: confetti, a colour pulse, the happy face and the big icon, ~6 s; default sound `jingle_win` (Kenney Music Jingles, CC0).
 - `nice`: a teal-to-green toast that slides in, ~4 s; default sound `confirmation_002`.
-- `headsup`: orange, pulsing; stays until any button press (that press only dismisses) or 60 s; default sound `question_001`.
+- `headsup`: orange, pulsing; waits up to 60 s for a button press; default sound `question_001`.
 - `sound`: any event, tune or clip name the board knows (see Sounds); empty = the level's default; `off` = silent
   (quiet hours); nothing plays if sounds are off. Firmware 2.7.0+: a name the board doesn't know plays the
   level's default (older firmware played nothing). The Mac picks it per event kind (dashboard → Events,
@@ -364,6 +367,20 @@ session's `progress()` / `pin_home()` changes it (at most every 0.5 s); boards s
 - `kind` (agent with faces, optional): the event's kind (`pr_merged`, `ci_failed`, `ci_fixed`, `claude_done`,
   `release`, `review_requested`, ...). Firmware 2.1.0+ lets the Home face react to it as well (once the event
   screen is gone); older firmware ignores it.
+
+Event detail fields are optional. `actor` holds up to 24 characters, `body` up to 300 and `url`
+a complete HTTP(S) URL up to 200 characters. A URL that exceeds the limit is omitted. A opens
+the detail page while the notification is visible. On the detail page, tap A to open a link,
+hold A to read the notification aloud, or press B to close. Viewing details also works on events
+without a link. Firmware offers remote actions only for a sender that advertised support.
+
+The stick routes actions back to the Mac connection that supplied the displayed event. Each Mac
+keeps up to 16 successfully delivered events per recipient connection for five minutes. To open
+a link it must find that event ID on the same connection, check the submitted URL matches the
+sent URL exactly, and open the stored URL. To read aloud it uses the stored notification text.
+A background Mac uses its own speaker when the stick’s speaker is reserved for the selected Mac.
+Each action can be used once per event. Reconnecting invalidates old requests. The on-disk
+notification feed does not authorize actions.
 
 **Faces** (StickS3 2.1.0+; the Home screen's looks, picked with `@face id=…`):
 

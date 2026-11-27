@@ -245,7 +245,7 @@ def make_app(agent):
     async def claude_event(request):
         body = await request.json()
         ev = await agent.claude_finished(int(body.get("elapsed_s", 0)), str(body.get("cwd", "")),
-                                         str(body.get("prompt", "")))
+                                         str(body.get("prompt", "")), body.get("summary", ""))
         return web.json_response({"ok": True, "shown": bool(ev)})
 
     async def pet_status(_):

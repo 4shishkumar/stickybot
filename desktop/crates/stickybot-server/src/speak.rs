@@ -244,9 +244,26 @@ pub async fn play_on_stick(st: &Arc<AppState>, batch: &[Clip]) -> usize {
     pcm.len()
 }
 
+#[derive(Clone, Copy)]
+struct SpeechRoute {
+    // A notification can originate on a stick whose speaker is owned by another Mac.
+    mac_output: bool,
+    generation: Option<u64>,
+}
+
+impl SpeechRoute {
+    fn for_turn(st: &AppState, mac_turn: bool) -> Self {
+        Self { mac_output: mac_turn, generation: (!mac_turn).then(|| st.link.bound_generation()) }
+    }
+
+    fn notify_generation(self) -> Option<u64> {
+        self.generation.filter(|_| !self.mac_output)
+    }
+}
+
 /// One reply being spoken: `add()` sentences, `close()` when there are no more.
 pub struct Utterance {
-    mac_turn: bool,
+    route: SpeechRoute,
     max_words: Option<usize>,
     state: Mutex<UState>,
     cancelled: AtomicBool,
@@ -265,14 +282,13 @@ struct UState {
 }
 
 impl Utterance {
-    fn new(st: Arc<AppState>, voice: Arc<dyn Voice>, max_words: Option<usize>, mac_turn: bool) -> Arc<Self> {
+    fn new(st: Arc<AppState>, voice: Arc<dyn Voice>, max_words: Option<usize>, route: SpeechRoute) -> Arc<Self> {
         let (tx, mut rx) = mpsc::unbounded_channel::<Option<String>>();
         let (ready_tx, mut ready_rx) = mpsc::unbounded_channel::<Option<Clip>>();
         let name = || st.cfg.lock().unwrap().get("speak_voice").and_then(Value::as_str).unwrap_or("").to_string();
-        let for_stick = !mac_turn && output(&st) == "stick";
+        let for_stick = !route.mac_output && output(&st) == "stick";
         let (v1, v2, voice_name, st2) = (voice.clone(), voice, name(), st.clone());
         let vn2 = voice_name.clone();
-        let generation = st.link.bound_generation();
         let make = tokio::spawn(async move {
             while let Some(Some(sentence)) = rx.recv().await {
                 match v1.synth(sentence.clone(), voice_name.clone(), for_stick).await {
@@ -314,18 +330,18 @@ impl Utterance {
                         }
                     }
                 }
-                if mac_turn {
-                    v2.play(st2.clone(), batch, vn2.clone()).await;
-                } else {
+                if let Some(generation) = route.generation {
                     if st2.link.generation() != generation {
                         return;
                     }
                     st2.link.with_generation(generation, v2.play(st2.clone(), batch, vn2.clone())).await;
+                } else {
+                    v2.play(st2.clone(), batch, vn2.clone()).await;
                 }
             }
         });
         Arc::new(Self {
-            mac_turn,
+            route,
             max_words,
             state: Mutex::default(),
             cancelled: AtomicBool::new(false),
@@ -438,17 +454,19 @@ impl Speaker {
 }
 
 /// Speech started / ended: the stick's reply view shows "Reading aloud".
-fn changed(st: &AppState, on: bool, notify_stick: bool) {
+fn changed(st: &AppState, on: bool, generation: Option<u64>) {
     if st.speaker.speaking.swap(on, Ordering::Relaxed) == on {
         return;
     }
     st.hub.emit("speech", json!({"on": on}));
-    if !notify_stick || tokio::runtime::Handle::try_current().is_err() {
+    let Some(generation) = generation else { return };
+    if tokio::runtime::Handle::try_current().is_err() {
         return;
     }
     let link = st.link.clone();
     tokio::spawn(async move {
-        link.send(&json!({"src": "agent", "speech": if on { "on" } else { "off" }})).await;
+        link.with_generation(generation, link.send(&json!({"src": "agent", "speech": if on { "on" } else { "off" }})))
+            .await;
     });
 }
 
@@ -464,13 +482,17 @@ pub fn start(st: &Arc<AppState>, max_words: Option<usize>) -> Arc<Utterance> {
 }
 
 pub(crate) fn start_for(st: &Arc<AppState>, max_words: Option<usize>, mac_turn: bool) -> Arc<Utterance> {
+    start_routed(st, max_words, SpeechRoute::for_turn(st, mac_turn))
+}
+
+fn start_routed(st: &Arc<AppState>, max_words: Option<usize>, route: SpeechRoute) -> Arc<Utterance> {
     if let Some(old) = st.speaker.current.lock().unwrap().take() {
         old.cancel();
     }
     let voice = st.speaker.voice.lock().unwrap().clone();
-    let u = Utterance::new(st.clone(), voice, max_words, mac_turn);
+    let u = Utterance::new(st.clone(), voice, max_words, route);
     *st.speaker.current.lock().unwrap() = Some(u.clone());
-    changed(st, true, !mac_turn);
+    changed(st, true, route.notify_generation());
     // ended (all of it played, or nothing to say): "off", unless another one took its place
     let (st2, u2) = (Arc::downgrade(st), u.clone());
     tokio::spawn(async move {
@@ -480,7 +502,7 @@ pub(crate) fn start_for(st: &Arc<AppState>, max_words: Option<usize>, mac_turn: 
         if cur.as_ref().is_some_and(|c| Arc::ptr_eq(c, &u2)) {
             *cur = None;
             drop(cur);
-            changed(&st, false, !mac_turn);
+            changed(&st, false, route.notify_generation());
         }
     });
     u
@@ -496,14 +518,14 @@ pub(crate) fn stop_stick(st: &AppState) {
 
 fn stop_current(st: &AppState, only_stick: bool) {
     let mut current = st.speaker.current.lock().unwrap();
-    if only_stick && current.as_ref().is_some_and(|u| u.mac_turn) {
+    if only_stick && current.as_ref().is_some_and(|u| u.route.generation.is_none()) {
         return;
     }
-    let notify_stick = current.as_ref().is_none_or(|u| !u.mac_turn);
+    let generation = current.as_ref().map_or_else(|| Some(st.link.bound_generation()), |u| u.route.notify_generation());
     if let Some(u) = current.take() {
         u.cancel();
     }
-    changed(st, false, notify_stick);
+    changed(st, false, generation);
 }
 
 /// The stick's "listen" (its reply view, `{"evt":"speak","what":"last"}`): the last answer read
@@ -524,7 +546,7 @@ pub fn speak_last(st: &Arc<AppState>) -> bool {
     if speakable(&text).trim().is_empty() {
         log::info!("reading aloud: nothing to read");
         st.speaker.speaking.store(true, Ordering::Relaxed); // so the stick hears "off"
-        changed(st, false, true);
+        changed(st, false, Some(st.link.bound_generation()));
         return false;
     }
     log::info!("reading aloud: the last reply ({} words)", text.split_whitespace().count());
@@ -570,7 +592,20 @@ pub(crate) fn speak_for(st: &Arc<AppState>, text: &str, quick: bool, force: bool
         return false;
     }
     // sentence by sentence: a long text plays in clips the stick can hold, the first one soon
-    let u = start_for(st, None, mac_turn);
+    enqueue_text(st, text, start_for(st, None, mac_turn));
+    true
+}
+
+/// A physical read-aloud belongs to its BLE generation even when the background Mac plays it locally.
+pub(crate) fn read_event(st: &Arc<AppState>, text: &str, generation: u64) {
+    let hosts = st.host_state.lock().unwrap();
+    let background = hosts["shared"] == true && hosts["active"] != st.host.json()["id"];
+    drop(hosts);
+    let route = SpeechRoute { mac_output: background, generation: Some(generation) };
+    enqueue_text(st, text, start_routed(st, None, route));
+}
+
+fn enqueue_text(st: &Arc<AppState>, text: &str, u: Arc<Utterance>) {
     let mut cut = Sentences::default();
     let mut sentences = cut.feed(text);
     sentences.extend(cut.finish());
@@ -579,7 +614,6 @@ pub(crate) fn speak_for(st: &Arc<AppState>, text: &str, quick: bool, force: bool
     }
     u.close();
     st.hub.emit("spoken", json!({"text": text}));
-    true
 }
 
 /// Installed macOS voices `[{name, lang}]` from `say -v ?` output.
@@ -713,6 +747,34 @@ pub(crate) mod tests {
         let v = Arc::new(v);
         *t.st.speaker.voice.lock().unwrap() = Arc::new(v.clone());
         (t, v)
+    }
+
+    #[tokio::test]
+    async fn background_event_speaks_on_the_sending_mac_and_remains_bound_to_the_stick() {
+        let (t, voice) = rig("bg-event", FakeVoice { synth_ms: 75, ..Default::default() }).await;
+        t.st.update_config(json!({"speak_output":"stick"}).as_object().unwrap().clone()).unwrap();
+        *t.st.host_state.lock().unwrap() = json!({"shared":true,"active":"another-mac"});
+        let generation = t.st.link.generation();
+        read_event(&t.st, "First event", generation);
+        let u = t.st.speaker.current.lock().unwrap().clone().unwrap();
+        u.wait().await;
+        assert_eq!(*voice.for_stick.lock().unwrap(), [false]);
+        assert_eq!(voice.played.lock().unwrap().concat(), ["First event"]);
+        assert_eq!(output(&t.st), "stick");
+        assert!(!crate::talk::tests::lines(&t.fake).iter().any(|m| m.get("speech").is_some()));
+        // Once the original stick leaves, even speech being synthesized for this Mac is abandoned.
+        read_event(&t.st, "Second event", generation);
+        let u = t.st.speaker.current.lock().unwrap().clone().unwrap();
+        t.fake.drop_connection();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while t.st.link.generation() == generation {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        u.wait().await;
+        assert_eq!(voice.played.lock().unwrap().concat(), ["First event"]);
     }
 
     #[tokio::test]

@@ -1018,10 +1018,15 @@ fn faces_message(s: &mut State, o: &serde_json::Map<String, Value>) {
 
 /// Its connection.
 pub struct FakeConn {
+    address: String,
     stick: FakeStick,
 }
 
 impl Connection for FakeConn {
+    fn address(&self) -> &str {
+        &self.address
+    }
+
     async fn write_rx(&self, chunk: Vec<u8>) -> Result<(), BleError> {
         self.stick.on_write(chunk)
     }
@@ -1067,7 +1072,7 @@ impl Connector for FakeStick {
             s.connects += 1;
             s.decoder.reset();
             s.last_target = Some(target.clone());
-            Ok((FakeConn { stick: self.clone() }, rx))
+            Ok((FakeConn { address: target.address.clone(), stick: self.clone() }, rx))
         })
     }
 

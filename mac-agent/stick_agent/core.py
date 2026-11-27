@@ -401,6 +401,7 @@ class Agent:
 
     def _on_link(self, state):
         self.link_state = state
+        self.notifier.deliveries.clear()
         self.emit("link", state=state)
         self.updates.link_changed(state)
         if state == "connected":
@@ -430,6 +431,9 @@ class Agent:
             return
         if msg.get("src") == "agent" and msg.get("evt") == "event_shown":
             self.notifier.acked(msg.get("id"))
+            return
+        if msg.get("src") == "agent" and msg.get("evt") == "event_action":
+            self.notifier.act(msg)
             return
         if msg.get("src") == "agent" and msg.get("evt") == "game":  # a game finished on the stick (2.5.0)
             self._on_game(msg)
@@ -532,7 +536,7 @@ class Agent:
     def _hello_extra(self):
         # wready: we answer the stick's "prepare" with "ready" (it holds the key until then)
         # speak: we read the last reply aloud when the stick asks ({"evt":"speak"}, 2.6.0)
-        extra = {"home": self.home_card(), "wmic": self.wispr.ready, "wready": True, "speak": True,
+        extra = {"home": self.home_card(), "wmic": self.wispr.ready, "wready": True, "speak": True, "eventActions": 1,
                  "world": self.world()}
         if self.weather.now:
             extra["wx"] = {**self.weather.now, "at": stick_text(self.weather.now.get("at", ""))}
@@ -902,7 +906,7 @@ class Agent:
 
     # --- events -----------------------------------------------------------------
 
-    async def claude_finished(self, elapsed_s, cwd, prompt):
+    async def claude_finished(self, elapsed_s, cwd, prompt, summary=""):
         """From the Claude Code Stop hook: "Claude finished in <project>" for long tasks.
         Every finished task feeds the pet (its fish leaps out in the Aquarium)."""
         self.pet.claude_done()
@@ -912,7 +916,7 @@ class Agent:
         project = os.path.basename(cwd.rstrip("/")) or "a session"
         took = f"{elapsed_s // 60} min" if elapsed_s >= 60 else f"{elapsed_s} s"
         sub = f"took {took}" + (f" - {prompt[:60]}" if prompt else "")
-        return await self.notifier.notify("claude_done", f"Claude finished in {project}", sub)
+        return await self.notifier.notify("claude_done", f"Claude finished in {project}", sub, body=summary or prompt)
 
     # --- settings ---------------------------------------------------------------
 

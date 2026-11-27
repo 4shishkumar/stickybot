@@ -8,8 +8,23 @@ import asyncio
 import json
 import logging
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from bleak import BleakClient, BleakScanner
+
+# Nested IR calls and reply chunks inherit the physical press's BLE peer.
+_peer = ContextVar("button_peer", default=None)
+
+
+@contextmanager
+def pin_peer(client, target):
+    token = _peer.set((client, target))
+    try:
+        yield
+    finally:
+        _peer.reset(token)
+
 
 NUS = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"     # Mac -> stick
@@ -31,6 +46,27 @@ async def scan(timeout=5.0):
     out = [{"address": d.address, "name": ad.local_name or d.name or "?", "rssi": ad.rssi}
            for d, ad in found.values() if NUS in [u.lower() for u in ad.service_uuids]]
     return sorted(out, key=lambda x: -x["rssi"])
+
+
+def selected_peer(link):
+    """Return the live Bluetooth connection and selection that identify this recipient."""
+    client = getattr(link, "client", None)
+    target = link.target
+    address = getattr(client, "address", "")
+    if (link.connected and not link.paused and address and target
+            and address.casefold() == (target.get("address") or "").casefold()):
+        return client, target
+    return None
+
+
+def peer_current(link, peer):
+    return (peer is not None and link.connected and not link.paused
+            and getattr(link, "client", None) is peer[0] and link.target is peer[1])
+
+
+def pinned_peer_current(link):
+    peer = _peer.get()
+    return peer is None or peer_current(link, peer)
 
 
 class Link:
@@ -82,22 +118,28 @@ class Link:
     async def send(self, msg: dict):
         if not self.connected:
             return False
-        data = (json.dumps(msg, separators=(",", ":")) + "\n").encode()
+        client = self.client
+        peer = _peer.get()
+        if peer and (client is not peer[0] or self.target is not peer[1] or self.paused):
+            return False
+        data = (json.dumps(msg, separators=(",", ":"), ensure_ascii="event" not in msg) + "\n").encode()
         try:
             async with self._write_lock:
                 for i in range(0, len(data), CHUNK):
-                    await self._write(data[i:i + CHUNK])
+                    if self.client is not client or (peer and (self.target is not peer[1] or self.paused)):
+                        return False
+                    await self._write(client, data[i:i + CHUNK])
             return True
         except Exception as e:  # noqa: BLE001 — link dropped mid-write
             log.warning("send failed (%s, %d bytes): %s", next(iter(msg), "?"), len(data), e)
             return False
 
-    async def _write(self, part, tries=4):
+    async def _write(self, client, part, tries=4):
         """One chunk; "Insufficient Resource" means the stick's Bluetooth buffers are busy
         for a moment (a long reply going out): wait and send it again."""
         for n in range(tries):
             try:
-                return await self.client.write_gatt_char(RX, part, response=True)
+                return await client.write_gatt_char(RX, part, response=True)
             except Exception as e:  # noqa: BLE001
                 if "Insufficient Resource" not in str(e) or n == tries - 1:
                     raise
@@ -105,23 +147,28 @@ class Link:
 
     async def send_audio(self, pkts):
         """Sends clip packets in order (write without response; Core Bluetooth paces them)."""
-        if not self.connected:
+        if not self.connected or not pinned_peer_current(self):
             return False
+        client = self.client
         try:
             async with self._write_lock:
                 # Core Bluetooth drops write-without-response packets when its queue is
                 # full and bleak doesn't wait for room, so we check canSendWriteWithoutResponse
                 # ourselves. First and last packets are acknowledged (start / end of a clip).
-                periph = getattr(getattr(self.client, "_backend", None), "_peripheral", None)
+                periph = getattr(getattr(client, "_backend", None), "_peripheral", None)
                 for i, p in enumerate(pkts):
+                    if self.client is not client or not pinned_peer_current(self):
+                        return False
                     if i == 0 or i == len(pkts) - 1 or periph is None:
-                        await self.client.write_gatt_char(AUDIO_IN, p, response=True)
+                        await client.write_gatt_char(AUDIO_IN, p, response=True)
                         continue
                     for _ in range(400):  # up to ~2 s
                         if periph.canSendWriteWithoutResponse():
                             break
                         await asyncio.sleep(0.005)
-                    await self.client.write_gatt_char(AUDIO_IN, p, response=False)
+                    if self.client is not client or not pinned_peer_current(self):
+                        return False
+                    await client.write_gatt_char(AUDIO_IN, p, response=False)
             return True
         except Exception as e:  # noqa: BLE001
             log.warning("audio send failed: %s", e)
@@ -183,7 +230,8 @@ class Link:
                 continue
             self.on_state("searching")
             try:
-                dev = await BleakScanner.find_device_by_address(self.target["address"], timeout=10)
+                target = self.target
+                dev = await BleakScanner.find_device_by_address(target["address"], timeout=10)
                 if dev is None:
                     await asyncio.sleep(3)
                     continue
@@ -195,7 +243,13 @@ class Link:
                                        disconnected_callback=lambda _, ev=disconnected: ev.set()) as c:
                     self.client = c
                     self.mtu = c.mtu_size
-                    await c.start_notify(TX, self._on_tx)
+                    self._buf.clear()
+
+                    def receive(sender, data, client=c, selected=target, gone=disconnected):
+                        if self.client is client and self.target is selected and not self.paused and not gone.is_set():
+                            self._on_tx(sender, data)
+
+                    await c.start_notify(TX, receive)
                     await c.start_notify(AUDIO, lambda _, d: self.on_audio(bytes(d)))
                     log.info("connected to %s (MTU %d)", self.target.get("name"), self.mtu)
                     self.on_state("connected")

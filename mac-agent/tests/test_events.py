@@ -35,7 +35,7 @@ def test_rules_default_and_override():
 async def test_notify_sends_logs_and_emits(agent, monkeypatch):
     at(monkeypatch, 12)
     ev = await agent.notifier.notify("pr_merged", "PR #12 merged!", "web - Café ✨ fix")
-    assert ev["level"] == "celebrate" and ev["icon"] == "merge" and ev["id"] == "e1"
+    assert ev["level"] == "celebrate" and ev["icon"] == "merge" and ev["id"].startswith("e")
     msg = agent.link.sent[-1]
     assert msg == {"src": "agent", "event": ev}
     assert ev["sub"] == "web - Cafe  fix"          # sanitised for the stick's fonts
@@ -147,3 +147,122 @@ async def test_test_uses_the_level_and_sound_picked_on_the_page(agent, monkeypat
     ev = await agent.notifier.test("pr_merged", "loud", "../x")         # junk: the saved ones
     assert (ev["level"], ev["sound"]) == ("celebrate", "applause")
     assert await agent.notifier.test("pr_merged", "off") is None
+
+
+def detail(ev, action, **fields):
+    return {"src": "agent", "evt": "event_action", "id": ev["id"], "action": action, **fields}
+
+
+async def test_detail_open_and_read_use_only_delivered_values(agent, monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock, Mock
+
+    opened = AsyncMock(return_value=Mock(wait=AsyncMock()))
+    spoken = AsyncMock()
+    monkeypatch.setattr(events.asyncio, "create_subprocess_exec", opened)
+    monkeypatch.setattr(agent, "speak", spoken)
+    assert agent._hello_extra()["eventActions"] == 1
+    url = "https://example.org/a?x=1&y=2"
+    ev = await agent.notifier.notify("test", "Review", "project #9", actor="sender", url=url, body="Update deps")
+    for msg in (detail(ev, "open", url="https://example.org/b"), detail(ev, "open"), detail(ev, "read", text="Forged"),
+                detail({"id": "absent"}, "open", url=url), detail(ev, "open", url=url, extra=1)):
+        agent._on_message(msg)
+    await asyncio.sleep(0)
+    opened.assert_not_called()
+    spoken.assert_not_called()
+    for _ in range(2):
+        agent._on_message(detail(ev, "open", url=url))
+        agent._on_message(detail(ev, "read"))
+    await asyncio.sleep(0)
+    opened.assert_awaited_once_with("/usr/bin/open", url)
+    spoken.assert_awaited_once_with("Review. sender. project #9. Update deps", force=True)
+
+
+@pytest.mark.parametrize("url", ["file:///tmp/x", "https:///nohost", "https://u:p@example.org",
+                                  "https://example.org/bad\nline", "http://example.org:bad/p",
+                                  "https://a.test/" + "z" * 200, "https://a.test\\other.test", "https://[::1]oops"])
+async def test_invalid_notification_link_is_omitted_and_display_text_is_bounded(agent, url):
+    ev = await agent.notifier.notify("test", "Review", actor="a" * 30, body="b\n" * 250, url=url)
+    assert len(ev["actor"]) == 24 and len(ev["body"]) == 300 and "\n" not in ev["body"]
+    assert "url" not in ev
+    assert agent.notifier.act(detail(ev, "open", url=url)) is None
+
+
+async def test_unsent_expired_evicted_and_reconnected_events_cannot_act(agent, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    url = "https://example.org/pr/9"
+    ev = await agent.notifier.notify("test", "Review", url=url)
+    agent.link.client = SimpleNamespace(address=agent.link.client.address)
+    assert agent.notifier.act(detail(ev, "open", url=url)) is None
+    latest = await agent.notifier.notify("test", "New review", url=url)
+    agent.link.paused = True
+    assert agent.notifier.act(detail(latest, "read")) is None
+    agent.link.paused = False
+    first = await agent.notifier.notify("test", "Review", url=url)
+    for _ in range(events.DETAIL_LIMIT):
+        last = await agent.notifier.notify("test", "Review", url=url)
+    assert agent.notifier.act(detail(first, "open", url=url)) is None
+    monkeypatch.setattr(events, "DETAIL_TTL_S", 0)
+    expired = await agent.notifier.notify("test", "Expired", url=url)
+    assert agent.notifier.act(detail(expired, "read")) is None
+    monkeypatch.setattr(agent.link, "send", AsyncMock(return_value=False))
+    failed = await agent.notifier.notify("test", "No delivery", url=url)
+    assert agent.notifier.act(detail(failed, "read")) is None
+    agent.link.target = {"address": "other"}
+    assert agent.notifier.act(detail(last, "read")) is None
+
+
+async def test_peer_switch_before_async_open_cancels_it(agent, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    url = "https://example.org/pr/9"
+    ev = await agent.notifier.notify("test", "Review", url=url)
+    opened = AsyncMock()
+    monkeypatch.setattr(events.asyncio, "create_subprocess_exec", opened)
+    task = agent.notifier.act(detail(ev, "open", url=url))
+    agent.link.client = SimpleNamespace(address=agent.link.client.address)
+    await task
+    opened.assert_not_awaited()
+
+
+async def test_maximum_detail_notification_fits_firmware_rx_frame_and_preserves_link(agent):
+    from types import SimpleNamespace
+
+    from stick_agent import link
+
+    encoded = bytearray()
+
+    async def receive(_characteristic, data, response):
+        encoded.extend(data)
+
+    transport = link.Link(None, None, None)
+    transport.client = SimpleNamespace(address="test", is_connected=True, write_gatt_char=receive)
+    transport.target = {"address": "test"}
+    agent.link = transport
+    url = "https://example.org/" + "😀" * 180
+    ev = await agent.notifier.notify("test", "—" * 40, "—" * 90, actor="—" * 24, body="—" * 300, url=url)
+    assert len(encoded) < 4096
+    assert json.loads(encoded)["event"]["url"] == ev["url"] == url
+
+
+async def test_event_speech_cannot_move_to_another_stick_or_fall_back_to_mac(agent, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from stick_agent import link
+
+    source = agent.link.client
+    with link.pin_peer(source, agent.link.target):
+        agent.link.client = SimpleNamespace(address=source.address)
+        play_mac = AsyncMock()
+        send_audio = AsyncMock()
+        monkeypatch.setattr(agent.speaker, "_play_mac", play_mac)
+        monkeypatch.setattr(agent.link, "send_audio", send_audio)
+        for connected in (True, False):
+            agent.link.connected = connected
+            await agent.speaker.play([{"text": "review", "pcm": []}], set())
+        play_mac.assert_not_awaited()
+        send_audio.assert_not_awaited()

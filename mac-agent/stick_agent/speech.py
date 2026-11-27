@@ -18,6 +18,7 @@ import time
 import numpy as np
 
 from . import clips
+from .link import pinned_peer_current
 
 log = logging.getLogger("speech")
 
@@ -249,8 +250,12 @@ class Speaker:
         files = [c["path"] for c in batch if "path" in c]
         try:
             link = self._link()
+            if not pinned_peer_current(link):
+                return
             if files or not link.connected:
                 for c in batch:
+                    if not pinned_peer_current(link):
+                        return
                     await self._play_mac(c, procs)
                 return
             gap = np.zeros(int(clips.RATE * GAP_S), dtype=np.int16)

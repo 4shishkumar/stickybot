@@ -18,10 +18,11 @@ use crate::AppState;
 use crate::talk::stick_text;
 use chrono::Timelike;
 use serde_json::{Map, Value, json};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::io::Write;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use stick_link::{Backend, Link};
 
 tokio::task_local! { static DEVICE_TARGETED: bool; }
 
@@ -163,7 +164,6 @@ pub fn quiet_now(cfg: &Map<String, Value>) -> bool {
 
 #[derive(Default)]
 pub struct Notifier {
-    n: AtomicU64,
     /// ids the stick acknowledged
     pub shown: Mutex<HashSet<String>>,
 }
@@ -174,14 +174,164 @@ impl Notifier {
     }
 }
 
+/// Stick-ready text: no control characters (a NUL blanks a field on the stick, others draw as boxes).
 fn cut(s: &str, n: usize) -> String {
-    stick_text(s).chars().take(n).collect()
+    stick_text(s).chars().map(|c| if c.is_control() { ' ' } else { c }).take(n).collect()
+}
+
+const DELIVERY_TTL: Duration = Duration::from_secs(300);
+const DELIVERY_LIMIT: usize = 16;
+
+struct Delivery {
+    event: Value,
+    sent: Instant,
+    generation: u64,
+    opened: bool,
+    read: bool,
+}
+
+/// Each device owns its delivery window. An event is recorded before its BLE write (a stick can
+/// answer before the write returns) and forgotten if the write fails; the lock is never held
+/// across the write, so a long send doesn't stall the stick's other messages.
+#[derive(Default)]
+pub(crate) struct Deliveries(VecDeque<Delivery>);
+
+impl Deliveries {
+    fn record(&mut self, event: &Value, generation: u64, now: Instant) {
+        self.0.retain(|d| d.generation == generation && now.duration_since(d.sent) < DELIVERY_TTL);
+        if self.0.len() == DELIVERY_LIMIT {
+            self.0.pop_front();
+        }
+        self.0.push_back(Delivery { event: event.clone(), sent: now, generation, opened: false, read: false });
+    }
+
+    fn forget(&mut self, id: &Value) {
+        self.0.retain(|d| &d.event["id"] != id);
+    }
+
+    fn take(&mut self, msg: &Value, generation: u64, now: Instant) -> Option<DetailAction> {
+        let fields = msg.as_object()?;
+        let action = msg["action"].as_str()?;
+        if fields
+            .keys()
+            .any(|k| !matches!(k.as_str(), "src" | "evt" | "id" | "action") && !(action == "open" && k == "url"))
+        {
+            return None;
+        }
+        let id = msg["id"].as_str()?;
+        let d =
+            self.0.iter_mut().rev().find(|d| {
+                d.event["id"] == id && d.generation == generation && now.duration_since(d.sent) < DELIVERY_TTL
+            })?;
+        match action {
+            "open" if !d.opened => {
+                let url = d.event["url"].as_str()?;
+                if msg["url"].as_str()? != url || !valid_event_url(url) {
+                    return None;
+                }
+                d.opened = true;
+                Some(DetailAction::Open(url.to_owned()))
+            }
+            "read" if !d.read => {
+                let text = ["title", "actor", "sub", "body"]
+                    .iter()
+                    .filter_map(|key| d.event[*key].as_str().filter(|s| !s.is_empty()))
+                    .collect::<Vec<_>>()
+                    .join(". ");
+                if text.is_empty() {
+                    return None;
+                }
+                d.read = true;
+                Some(DetailAction::Read(text))
+            }
+            _ => None,
+        }
+    }
+}
+
+enum DetailAction {
+    Open(String),
+    Read(String),
+}
+
+fn valid_event_url(url: &str) -> bool {
+    let authority = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .and_then(|s| s.split(['/', '?', '#']).next());
+    authority.is_some_and(|s| !s.is_empty() && !s.contains('@'))
+        && url.chars().count() <= 200
+        && !url.contains(|c: char| c == '\\' || c.is_whitespace() || c.is_control())
+        && crate::tool_policy::normalized_url(url).is_ok()
+}
+
+fn current(link: &Link<Backend>, generation: u64) -> bool {
+    !link.paused()
+        && link.connected_peer().is_some_and(|(live, addr)| {
+            live == generation && link.target().is_some_and(|target| target.address.eq_ignore_ascii_case(&addr))
+        })
+}
+
+/// Handle a direct physical gesture on a delivered event. Stick-supplied text is never spoken.
+pub(crate) async fn detail_action(st: &Arc<AppState>, generation: u64, msg: &Value) {
+    let action = {
+        let mut delivered = st.home.deliveries.lock().await;
+        if !current(&st.link, generation) {
+            return;
+        }
+        delivered.take(msg, generation, Instant::now())
+    };
+    match action {
+        Some(DetailAction::Open(url)) => {
+            let st = st.clone();
+            tokio::task::spawn_blocking(move || {
+                if current(&st.link, generation) {
+                    st.runner()(&crate::commands::Action::Open(vec![url]));
+                }
+            });
+        }
+        Some(DetailAction::Read(text)) if current(&st.link, generation) => {
+            crate::speak::read_event(st, &text, generation);
+        }
+        _ => {}
+    }
+}
+
+struct Destination {
+    id: String,
+    link: Link<Backend>,
+    deliveries: Arc<tokio::sync::Mutex<Deliveries>>,
+}
+
+impl From<&AppState> for Destination {
+    fn from(st: &AppState) -> Self {
+        Self { id: st.device_id.clone(), link: st.link.clone(), deliveries: st.home.deliveries.clone() }
+    }
+}
+
+impl Destination {
+    async fn deliver(&self, event: &Value) -> bool {
+        let generation = self.link.bound_generation();
+        {
+            let mut deliveries = self.deliveries.lock().await;
+            if !current(&self.link, generation) {
+                return false;
+            }
+            deliveries.record(event, generation, Instant::now());
+        }
+        let msg = json!({"src":"agent","event":event});
+        if !self.link.with_generation(generation, self.link.send(&msg)).await {
+            self.deliveries.lock().await.forget(&event["id"]);
+            return false;
+        }
+        true
+    }
 }
 
 /// Resolve delivery policy in one place for both availability checks and sends.
-fn destinations(st: &AppState, cfg: &Map<String, Value>) -> Vec<(String, stick_link::Link<stick_link::Backend>)> {
+fn destinations(st: &AppState, cfg: &Map<String, Value>) -> Vec<Destination> {
     if device_targeted() {
-        return vec![(st.device_id.clone(), st.link.clone())];
+        return vec![Destination::from(st)];
     }
     if let Some(ids) = cfg.get("notification_devices").and_then(Value::as_array) {
         let mut seen = HashSet::new();
@@ -189,15 +339,15 @@ fn destinations(st: &AppState, cfg: &Map<String, Value>) -> Vec<(String, stick_l
             .iter()
             .filter_map(|id| st.devices.resolve(id.as_str()?))
             .filter(|device| seen.insert(device.device_id.clone()))
-            .map(|device| (device.device_id.clone(), device.link.clone()))
+            .map(|device| Destination::from(device.as_ref()))
             .collect();
     }
     if st.device_id == "primary"
         && let Some(device) = st.devices.default_session()
     {
-        return vec![(device.device_id.clone(), device.link.clone())];
+        return vec![Destination::from(device.as_ref())];
     }
-    vec![(st.device_id.clone(), st.link.clone())]
+    vec![Destination::from(st)]
 }
 
 /// A scheduled reminder is consumed only after a successful send or intentional suppression.
@@ -210,7 +360,7 @@ pub async fn notify_reminder(st: &AppState, kind: &str, title: &str, sub: &str) 
             if cfg.get("notification_devices").and_then(Value::as_array).is_some_and(Vec::is_empty) {
                 return true;
             }
-            if !destinations(st, &cfg).iter().any(|(_, link)| link.connected()) {
+            if !destinations(st, &cfg).iter().any(|d| d.link.connected()) {
                 return false;
             }
             notify_with_delivery(st, kind, title, sub, None, None, None, None).await.is_none_or(|(_, sent)| sent)
@@ -262,7 +412,8 @@ async fn notify_with_delivery(
         }
         return None;
     }
-    let id = format!("e{}", st.home.notifier.n.fetch_add(1, Ordering::Relaxed) + 1);
+    // A restarted Mac cannot reuse an ID that a paired stick might still be displaying.
+    let id = format!("e{}", &crate::config::new_token()[..16]);
     let quiet = quiet_now(&cfg);
     let sound = match sound {
         Some(s) => s.to_string(),
@@ -272,18 +423,20 @@ async fn notify_with_delivery(
     let icon = icon.map(str::to_string).unwrap_or_else(|| kind(kind_).map(|k| k.2).unwrap_or("bell").to_string());
     let mut ev = json!({"id": id, "level": level, "title": cut(title, 40), "sub": cut(sub, 90), "icon": icon,
                     "sound": if quiet { "off" } else { &sound }, "kind": kind_});
-    for (key, max) in [("actor", 24), ("url", 200), ("body", 300)] {
-        // only http(s) links: the stick asks the Mac to open it
-        let ok = |s: &&str| !s.is_empty() && (key != "url" || s.starts_with("https://") || s.starts_with("http://"));
-        if let Some(v) = extra.and_then(|e| e[key].as_str()).filter(ok) {
+    for (key, max) in [("actor", 24), ("body", 300)] {
+        if let Some(v) = extra.and_then(|e| e[key].as_str()).filter(|s| !s.is_empty()) {
             ev[key] = json!(cut(v, max));
         }
     }
+    // URLs are exact: sanitizing or truncating a link can change its destination.
+    if let Some(url) = extra.and_then(|e| e["url"].as_str()).filter(|s| valid_event_url(s)) {
+        ev["url"] = json!(url);
+    }
     let mut sent = false;
     let mut destination_ids = Vec::new();
-    for (id, link) in destinations(st, &cfg) {
-        destination_ids.push(id);
-        sent |= link.send(&json!({"src":"agent","event":ev})).await;
+    for destination in destinations(st, &cfg) {
+        sent |= destination.deliver(&ev).await;
+        destination_ids.push(destination.id);
     }
     let mut entry = Map::new();
     entry.insert("device_id".into(), json!(st.device_id));
@@ -354,10 +507,85 @@ pub fn kinds_json(cfg: &Map<String, Value>, stick_sounds: Option<&Value>) -> Val
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stick_text_has_no_control_characters_and_failed_sends_are_forgotten() {
+        assert_eq!(cut("Fix\u{0}the\ttest\nnow", 40), "Fix the test now");
+        let mut d = Deliveries::default();
+        let now = std::time::Instant::now();
+        let ev = json!({"id": "e1", "title": "t", "url": "https://github.com/a/b/pull/1"});
+        d.record(&ev, 7, now);
+        d.forget(&json!("e1"));
+        let open = json!({"src": "agent", "evt": "event_action", "id": "e1", "action": "open", "url": "https://github.com/a/b/pull/1"});
+        assert!(d.take(&open, 7, now).is_none());
+    }
+
     use super::*;
 
     fn cfg(v: Value) -> Map<String, Value> {
         v.as_object().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn detail_action_skips_failed_sends_and_omits_bad_links() {
+        let t = crate::talk::tests::agent("event-undelivered", false).await;
+        let extra = json!({"url":format!("https://example.org/{}", "x".repeat(200)), "body":"One line"});
+        let ev = crate::events::notify_with(&t.st, "release", "V2", "", &extra).await.unwrap();
+        assert!(ev.get("url").is_none());
+        let gen_before = t.st.link.generation();
+        t.fake.set_busy(10, "write failed");
+        let ev = crate::events::notify_with(&t.st, "release", "V3", "", &json!({"url":"https://example.org"}))
+            .await
+            .unwrap();
+        let read = json!({"id":ev["id"],"action":"read"});
+        assert!(t.st.home.deliveries.lock().await.take(&read, gen_before, std::time::Instant::now()).is_none());
+    }
+
+    #[test]
+    fn detail_actions_expire_and_evict_old_deliveries() {
+        let now = Instant::now();
+        let mut history = Deliveries::default();
+        let open = |id| json!({"id":id,"action":"open","url":"https://example.org/details"});
+        for id in 0..=DELIVERY_LIMIT {
+            history.record(&json!({"id":id.to_string(),"url":"https://example.org/details"}), 2, now);
+        }
+        assert_eq!(history.0.len(), DELIVERY_LIMIT);
+        assert!(history.take(&open("0"), 2, now).is_none());
+        assert!(history.take(&open("1"), 3, now).is_none());
+        assert!(history.take(&open("1"), 2, now + DELIVERY_TTL).is_none());
+        assert!(history.take(&open("2"), 2, now).is_some());
+        assert!(history.take(&open("2"), 2, now).is_none());
+
+        history.record(&json!({"id":"same","url":"https://example.org/old","body":"old"}), 2, now);
+        history.record(&json!({"id":"same","url":"https://example.org/new","body":"new"}), 2, now);
+        let old = json!({"id":"same","action":"open","url":"https://example.org/old"});
+        let forged = json!({"id":"same","action":"read","text":"from stick"});
+        assert!(history.take(&old, 2, now).is_none());
+        assert!(history.take(&forged, 2, now).is_none());
+        assert!(matches!(history.take(&json!({"id":"same","action":"read"}), 2, now),
+                          Some(DetailAction::Read(text)) if text == "new"));
+    }
+
+    #[test]
+    fn detail_event_urls_require_an_exact_safe_destination() {
+        for raw in [
+            "file:///tmp/a",
+            "https:",
+            "http:///a",
+            "https://a:b@example.org/",
+            "https://@example.org",
+            "https://example.org/a b",
+            "https://example.org/a\nb",
+            "https://example.org/a\\b",
+            " https://example.org",
+            "https://example.org ",
+        ] {
+            assert!(!valid_event_url(raw), "{raw}");
+        }
+        let prefix = "https://example.org/";
+        let longest = format!("{prefix}{}", "a".repeat(200 - prefix.len()));
+        assert!(valid_event_url(&longest));
+        assert!(!valid_event_url(&(longest + "x")));
+        assert!(valid_event_url("https://example.org/one%20two?issue=4#notes"));
     }
 
     #[test]

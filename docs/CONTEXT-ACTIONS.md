@@ -4,8 +4,25 @@ The stick has two buttons (A on the front, B on the side) and a motion sensor. T
 much, so a screen can give them its own meaning, and says so in a hint bar at its bottom.
 This page lists every screen's controls today and proposes more screen-specific ones.
 
+- **Notification details** describes the current toast and detail-page controls.
 - **Part 1** is what firmware 2.6.0 does (implemented).
 - **Part 2** is a proposal: nothing in it is built yet.
+
+## Notification details
+
+Press **A** while a notification is on the screen to see the title, sender, repository or subtitle,
+and the first lines of the message. **B** dismisses the notification from either screen.
+
+| On the detail page | What happens |
+|---|---|
+| Tap A | Open the notification’s link on the Mac that sent it, when available. |
+| Hold A | Read the notification aloud through that Mac’s configured speech output. |
+| B | Close the detail and continue to the next queued notification. |
+
+In shared mode, a background Mac reads its notification on its own speaker. The stick keeps its
+selected input Mac. Notifications with just a title and subtitle still open a detail page. Opening links and reading
+aloud require a connected Mac app that supports notification actions. The detail page closes
+a minute after it opens.
 
 ## How it works (2.6.0)
 
@@ -143,7 +160,6 @@ Principles:
 | **IR remote** | own buttons | **A+B: power** of the open remote (the most used button); hints from the table. |
 | **Settings menu** | A next, B change | unchanged; hints from the table (today a static line). |
 | **Faces picker** | A next, B use | **tilt: preview** the selected face live (the demo frame) before choosing. |
-| **Event screens** | any press dismisses | **A: open it on the Mac** (the PR / the CI run: the agent opens the URL), B: dismiss. |
 
 ### Talking in context
 

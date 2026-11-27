@@ -7,6 +7,7 @@ folder via the `home` fixture. Tests never touch the real ~/.stick-agent.
 """
 import os
 import tempfile
+from types import SimpleNamespace
 
 os.environ["STICK_AGENT_HOME"] = tempfile.mkdtemp(prefix="stick-agent-test-")
 os.environ["STICK_AGENT_PORT"] = "18660"
@@ -266,7 +267,8 @@ class FakeLink:
         self.connected = connected
         self.mtu = 256
         self.paused = False
-        self.target = None
+        self.client = SimpleNamespace(address="test-stick")
+        self.target = {"address": "test-stick"}
 
     async def send(self, msg):
         if not self.connected:
