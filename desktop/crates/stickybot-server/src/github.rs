@@ -166,7 +166,14 @@ pub fn snapshot(data: &Value) -> Value {
         let reviewer = |state: &str| {
             nodes(&n["reviews"]).into_iter().rev().find(|r| r["state"] == state).map(|r| r["author"]["login"].clone())
         };
-        let failed = nodes(&commit["statusCheckRollup"]["contexts"]).into_iter().find_map(|c| {
+        // the first failing check that did the work, not a summary gate ("CI passed", "All checks")
+        let gate = |name: &str| {
+            let n = name.to_lowercase();
+            ["passed", "required", "all checks", "all-checks", "gate", "summary"].iter().any(|g| n.contains(g))
+        };
+        let failed = nodes(&commit["statusCheckRollup"]["contexts"]).into_iter().filter(|c| {
+            !gate(c["name"].as_str().or(c["context"].as_str()).unwrap_or(""))
+        }).find_map(|c| {
             let bad = |v: &Value| matches!(v.as_str(), Some("FAILURE" | "ERROR" | "TIMED_OUT" | "STARTUP_FAILURE"));
             if bad(&c["conclusion"]) {
                 c["name"].as_str().map(str::to_owned)
@@ -359,7 +366,8 @@ mod tests {
                    "merged": merged, "reviewDecision": decision, "createdAt": "2026-11-01T10:00:00Z",
                    "repository": {"nameWithOwner": p}, "mergedBy": {"login": "sam"},
                    "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": ci, "contexts": {"nodes": [
-                       {"name": "build", "conclusion": "SUCCESS"}, {"name": "lint", "conclusion": "FAILURE"}]}}}}]},
+                       {"name": "build", "conclusion": "SUCCESS"}, {"name": "CI passed", "conclusion": "FAILURE"},
+                       {"name": "lint", "conclusion": "FAILURE"}]}}}}]},
                    "reviews": {"nodes": [{"id": "r1", "author": {"login": "alex"}, "state": "APPROVED"},
                                          {"id": "r2", "author": {"login": "kim"}, "state": "CHANGES_REQUESTED"}]}})
         };
