@@ -58,8 +58,9 @@ Your reply is shown on a 135x240 pixel screen and may be read aloud:
 
 You can't run commands on the Mac or browse the web. Your tools: open_url, open_app and quick_command change the Mac and need the user's approval on the device (they press a button); notify, ask (an A/B question on the device), celebrate, progress, pin_home, speak and stick_status are feedback on the device. Your reply already shows on the device, so don't notify about it. Use tools only when they help.";
 
-pub fn system_prompt() -> String {
-    format!("{SYSTEM}\n\nIt is {} for the user.", chrono::Local::now().format("%A %d %B %Y, %H:%M"))
+pub fn system_prompt(cfg: &Map<String, Value>) -> String {
+    let folders = crate::assistant::folders_note(cfg, crate::tool_policy::Caller::OpenRouter);
+    format!("{SYSTEM}\n\n{folders}\n\nIt is {} for the user.", chrono::Local::now().format("%A %d %B %Y, %H:%M"))
 }
 
 /// A stick tool call as a progress line ("Opening github.com").
@@ -625,7 +626,7 @@ impl OpenRouterBrain {
                 let _ = tx.send(BrainEvent::Progress("Thinking…".into()));
             }
             out.set("");
-            let mut msgs = vec![json!({"role": "system", "content": system_prompt()})];
+            let mut msgs = vec![json!({"role": "system", "content": system_prompt(cfg)})];
             msgs.extend(self.inner.history.lock().unwrap().iter().cloned());
             msgs.extend(turn.iter().cloned());
             let r = match self.complete(&key, &model, &msgs, tools, max_tokens, Some(&mut out), info, started).await {
@@ -728,7 +729,7 @@ impl OpenRouterBrain {
             return json!({"ok": false, "error": why, "model": model});
         }
         let msgs = [
-            json!({"role": "system", "content": system_prompt()}),
+            json!({"role": "system", "content": system_prompt(&cfg)}),
             json!({"role": "user", "content": "Say hello and tell me which model you are, in one short sentence."}),
         ];
         let r = self.complete(&key.unwrap_or_default(), &model, &msgs, false, 60, None, &mut info, started).await;

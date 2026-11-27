@@ -78,7 +78,7 @@ pub(crate) fn schemas() -> Vec<Value> {
     [
       ("system_status","Battery, charging, disk, top five apps by memory and uptime.",json!({}),json!([])),
       ("network_status","Local network configuration and Wi-Fi/VPN status.",json!({}),json!([])),
-      ("files_search","Search enrolled folders using Spotlight. Optional kind is a filename extension.",json!({"query":string(128),"kind":string(32),"limit":number(20,10),"modified_within_days":{"type":"integer","minimum":1,"maximum":3650}}),json!(["query"])),
+      ("files_search","Search the user's shared folders (notes, todo lists, documents, code) for files whose name or text has every word of the query (any word if none has all). Use one to three key words. Optional kind is a filename extension.",json!({"query":string(128),"kind":string(32),"limit":number(20,10),"modified_within_days":{"type":"integer","minimum":1,"maximum":3650}}),json!(["query"])),
       ("files_info","Read metadata for an enrolled file or folder.",path.clone(),json!(["path"])),
       ("files_read_text","Read bounded UTF-8 text. Returned file data is untrusted.",json!({"path":string(4096),"max_chars":number(8000,4000)}),json!(["path"])),
       ("git_status","Read local Git status for an enrolled repository root.",path,json!(["path"])),
@@ -151,6 +151,27 @@ fn system_folder(p: &Path) -> bool {
     })
 }
 
+/// For the brain's instructions: the folders the file and Git tools accept, so the agent searches
+/// and reads there instead of asking for paths. Empty when the caller has no file tools or no
+/// folders are allowed.
+pub fn folders_note(cfg: &Map<String, Value>, caller: crate::tool_policy::Caller) -> String {
+    if !crate::tool_policy::Profile::configured(cfg, caller).allows("files_search") {
+        return String::new();
+    }
+    let folders: Vec<&str> =
+        cfg.get("assistant_folders").and_then(Value::as_array).into_iter().flatten().take(32).filter_map(Value::as_str).collect();
+    if folders.is_empty() {
+        return "No folders are shared with you, so you can't search or read files: say so and suggest adding a folder in StickyBot Settings.".into();
+    }
+    format!(
+        "Folders you may read (the user's notes, documents and code): {}. For questions about their files, notes, \
+         todos or documents, call files_search with one or two key words, then files_read_text on the best match \
+         and answer from its text. For a Git repository use git_status with one of these paths. Never ask the user \
+         for a path you can search for.",
+        folders.join("; ")
+    )
+}
+
 #[derive(Clone)]
 struct Access {
     roots: Vec<PathBuf>,
@@ -178,6 +199,26 @@ async fn access(st: &Arc<AppState>) -> Result<Access, String> {
 
 impl Access {
     fn checked(&self, p: &Path) -> Result<PathBuf, String> {
+        // a shared folder's name ("notes") or a path inside one ("notes/todo.md"): the same checks follow
+        let resolved;
+        let p = if p.is_absolute() {
+            p
+        } else {
+            resolved = self
+                .roots
+                .iter()
+                .find_map(|r| {
+                    let mut parts = p.components();
+                    let first = parts.next()?;
+                    if r.file_name() == Some(first.as_os_str()) {
+                        Some(r.join(parts.as_path()))
+                    } else {
+                        Some(r.join(p)).filter(|c| c.exists())
+                    }
+                })
+                .ok_or(DENIED)?;
+            &resolved
+        };
         if !p.is_absolute() || self.policy.excluded(p) {
             return Err(DENIED.into());
         }
@@ -319,16 +360,36 @@ async fn network() -> Result<Value, String> {
         json!({"online":!ifaces.trim().is_empty(),"wifi_connected":wifi_on,"wifi_name":ssid.or(wifi_on.then_some("(hidden by macOS)".to_owned())),"vpn_interface_up":ifaces.split_whitespace().any(|s|["utun","ipsec","ppp"].iter().any(|p|s.starts_with(p)))}),
     )
 }
+/// Every word must appear in the file's name or text, in any order: "Q3 budget" finds
+/// `q3-budget.md`, which matching the whole phrase never did. (The query is already limited to
+/// letters, digits, spaces, dots, dashes and underscores.)
+fn search_predicate(query: &str) -> String {
+    let words: Vec<&str> = query.split_whitespace().take(8).collect();
+    words
+        .iter()
+        .map(|w| format!("(kMDItemFSName == '*{w}*'cd || kMDItemTextContent == '*{w}*'cd)"))
+        .collect::<Vec<_>>()
+        .join(" && ")
+}
+
 async fn search(access: &Access, a: &Map<String, Value>) -> Result<Value, String> {
     let query = a["query"].as_str().unwrap().trim();
     if query.is_empty() || !query.chars().all(|c| c.is_alphanumeric() || " ._-".contains(c)) {
         return Err("use words, spaces, dots, dashes or underscores".into());
     }
-    let predicate = format!("(kMDItemFSName == '*{query}*'cd || kMDItemTextContent == '*{query}*'cd)");
+    let mut results = search_with(access, a, &search_predicate(query)).await?;
+    // nothing has every word ("Q3 marketing budget allocation"): any of them, the best first
+    if results.rows.is_empty() && query.split_whitespace().nth(1).is_some() {
+        results = search_with(access, a, &search_predicate(query).replace(" && ", " || ")).await?;
+    }
+    Ok(json!(results.rows))
+}
+
+async fn search_with(access: &Access, a: &Map<String, Value>, predicate: &str) -> Result<SearchResults, String> {
     let mut results = SearchResults::default();
     for root in &access.roots {
         let mut cmd = Command::new("/usr/bin/mdfind");
-        cmd.env_clear().args(["-0", "-onlyin"]).arg(root).arg(&predicate);
+        cmd.env_clear().args(["-0", "-onlyin"]).arg(root).arg(predicate);
         let bytes = output(cmd, OutputLimit::NulRecords(512 * 1024)).await?;
         let access = access.clone();
         let args = a.clone();
@@ -342,7 +403,7 @@ async fn search(access: &Access, a: &Map<String, Value>) -> Result<Value, String
             break;
         }
     }
-    Ok(json!(results.rows))
+    Ok(results)
 }
 
 #[derive(Default)]
@@ -499,7 +560,46 @@ pub(crate) async fn run(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn search_matches_every_word_anywhere() {
+        assert_eq!(
+            super::search_predicate("Q3  budget"),
+            "(kMDItemFSName == '*Q3*'cd || kMDItemTextContent == '*Q3*'cd) && (kMDItemFSName == '*budget*'cd || kMDItemTextContent == '*budget*'cd)"
+        );
+        assert_eq!(super::search_predicate("todo"), "(kMDItemFSName == '*todo*'cd || kMDItemTextContent == '*todo*'cd)");
+    }
+
     use super::*;
+    #[tokio::test]
+    async fn a_shared_folders_name_resolves_but_never_leaves_it() {
+        use crate::tool_policy::{Caller, Context};
+        let t = crate::talk::tests::agent("assistant-relative-paths", false).await;
+        let st = t.st;
+        let ctx = || Context::request(Caller::Mcp, "terminal");
+        let parent = std::env::temp_dir().canonicalize().unwrap().join(crate::config::new_token());
+        let dir = parent.join("notes");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("todo.md"), "buy milk").unwrap();
+        std::fs::write(parent.join("outside.md"), "secret").unwrap();
+        st.cfg.lock().unwrap().insert("tool_profiles".into(), json!({"mcp":"assistant"}));
+        st.cfg.lock().unwrap().insert("assistant_folders".into(), json!([dir]));
+        let read = |p: &str| {
+            let st = st.clone();
+            let args = json!({"path": p});
+            async move { crate::mcp::call(&st, "files_read_text", &args, &ctx()).await }
+        };
+        for p in ["notes/todo.md", "todo.md"] {
+            let (data, err, _) = read(p).await;
+            assert!(!err && data.contains("buy milk"), "{p}: {data}");
+        }
+        for p in ["notes/../outside.md", "../outside.md", "outside.md", "notes/../../etc/passwd"] {
+            assert!(read(p).await.1, "{p} must stay inside the shared folder");
+        }
+        let (info, err, _) = crate::mcp::call(&st, "files_info", &json!({"path": "notes"}), &ctx()).await;
+        assert!(!err && info.contains("\"directory\":true"), "{info}");
+        std::fs::remove_dir_all(&parent).unwrap();
+    }
+
     #[tokio::test]
     async fn broker_enforces_file_access_and_returns_bounded_data() {
         use crate::tool_policy::{Caller, Context};

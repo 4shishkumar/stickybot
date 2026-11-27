@@ -77,7 +77,15 @@ impl Llama {
         if let Some(r) = running.as_mut()
             && matches!(r.child.try_wait(), Ok(None))
         {
-            return Ok((r.port, r.key.clone()));
+            // alive isn't enough: a server that stopped answering (502s for every later question)
+            // is replaced, and its last log lines say why
+            if health(r.port).await {
+                return Ok((r.port, r.key.clone()));
+            }
+            let log = std::fs::read_to_string(r._scratch.path().join("llama.log")).unwrap_or_default();
+            let tail: String = log.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | ");
+            log::warn!("local model stopped answering; restarting it. Last log: {}", crate::talk::cut(&tail, 600));
+            let _ = r.child.start_kill();
         }
         *running = None;
         let port = free_port().map_err(|e| e.to_string())?;
@@ -204,7 +212,8 @@ pub mod tempdir {
         pub fn new(pid: Option<u32>, dir: &Path) -> Self {
             let p = std::env::temp_dir().join(format!("{RECORD}{}.pid", crate::config::new_token()));
             if let Some(pid) = pid {
-                let _ = super::write_private(&p, &format!("{pid}\n{}\n", dir.display()));
+                // the third line is the app that started it: another StickyBot never stops it
+                let _ = super::write_private(&p, &format!("{pid}\n{}\n{}\n", dir.display(), std::process::id()));
             }
             Self(p)
         }
@@ -213,6 +222,13 @@ pub mod tempdir {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
         }
+    }
+
+    /// A record whose app (its third line) is another process that is still running: a second
+    /// StickyBot (the agent test runner, a test build) shares the runtime and keeps its model.
+    fn owned_by_another_running_app(record: &str) -> bool {
+        let owner = record.lines().nth(2).and_then(|l| l.trim().parse::<i32>().ok()).filter(|p| *p > 1);
+        owner.is_some_and(|o| o as u32 != std::process::id() && unsafe { libc::kill(o, 0) } == 0)
     }
 
     /// The executable a process runs, if it's alive.
@@ -243,6 +259,9 @@ pub mod tempdir {
                 continue;
             }
             let text = std::fs::read_to_string(e.path()).unwrap_or_default();
+            if owned_by_another_running_app(&text) {
+                continue;
+            }
             let mut lines = text.lines();
             if let Some(pid) = lines.next().and_then(|p| p.parse::<i32>().ok()).filter(|p| *p > 1)
                 && command_of(pid as u32).is_some_and(|c| c.starts_with(&root))
@@ -307,6 +326,28 @@ mod tests {
     }
 
     /// A leftover sandboxed process of ours is stopped and its folder removed; others are left alone.
+    #[test]
+    fn sweep_leaves_another_running_apps_model_alone() {
+        let root = std::env::temp_dir().join(format!("stickybot-sweep-owner-{}", crate::config::new_token()));
+        std::fs::create_dir_all(&root).unwrap();
+        let model = root.join("sleep");
+        std::fs::copy("/bin/sleep", &model).unwrap();
+        let mut child = std::process::Command::new(&model).arg("30").spawn().unwrap();
+        let mut other_app = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let record = std::env::temp_dir().join(format!("stickybot-local-{}.pid", crate::config::new_token()));
+        std::fs::write(&record, format!("{}\n/nonexistent\n{}\n", child.id(), other_app.id())).unwrap();
+        tempdir::sweep(&root);
+        assert!(child.try_wait().unwrap().is_none(), "another app's model keeps running");
+        assert!(record.exists());
+        // once that app is gone, its leftover is ours to stop
+        other_app.kill().unwrap();
+        other_app.wait().unwrap();
+        tempdir::sweep(&root);
+        assert!(child.wait().unwrap().code().is_none());
+        assert!(!record.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn sweep_stops_only_our_leftovers() {
         let root = std::env::temp_dir().join(format!("stickybot-sweep-root-{}", crate::config::new_token()));

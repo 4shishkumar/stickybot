@@ -32,6 +32,18 @@ use tokio::sync::mpsc;
 pub const TIMEOUT: Duration = Duration::from_secs(240);
 /// After an interrupt the turn should end at once; else the process is killed.
 pub const INTERRUPT_WAIT: Duration = Duration::from_secs(3);
+/// Claude Code's built-in tools that change the Mac or run programs: never available to the voice brain.
+/// Told to the voice brain every time: what it can't do, so it says so instead of offering to try later.
+pub const VOICE_READ_ONLY: &str = "You can't run commands or create, edit, delete, move, send or install files or messages \
+on this Mac, and asking on the stick doesn't change that: when asked, say you can't in one sentence and don't offer to \
+do it later. You CAN use your stick tools: open apps and links (open_app, open_url: the user approves on the stick), open \
+stick apps (stick_open), ask, notify, remember facts (memory_save: the user confirms) and look things up. When asked to \
+open something, call the tool.";
+
+/// Read, Glob and Grep read any file (`~/.ssh`, `.env`) past the shared-folder and secret rules,
+/// so the voice brain reads files only through the assistant's file tools.
+pub const READ_ONLY_DENY: [&str; 9] = ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "KillShell", "Read", "Glob", "Grep"];
+
 pub const CLAUDE_MD: &str = include_str!("../../../../mac-agent/stick_agent/defaults/CLAUDE.md");
 
 /// A tool call as a line for the stick (brain.py `describe_tool`).
@@ -337,6 +349,7 @@ impl ClaudeBrain {
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
             .unwrap_or_default();
+        tools.retain(|t| !READ_ONLY_DENY.iter().any(|d| t == d || t.starts_with(&format!("{d}("))));
         let model = cfg.get("model").and_then(Value::as_str).filter(|m| !m.is_empty()).unwrap_or("sonnet");
         let mut a: Vec<String> =
             ["--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", model]
@@ -354,6 +367,11 @@ impl ClaudeBrain {
             }
         }
         a.extend(["--allowedTools".to_string(), tools.join(",")]);
+        // The voice brain never changes the Mac: no shell, no file writes, and nothing outside the
+        // allowed list is asked for on the stick (dontAsk refuses it instead of prompting).
+        a.extend(["--disallowedTools".to_string(), READ_ONLY_DENY.join(","), "--permission-mode".into(), "dontAsk".into()]);
+        let folders = crate::assistant::folders_note(cfg, crate::tool_policy::Caller::Claude);
+        a.extend(["--append-system-prompt".to_string(), format!("{VOICE_READ_ONLY}\n{folders}").trim().to_string()]);
         a
     }
 
@@ -1317,6 +1335,14 @@ mod tests {
         let args = &f.calls()[1];
         assert!(arg(args, "--mcp-config").is_none());
         assert!(!arg(args, "--allowedTools").unwrap().contains("mcp__"));
+        // either way the voice brain can't run commands or write files, and never asks to
+        for args in f.calls() {
+            let denied = arg(&args, "--disallowedTools").unwrap();
+            assert!(["Bash", "Write", "Edit"].iter().all(|t| denied.split(',').any(|d| d == *t)));
+            assert_eq!(arg(&args, "--permission-mode"), Some("dontAsk"));
+            let allowed = arg(&args, "--allowedTools").unwrap();
+            assert!(!allowed.split(',').any(|t| ["Read", "Glob", "Grep", "Bash"].contains(&t)), "{allowed}");
+        }
     }
 
     #[test]

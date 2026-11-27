@@ -12,6 +12,16 @@ How to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Changed
+- **The Claude brain can no longer change your Mac.** It can't run shell commands or write or edit
+  files, and it never asks for that on the stick: anything outside its read-only tools is refused.
+- The agent knows which folders you shared with it and searches and reads there instead of asking
+  for a path. File search finds files that contain every word you said, in any order ("Q3 budget"
+  finds `q3-budget.md`), and falls back to any of the words.
+
+### Fixed
+- Quitting or starting a second StickyBot (a test build) no longer stops the other one's local model.
+
 ## [2.8.0] - 2026-11-25
 
 ### Added

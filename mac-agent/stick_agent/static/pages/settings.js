@@ -99,7 +99,7 @@ export async function render(el) {
     card("Stick tools for Claude Code (MCP)", mcpPanel(c)),
     card("Updates", updatesPanel(c)),
     card("Advanced",
-      field("Run without asking", h("input", {id: "safeTools", class: "mono", value: (c.safe_tools || []).join(", ")}), "Claude Code tools that never need approval."),
+      field("Run without asking", h("input", {id: "safeTools", class: "mono", value: (c.safe_tools || []).join(", ")}), "Claude Code tools the voice brain may use without asking, such as WebSearch and WebFetch. Shell commands, file edits and Read/Glob/Grep are never allowed: it reads only the folders you share, through its own tools."),
       field("Claude path", h("input", {id: "claudePath", class: "mono", placeholder: "found automatically", value: c.claude_path || ""})),
       field("Pre-warm", toggle("brainPrewarm", "Start the Claude Code session when the stick connects", c.brain_prewarm !== false))),
     card("Components", componentsPanel()),
