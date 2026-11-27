@@ -331,7 +331,7 @@ pub async fn push_home(st: &AppState) -> bool {
 
 /// From the Claude Code Stop hook: "Claude finished in <project>" for long tasks; every finished
 /// task feeds the pet (core.py `claude_finished`).
-pub async fn claude_finished(st: &AppState, elapsed_s: i64, cwd: &str, prompt: &str) -> Option<Value> {
+pub async fn claude_finished(st: &AppState, elapsed_s: i64, cwd: &str, prompt: &str, summary: &str) -> Option<Value> {
     st.home.pet.lock().unwrap().claude_done();
     push_world(st, false).await;
     let min = st.cfg.lock().unwrap().get("claude_done_min_s").and_then(Value::as_i64).unwrap_or(0);
@@ -341,9 +341,20 @@ pub async fn claude_finished(st: &AppState, elapsed_s: i64, cwd: &str, prompt: &
     let base = cwd.trim_end_matches('/').rsplit('/').next().unwrap_or("");
     let project = if base.is_empty() { "a session" } else { base };
     let took = if elapsed_s >= 60 { format!("{} min", elapsed_s / 60) } else { format!("{elapsed_s} s") };
-    let p: String = prompt.chars().take(60).collect();
-    let sub = format!("took {took}{}", if p.is_empty() { String::new() } else { format!(" - {p}") });
-    events::notify(st, "claude_done", &format!("Claude finished in {project}"), &sub, None, None, None).await
+    // what Claude said it did (its last message), else what you asked
+    let said = first_sentence(summary);
+    let line = if said.is_empty() { prompt.chars().take(60).collect() } else { said };
+    let sub = format!("took {took}{}", if line.is_empty() { String::new() } else { format!(" - {line}") });
+    let body: String = if summary.trim().is_empty() { prompt.to_string() } else { summary.to_string() };
+    events::notify_with(st, "claude_done", &format!("Claude finished in {project}"), &sub, &json!({"body": body})).await
+}
+
+/// The first sentence of a message, plain and short: "Fixed the flaky login test." from a long reply.
+fn first_sentence(text: &str) -> String {
+    let plain = crate::talk::plain(text);
+    let end = plain.char_indices().find(|(i, c)| matches!(c, '.' | '!' | '?') && plain[i + 1..].starts_with(' ')).map(|(i, _)| i + 1);
+    let s = end.map_or(plain.as_str(), |e| &plain[..e]);
+    s.chars().take(80).collect::<String>().trim().to_string()
 }
 
 /// One GitHub poll (github.py `poll`): the query, the events, the pet, the saved state.
@@ -365,8 +376,8 @@ pub async fn github_poll(st: &AppState) -> Result<(), String> {
             github::Change::PetMerged => st.home.pet.lock().unwrap().merged(),
             github::Change::PetGreen => st.home.pet.lock().unwrap().green(),
             github::Change::PetRelease => st.home.pet.lock().unwrap().release(),
-            github::Change::Event(k, t, s) => {
-                events::notify(st, k, t, s, None, None, None).await;
+            github::Change::Event(k, t, s, extra) => {
+                events::notify_with(st, k, t, s, extra).await;
             }
         }
     }

@@ -14,13 +14,17 @@ pub const MAX_BACKOFF_S: u64 = 30 * 60;
 
 pub const QUERY: &str = r#"
 query($mine: String!, $asks: String!, $owner: String!, $name: String!, $withRepo: Boolean!) {
+  viewer { login }
   mine: search(query: $mine, type: ISSUE, first: 40) {
-    nodes { ... on PullRequest { number title state merged createdAt repository { nameWithOwner } reviewDecision
-      commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+    nodes { ... on PullRequest { number title url state merged createdAt repository { nameWithOwner } reviewDecision
+      mergedBy { login }
+      commits(last: 1) { nodes { commit { statusCheckRollup { state
+        contexts(first: 30) { nodes { ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } }
       reviews(last: 20) { nodes { id author { login } state } } } }
   }
   asks: search(query: $asks, type: ISSUE, first: 40) {
-    nodes { ... on PullRequest { number title repository { nameWithOwner } } }
+    nodes { ... on PullRequest { number title url author { login } repository { nameWithOwner }
+      timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 5) { nodes { ... on ReviewRequestedEvent { actor { login } } } } } }
   }
   primary: repository(owner: $owner, name: $name) @include(if: $withRepo) {
     releases(first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { tagName name } }
@@ -158,21 +162,51 @@ pub fn snapshot(data: &Value) -> Value {
             .filter(|r| r["author"]["login"].as_str().is_some_and(|l| l.to_lowercase().contains("devin")))
             .map(|r| r["id"].clone())
             .collect();
+        // who approved / asked for changes last, and the first failing check
+        let reviewer = |state: &str| {
+            nodes(&n["reviews"]).into_iter().rev().find(|r| r["state"] == state).map(|r| r["author"]["login"].clone())
+        };
+        // the first failing check that did the work, not a summary gate ("CI passed", "All checks")
+        let gate = |name: &str| {
+            let n = name.to_lowercase();
+            ["passed", "required", "all checks", "all-checks", "gate", "summary"].iter().any(|g| n.contains(g))
+        };
+        let failed = nodes(&commit["statusCheckRollup"]["contexts"]).into_iter().filter(|c| {
+            !gate(c["name"].as_str().or(c["context"].as_str()).unwrap_or(""))
+        }).find_map(|c| {
+            let bad = |v: &Value| matches!(v.as_str(), Some("FAILURE" | "ERROR" | "TIMED_OUT" | "STARTUP_FAILURE"));
+            if bad(&c["conclusion"]) {
+                c["name"].as_str().map(str::to_owned)
+            } else if bad(&c["state"]) {
+                c["context"].as_str().map(str::to_owned)
+            } else {
+                None
+            }
+        });
         prs.insert(
             key,
             json!({"repo": repo, "number": n["number"], "title": n["title"], "state": n["state"], "merged": n["merged"],
                    "decision": n.get("reviewDecision").cloned().unwrap_or(Value::Null),
                    "created": epoch(n["createdAt"].as_str()),
-                   "ci": commit["statusCheckRollup"]["state"].clone(), "devin": devin}),
+                   "ci": commit["statusCheckRollup"]["state"].clone(), "devin": devin,
+                   "url": n["url"].clone(), "merged_by": n["mergedBy"]["login"].clone(),
+                   "approved_by": reviewer("APPROVED"), "changes_by": reviewer("CHANGES_REQUESTED"),
+                   "failed_check": failed}),
         );
     }
     let mut asks = Map::new();
     for n in nodes(&data["asks"]) {
         let Some(repo) = n["repository"]["nameWithOwner"].as_str() else { continue };
-        asks.insert(format!("{repo}#{}", n["number"]), json!({"repo": repo, "number": n["number"], "title": n["title"]}));
+        // who asked: the last review request's actor, else the PR's author
+        let by = nodes(&n["timelineItems"]).into_iter().rev().find_map(|e| e["actor"]["login"].as_str().map(str::to_owned));
+        let by = by.or_else(|| n["author"]["login"].as_str().map(str::to_owned));
+        asks.insert(
+            format!("{repo}#{}", n["number"]),
+            json!({"repo": repo, "number": n["number"], "title": n["title"], "url": n["url"].clone(), "by": by}),
+        );
     }
     let rel = nodes(&data["primary"]["releases"]);
-    json!({"prs": prs, "asks": asks,
+    json!({"prs": prs, "asks": asks, "viewer": data["viewer"]["login"].clone(),
            "release": rel.first().map(|r| r["tagName"].clone()).unwrap_or(Value::Null),
            "release_name": rel.first().map(|r| r["name"].clone()).unwrap_or(Value::Null)})
 }
@@ -180,8 +214,8 @@ pub fn snapshot(data: &Value) -> Value {
 /// What a change means.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Change {
-    /// a stick event: kind, title, sub
-    Event(&'static str, String, String),
+    /// a stick event: kind, title, sub, and for its detail page `{"actor", "url"}` (nulls when unknown)
+    Event(&'static str, String, String, Value),
     PetMerged,
     PetGreen,
     PetRelease,
@@ -191,10 +225,20 @@ fn title60(pr: &Value) -> String {
     pr["title"].as_str().unwrap_or("").chars().take(60).collect()
 }
 
+/// A login for a title: none when unknown or it's you ("you" merged your own PR).
+fn who<'a>(v: &'a Value, me: Option<&str>) -> Option<&'a str> {
+    v.as_str().filter(|l| !l.is_empty() && Some(*l) != me)
+}
+
 /// Old state -> new snapshot: the events (and the pet's progress), primary repo first (`_diff`).
+/// Titles say who did it when GitHub says ("alex approved #12"); the extra carries the actor and
+/// the PR's link for the stick's detail page.
 pub fn diff(old: &Value, new: &Value, primary: &str) -> Vec<Change> {
     let mut out = Vec::new();
-    let ev = |out: &mut Vec<Change>, k: &'static str, t: String, s: String| out.push(Change::Event(k, t, s));
+    let me = new["viewer"].as_str();
+    let ev = |out: &mut Vec<Change>, k: &'static str, t: String, s: String, actor: Option<&str>, url: &Value| {
+        out.push(Change::Event(k, t, s, json!({"actor": actor, "url": url})))
+    };
     let empty = Map::new();
     let new_prs = new["prs"].as_object().unwrap_or(&empty);
     let mut order: Vec<(&String, &Value)> = new_prs.iter().collect();
@@ -203,22 +247,35 @@ pub fn diff(old: &Value, new: &Value, primary: &str) -> Vec<Change> {
         let num = &pr["number"];
         let where_ = format!("{} #{num}", short(pr["repo"].as_str().unwrap_or(""), primary));
         let title = title60(pr);
+        let sub = format!("{where_} - {title}");
+        let url = &pr["url"];
         let Some(was) = old["prs"].get(key.as_str()) else {
             let seen = old.get("seen_at").and_then(Value::as_f64).unwrap_or(0.0);
             if pr["state"] == "OPEN" && pr["created"].as_f64().unwrap_or(0.0) >= seen - 300.0 {
-                ev(&mut out, "pr_created", format!("PR #{num} opened"), format!("{where_} - {title}"));
+                ev(&mut out, "pr_created", format!("PR #{num} opened"), sub.clone(), None, url);
             }
             continue;
         };
         if pr["merged"] == true && was["merged"] != true {
             out.push(Change::PetMerged);
-            ev(&mut out, "pr_merged", format!("PR #{num} merged!"), format!("{where_} - {title}"));
+            let by = who(&pr["merged_by"], me);
+            let t = match by {
+                Some(l) => format!("{l} merged #{num}!"),
+                None => format!("PR #{num} merged!"),
+            };
+            ev(&mut out, "pr_merged", t, sub.clone(), by, url);
         }
         if pr["decision"] != was["decision"] {
             match pr["decision"].as_str() {
-                Some("APPROVED") => ev(&mut out, "pr_approved", format!("PR #{num} approved"), format!("{where_} - {title}")),
+                Some("APPROVED") => {
+                    let by = who(&pr["approved_by"], me);
+                    let t = by.map_or(format!("PR #{num} approved"), |l| format!("{l} approved #{num}"));
+                    ev(&mut out, "pr_approved", t, sub.clone(), by, url)
+                }
                 Some("CHANGES_REQUESTED") => {
-                    ev(&mut out, "changes_requested", "Changes requested".into(), format!("{where_} - {title}"))
+                    let by = who(&pr["changes_by"], me);
+                    let t = by.map_or("Changes requested".into(), |l| format!("{l} wants changes on #{num}"));
+                    ev(&mut out, "changes_requested", t, sub.clone(), by, url)
                 }
                 _ => {}
             }
@@ -229,14 +286,18 @@ pub fn diff(old: &Value, new: &Value, primary: &str) -> Vec<Change> {
             }
             let bad = |v: &Value| matches!(v.as_str(), Some("FAILURE" | "ERROR"));
             if bad(&pr["ci"]) {
-                ev(&mut out, "ci_failed", "CI failed".into(), format!("{where_} - {title}"));
+                let t = match pr["failed_check"].as_str() {
+                    Some(check) => format!("CI failed on #{num}: {check}"),
+                    None => format!("CI failed on #{num}"),
+                };
+                ev(&mut out, "ci_failed", t, sub.clone(), None, url);
             } else if pr["ci"] == "SUCCESS" && bad(&was["ci"]) {
-                ev(&mut out, "ci_fixed", "CI is green again".into(), format!("{where_} - {title}"));
+                ev(&mut out, "ci_fixed", format!("CI is green again on #{num}"), sub.clone(), None, url);
             }
         }
         let had: Vec<&Value> = was["devin"].as_array().map(|a| a.iter().collect()).unwrap_or_default();
         if pr["devin"].as_array().into_iter().flatten().any(|r| !had.contains(&r)) {
-            ev(&mut out, "devin_review", format!("Devin reviewed #{num}"), format!("{where_} - {title}"));
+            ev(&mut out, "devin_review", format!("Devin reviewed #{num}"), sub.clone(), Some("Devin"), url);
         }
     }
     let new_asks = new["asks"].as_object().unwrap_or(&empty);
@@ -244,19 +305,18 @@ pub fn diff(old: &Value, new: &Value, primary: &str) -> Vec<Change> {
     asks.sort_by(|a, b| (a.1["repo"] != primary, a.0).cmp(&(b.1["repo"] != primary, b.0)));
     for (key, a) in asks {
         if old["asks"].get(key.as_str()).is_none() {
-            ev(
-                &mut out,
-                "review_requested",
-                "Review requested".into(),
-                format!("{} #{} - {}", short(a["repo"].as_str().unwrap_or(""), primary), a["number"], title60(a)),
-            );
+            let by = who(&a["by"], me);
+            let t = by.map_or("Review requested".into(), |l| format!("{l} asked for your review"));
+            let sub = format!("{} #{} - {}", short(a["repo"].as_str().unwrap_or(""), primary), a["number"], title60(a));
+            ev(&mut out, "review_requested", t, sub, by, &a["url"]);
         }
     }
     if let (Some(r), Some(was)) = (new["release"].as_str(), old["release"].as_str())
         && r != was
     {
         out.push(Change::PetRelease);
-        ev(&mut out, "release", format!("Release {r}").chars().take(40).collect(), short(primary, primary));
+        let t: String = format!("Release {r}").chars().take(40).collect();
+        ev(&mut out, "release", t, short(primary, primary), None, &Value::Null);
     }
     out
 }
@@ -297,6 +357,51 @@ pub fn merge(old: Option<&Value>, mut new: Value, primary: &str, now: f64) -> (V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn events_say_who_and_carry_the_link() {
+        let p = "acme/web";
+        let pr = |merged: bool, decision: &str, ci: &str| {
+            json!({"number": 12, "title": "Fix login", "url": "https://github.com/acme/web/pull/12", "state": "OPEN",
+                   "merged": merged, "reviewDecision": decision, "createdAt": "2026-11-01T10:00:00Z",
+                   "repository": {"nameWithOwner": p}, "mergedBy": {"login": "sam"},
+                   "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": ci, "contexts": {"nodes": [
+                       {"name": "build", "conclusion": "SUCCESS"}, {"name": "CI passed", "conclusion": "FAILURE"},
+                       {"name": "lint", "conclusion": "FAILURE"}]}}}}]},
+                   "reviews": {"nodes": [{"id": "r1", "author": {"login": "alex"}, "state": "APPROVED"},
+                                         {"id": "r2", "author": {"login": "kim"}, "state": "CHANGES_REQUESTED"}]}})
+        };
+        let ask = json!({"number": 9, "title": "Update deps", "url": "https://github.com/acme/web/pull/9",
+                         "author": {"login": "bot"}, "repository": {"nameWithOwner": p},
+                         "timelineItems": {"nodes": [{"actor": {"login": "priya"}}]}});
+        let data = |prs: Vec<Value>, asks: Vec<Value>| json!({"viewer": {"login": "me"}, "mine": {"nodes": prs}, "asks": {"nodes": asks}});
+        let (s1, _) = merge(None, snapshot(&data(vec![pr(false, "REVIEW_REQUIRED", "SUCCESS")], vec![])), p, 0.0);
+        let changes = |s: &Value, d: Value| {
+            let (_, ch) = merge(Some(s), snapshot(&d), p, 1.0);
+            ch.unwrap()
+                .into_iter()
+                .filter_map(|c| match c {
+                    Change::Event(k, t, _, x) => Some((k, t, x["actor"].clone(), x["url"].clone())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let url = json!("https://github.com/acme/web/pull/12");
+        assert_eq!(
+            changes(&s1, data(vec![pr(false, "APPROVED", "FAILURE")], vec![ask.clone()])),
+            vec![
+                ("pr_approved", "alex approved #12".into(), json!("alex"), url.clone()),
+                ("ci_failed", "CI failed on #12: lint".into(), Value::Null, url.clone()),
+                ("review_requested", "priya asked for your review".into(), json!("priya"), json!("https://github.com/acme/web/pull/9")),
+            ]
+        );
+        assert_eq!(changes(&s1, data(vec![pr(false, "CHANGES_REQUESTED", "SUCCESS")], vec![]))[0].1, "kim wants changes on #12");
+        assert_eq!(changes(&s1, data(vec![pr(true, "REVIEW_REQUIRED", "SUCCESS")], vec![]))[0].1, "sam merged #12!");
+        // your own merge doesn't name you
+        let mut mine = pr(true, "REVIEW_REQUIRED", "SUCCESS");
+        mine["mergedBy"]["login"] = json!("me");
+        assert_eq!(changes(&s1, data(vec![mine], vec![]))[0].1, "PR #12 merged!");
+    }
 
     pub fn pr(repo: &str, n: i64, state: &str, merged: bool, decision: Value, ci: Value, devin: &[&str]) -> Value {
         json!({"number": n, "title": format!("PR {n} title"), "state": state, "merged": merged,
@@ -364,7 +469,7 @@ mod tests {
         let evs: Vec<(&str, String, String)> = ch
             .iter()
             .filter_map(|c| match c {
-                Change::Event(k, t, s) => Some((*k, t.clone(), s.clone())),
+                Change::Event(k, t, s, _) => Some((*k, t.clone(), s.clone())),
                 _ => None,
             })
             .collect();
@@ -374,10 +479,10 @@ mod tests {
                 ("pr_merged", "PR #1 merged!".into(), "web #1 - PR 1 title".into()),
                 ("pr_approved", "PR #1 approved".into(), "web #1 - PR 1 title".into()),
                 ("devin_review", "Devin reviewed #1".into(), "web #1 - PR 1 title".into()),
-                ("ci_failed", "CI failed".into(), "web #3 - PR 3 title".into()),
+                ("ci_failed", "CI failed on #3".into(), "web #3 - PR 3 title".into()),
                 ("pr_created", "PR #4 opened".into(), "web #4 - PR 4 title".into()),
                 ("changes_requested", "Changes requested".into(), "other/x #2 - PR 2 title".into()),
-                ("ci_fixed", "CI is green again".into(), "other/x #2 - PR 2 title".into()),
+                ("ci_fixed", "CI is green again on #2".into(), "other/x #2 - PR 2 title".into()),
                 ("review_requested", "Review requested".into(), "web #9 - Update deps".into()),
                 ("release", "Release v1.1".into(), "web".into()),
             ]

@@ -213,7 +213,7 @@ pub async fn notify_reminder(st: &AppState, kind: &str, title: &str, sub: &str) 
             if !destinations(st, &cfg).iter().any(|(_, link)| link.connected()) {
                 return false;
             }
-            notify_with_delivery(st, kind, title, sub, None, None, None).await.is_none_or(|(_, sent)| sent)
+            notify_with_delivery(st, kind, title, sub, None, None, None, None).await.is_none_or(|(_, sent)| sent)
         })
         .await
 }
@@ -229,9 +229,16 @@ pub async fn notify(
     level: Option<&str>,
     sound: Option<&str>,
 ) -> Option<Value> {
-    notify_with_delivery(st, kind_, title, sub, icon, level, sound).await.map(|(event, _)| event)
+    notify_with_delivery(st, kind_, title, sub, icon, level, sound, None).await.map(|(event, _)| event)
 }
 
+/// [`notify`] with the event's details for the stick's detail page: `actor` (who), `url` (opened on
+/// the Mac from the stick), `body` (a few lines of what happened). Each is optional; long ones are cut.
+pub async fn notify_with(st: &AppState, kind_: &str, title: &str, sub: &str, extra: &Value) -> Option<Value> {
+    notify_with_delivery(st, kind_, title, sub, None, None, None, Some(extra)).await.map(|(event, _)| event)
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn notify_with_delivery(
     st: &AppState,
     kind_: &str,
@@ -240,6 +247,7 @@ async fn notify_with_delivery(
     icon: Option<&str>,
     level: Option<&str>,
     sound: Option<&str>,
+    extra: Option<&Value>,
 ) -> Option<(Value, bool)> {
     let cfg = st.cfg.lock().unwrap().clone();
     let rule = rules(&cfg).get(kind_).and_then(Value::as_str).unwrap_or("nice").to_string();
@@ -262,8 +270,15 @@ async fn notify_with_delivery(
     };
     let sound = for_stick(&sound, tune_list(st.sounds().as_ref()).as_deref());
     let icon = icon.map(str::to_string).unwrap_or_else(|| kind(kind_).map(|k| k.2).unwrap_or("bell").to_string());
-    let ev = json!({"id": id, "level": level, "title": cut(title, 40), "sub": cut(sub, 90), "icon": icon,
+    let mut ev = json!({"id": id, "level": level, "title": cut(title, 40), "sub": cut(sub, 90), "icon": icon,
                     "sound": if quiet { "off" } else { &sound }, "kind": kind_});
+    for (key, max) in [("actor", 24), ("url", 200), ("body", 300)] {
+        // only http(s) links: the stick asks the Mac to open it
+        let ok = |s: &&str| !s.is_empty() && (key != "url" || s.starts_with("https://") || s.starts_with("http://"));
+        if let Some(v) = extra.and_then(|e| e[key].as_str()).filter(ok) {
+            ev[key] = json!(cut(v, max));
+        }
+    }
     let mut sent = false;
     let mut destination_ids = Vec::new();
     for (id, link) in destinations(st, &cfg) {
